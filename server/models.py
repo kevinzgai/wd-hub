@@ -16,6 +16,19 @@ from pydantic import BaseModel, Field, field_validator
 # WorkBuddy 给临时会话建的沙箱目录形如 2026-10-15-16-00-59，直接显示没有信息量
 _SANDBOX_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$")
 
+# 沙箱目录的显示名。别在别处拿这个字符串做逻辑判断 —— 用 is_sandbox_dir()。
+SANDBOX_LABEL = "临时工作区"
+
+
+def is_sandbox_dir(name: Optional[str]) -> bool:
+    """目录名是不是 WorkBuddy 的临时沙箱（时间戳形态）。
+
+    单独抽成谓词，是因为调用方需要"这是不是沙箱"这个**判断**，
+    而不是那个显示用的中文串。之前 files.py 直接比较 == "临时工作区"，
+    改一下文案就静默失效，太脆。
+    """
+    return bool(name) and bool(_SANDBOX_DIR.match(name))
+
 
 def utf8_trunc(s: str, max_bytes: int) -> str:
     """按字节截断，不切碎 UTF-8 字符。
@@ -54,8 +67,8 @@ def project_name(cwd: Optional[str]) -> str:
     # 盘符根目录
     if re.fullmatch(r"[A-Za-z]:", last):
         return last
-    if _SANDBOX_DIR.match(last):
-        return "临时工作区"
+    if is_sandbox_dir(last):
+        return SANDBOX_LABEL
     return utf8_trunc(last, 20)
 
 

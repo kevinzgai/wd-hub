@@ -118,3 +118,11 @@ tools/done_tone.wav
 # 任务账本（server/sources/ledger.py 生成）。是本机历史数据，不是代码：
 # 换机器重新累积即可，进版本库只会互相覆盖。
 server/state/
+
+# ==================
+# 本机私密配置
+# ==================
+# configure.py 生成的固件配置：只有 BRIDGE_BASE（服务地址）。
+# 2026-10-27 起已不再写入 WiFi 凭据（改由 NVS + 手机配网）。
+# 仍然不入库：地址是本机环境相关的，别人 clone 后应各自跑 configure.py 生成。
+firmware/main/config.local.h

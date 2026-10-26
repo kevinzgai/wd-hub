@@ -147,6 +147,18 @@ def sessions_recent(limit: int = 20, state: Optional[str] = None,
 
 # ---------------------------------------------------------------- 自动化
 
+def session_cwd_map() -> dict[str, str]:
+    """会话 id → cwd 映射。
+
+    给"涉及项目"归属用：changes-index 的文件名就是会话 id，靠这张表把
+    改动文件关联回它所属的项目（比从绝对路径猜准得多）。
+
+    只取未软删除的会话 —— 软删除的会话不该出现在项目统计里。
+    """
+    rows = _query("SELECT id, cwd FROM sessions WHERE deleted_at IS NULL")
+    return {r["id"]: r["cwd"] for r in rows if r["id"] and r["cwd"]}
+
+
 def automations_active() -> int:
     """已启用的自动化数。
 

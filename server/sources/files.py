@@ -20,13 +20,18 @@ log = logging.getLogger("board.files")
 
 # 编译产物、依赖目录。今天改过的文件里这些占绝大多数（本机 build/ 有 700 个 .obj），
 # 不排除的话"改动文件数"这个指标就废了。
+#
+# ⚠ 一律用 "/" 做归一后比对，不要用 os.sep：
+#   os.sep 跟着平台走，会导致同一份路径在 Windows / macOS 上判定结果不同
+#   （实测 `C:\proj\build\a.obj` 在 macOS 上会被判成"正常文件"）。
+#   改动文件路径可能来自另一个平台，判定必须与当前平台无关。
 NOISE_MARKERS = (
-    os.sep + "build" + os.sep,
-    os.sep + "node_modules" + os.sep,
-    os.sep + "__pycache__" + os.sep,
-    os.sep + ".git" + os.sep,
-    os.sep + "managed_components" + os.sep,
-    os.sep + "dist" + os.sep,
+    "/build/",
+    "/node_modules/",
+    "/__pycache__/",
+    "/.git/",
+    "/managed_components/",
+    "/dist/",
 )
 
 # 完成态判定统一由 ledger.COMPLETED 提供，别在两处各写一份。
@@ -179,16 +184,86 @@ def tasks_list(status: Optional[str] = None, since_ms: Optional[int] = None,
 
 
 def _is_noise(path: str) -> bool:
-    p = path.replace("/", os.sep)
+    """路径是否落在编译产物 / 依赖目录里。
+
+    反斜杠和正斜杠都归一成 "/" 再比，Windows 路径在 macOS 上也能正确判定。
+    """
+    p = path.replace("\\", "/")
     return any(m in p for m in NOISE_MARKERS)
 
 
-_PROJ = re.compile(r"WorkBuddy[\\/]([^\\/]+)")
+# ---------------------------------------------------------------- 项目名归属
+#
+# 改动文件在磁盘上的绝对路径**推不出**项目名：
+#   · 真实项目在 ~/WebstormProjects/<name>/，正则按目录名抓会漏得一干二净；
+#   · 临时会话在 ~/WorkBuddy/<时间戳>/，抓到的是 "2026-10-25-23-57-47" 这种
+#     时间戳目录，信息量为零。
+#
+# 可靠做法：**changes-index 的文件名就是会话 id**（实测 26/26 全部能匹配到
+# sessions.cwd），再由 cwd 末级目录得到项目名。cwd 指向时间戳目录时，
+# 那个会话压根没有真实项目名，降级成"临时工作区"。
+#
+# 会话 cwd 的读取走 db 模块的只读连接，这里缓存一份，避免每轮采集都查库。
+
+_SESSION_CWD_CACHE: dict[str, Optional[str]] = {}
+_SESSION_CWD_LOADED_AT = 0.0
+
+# 会话 cwd 缓存有效期。与采集周期 2s 同量级，但会话 cwd 几乎不变，
+# 给足 30s 也不影响准确性，却能把查库次数压到极低。
+_SESSION_CWD_TTL = 30.0
+
+
+def _session_cwds() -> dict[str, Optional[str]]:
+    """会话 id → cwd。带 TTL 缓存。"""
+    global _SESSION_CWD_LOADED_AT
+    now = time.time()
+    if _SESSION_CWD_LOADED_AT and now - _SESSION_CWD_LOADED_AT < _SESSION_CWD_TTL:
+        return _SESSION_CWD_CACHE
+
+    data: dict[str, Optional[str]] = {}
+    try:
+        from .db import session_cwd_map
+        data = session_cwd_map()
+    except Exception as e:                          # noqa: BLE001
+        log.warning("读取会话 cwd 失败，改用路径回退: %s", e)
+        data = {}
+
+    _SESSION_CWD_CACHE.clear()
+    _SESSION_CWD_CACHE.update(data)
+    _SESSION_CWD_LOADED_AT = now
+    return _SESSION_CWD_CACHE
 
 
 def _project_of(path: str) -> Optional[str]:
-    m = _PROJ.search(path)
-    return m.group(1) if m else None
+    """从绝对路径回退推断项目名。
+
+    只在拿不到会话 cwd 时才走这条路。规则：
+      · 路径落在某个已知工作区根目录下 → 取它的下一级目录名（真实项目名）；
+      · 路径落在 ~/WorkBuddy/<时间戳>/ 下 → 返回 None（沙箱没有项目名）。
+    """
+    from ..models import is_sandbox_dir, project_name
+
+    parts = [p for p in re.split(r"[\\/]+", path) if p]
+    if not parts:
+        return None
+
+    # 找 "WebstormProjects" / "Projects" 这类工作区根，取下一级目录名
+    for i, p in enumerate(parts[:-1]):
+        if p in ("WebstormProjects", "Projects", "workspace", "workspaces"):
+            nxt = parts[i + 1]
+            if nxt and not is_sandbox_dir(nxt):
+                return project_name(nxt)
+            return None
+
+    # ~/WorkBuddy/<名字>/ —— 名字不是时间戳的话就是真实项目名
+    for i, p in enumerate(parts[:-1]):
+        if p == "WorkBuddy":
+            nxt = parts[i + 1]
+            if nxt and not is_sandbox_dir(nxt):
+                return project_name(nxt)
+            return None
+
+    return None
 
 
 def activity_stat(date_str: Optional[str] = None) -> dict[str, Any]:
@@ -196,6 +271,9 @@ def activity_stat(date_str: Optional[str] = None) -> dict[str, Any]:
 
     读 changes-index/*.json —— 每个文件是一次请求的变更索引。已排除编译产物，
     否则 build/ 下 700 个 .obj 会把数字彻底淹掉。
+
+    项目名口径见上方说明：**按会话 id 关联 session.cwd** 优先，
+    路径回退只在会话缺失时兜底。
     """
     from datetime import datetime
 
@@ -208,12 +286,26 @@ def activity_stat(date_str: Optional[str] = None) -> dict[str, Any]:
     additions = deletions = 0
     projects: set[str] = set()
 
+    cwds = _session_cwds()
+
     for fn in os.listdir(CHANGES_DIR):
         if not fn.endswith(".json"):
             continue
+        conv_id = fn[:-5]                    # 文件名就是会话 id
         idx = _read_json(os.path.join(CHANGES_DIR, fn))
         if not isinstance(idx, dict):
             continue
+
+        # 本会话的项目名（有 cwd 且 cwd 不是沙箱目录才作数）
+        cwd = cwds.get(conv_id)
+        conv_project: Optional[str] = None
+        if cwd:
+            from ..models import is_sandbox_dir, project_name
+            # cwd 末级是时间戳 → 沙箱，没有真实项目名，交给路径回退
+            last = [p for p in re.split(r"[\\/]+", cwd) if p]
+            if last and not is_sandbox_dir(last[-1]):
+                conv_project = project_name(cwd)
+
         for ch in idx.get("changes") or []:
             if not isinstance(ch, dict):
                 continue
@@ -229,7 +321,7 @@ def activity_stat(date_str: Optional[str] = None) -> dict[str, Any]:
                 files_set.add(fp)
                 additions += int(f.get("additions") or 0)
                 deletions += int(f.get("deletions") or 0)
-                proj = _project_of(fp)
+                proj = conv_project or _project_of(fp)
                 if proj:
                     projects.add(proj)
 

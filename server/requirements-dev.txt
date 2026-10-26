@@ -1,0 +1,13 @@
+# 开发/验证工具依赖。服务本身只需要 requirements.txt。
+#
+# 安装：
+#   pip install -r server/requirements-dev.txt
+#
+# 装完还要下一次浏览器（截图用）：
+#   python -m playwright install chromium
+
+# 演示页截图（scripts/shot_board.py）
+playwright>=1.40
+
+# 串口读日志（scripts/serial_read.py、tools/watch_serial.py）
+pyserial>=3.5

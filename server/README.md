@@ -9,27 +9,32 @@
 
 ```bash
 py -m pip install -r server/requirements.txt
-py -m server.api_server                    # 默认 8080
+py -m server.api_server                    # 默认 27777
 py -m server.api_server --port 9000 --refresh 2
 ```
 
-Windows 下**双击项目根目录的 `启动看板.bat`** 即可（自动查依赖、查端口占用）。
+Windows 下**双击项目根目录的 `start-board.bat`** 即可（自动查依赖、查端口占用）。
+macOS / Linux 用 `./start-board.sh`（会自动建 `.venv`）。
 关闭那个黑窗口就是停止服务。
 
 > 该 .bat 用 GBK + CRLF 编码保存，才能让 cmd 正确显示中文。
 > 如果用编辑器改它，记得保持 GBK，否则双击后中文会变成乱码。
 
-> **必须用 `py` 而不是 `python`。** 本机 `python` 指向 WorkBuddy 自带的
+> **Windows 下必须用 `py` 而不是 `python`。** 本机 `python` 指向 WorkBuddy 自带的
 > 3.13（`~/.workbuddy/binaries/python/...`），里面没有 fastapi；
 > `py` 指向 3.14（`AppData\Local\Programs\Python\Python314`），依赖装在这里。
+
+> **pip 走阿里云镜像。** 直连 PyPI 在国内常被 SSL 中断
+> （`SSLError: UNEXPECTED_EOF_WHILE_READING`），装不上 fastapi。
+> `pip install -i https://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com`
 
 启动后：
 
 | 地址 | 说明 |
 |---|---|
-| `http://127.0.0.1:8080/` | 演示页 |
-| `http://127.0.0.1:8080/docs` | OpenAPI 文档 |
-| `http://<LAN-IP>:8080/status` | ESP32 固件端点 |
+| `http://127.0.0.1:27777/` | 演示页 |
+| `http://127.0.0.1:27777/docs` | OpenAPI 文档 |
+| `http://<LAN-IP>:27777/status` | ESP32 固件端点 |
 
 ## 接口
 
@@ -76,6 +81,28 @@ GET /api/v1/health       数据源自检
 5. **删任务就是删文件**。`tasks/*/*.json` 没有墓碑，AI 收尾清空任务清单后历史
    直接消失。所以完成数不能再从盘上现算，必须走 `sources/ledger.py` 账本
    （2026-10-26 踩过：当天做完 4 个任务，清单一清，屏上 `done` 归零）。
+6. **项目名不能从文件路径猜**。changes-index 的**文件名就是会话 id**
+   （实测 26/26 都能匹配到 `sessions.cwd`），改文件路径正则只会抓到
+   `WorkBuddy/<时间戳>/` 这种沙箱目录（2026-10-26 踩过：屏上"涉及项目"
+   显示成 `2026-10-25-23-57-47`）。正确做法是按会话 id 关联 `session.cwd`，
+   再用 `models.project_name` 取末级目录；cwd 是沙箱目录则归为"临时工作区"。
+7. **越界屏号返回 HTTP 200 + `{"ok":false}`**，不是 4xx。这是故意的：固件按
+   `strstr(json, "\"ok\":true")` 判断成败（`firmware/main/main.cpp`），
+   不看 HTTP 状态码。写自检脚本时别断言状态码。
+
+## 与固件的契约
+
+| 位置 | 常量 | 值 |
+|---|---|---|
+| `server/api_server.py` | `DEFAULT_PORT` | 27777 |
+| `firmware/main/main.cpp` | `BRIDGE_BASE` 端口 | 27777 |
+| `configure.py` | `DEFAULT_PORT` | 27777 |
+
+改端口必须三处同步。
+
+`configure.py` 写进 `config.local.h` 的宏名必须是 **`BRIDGE_BASE`**（只给 base，
+路径由固件自己拼 `/status` 或 `/screen/<i>`）。固件不读 `BRIDGE_URL`。
+`configure.py` 的探活端点是 **`/api/v1/health`**（没有裸 `/health` 路由，那是 404）。
 
 ## 架构
 
@@ -108,15 +135,16 @@ server/
 ## 验证
 
 ```bash
-# 固件契约
-curl -s http://127.0.0.1:8080/status | wc -c          # 应 < 4096
-curl -s http://127.0.0.1:8080/status | grep -c '"ok":true'
+# 一键回归（端点矩阵 + 固件契约 + 数据源自检 + 详情屏 + 越界保护）
+python scripts/check_api.py
 
-# 接口矩阵
-for ep in /status /api/v1/board /api/v1/health /api/v1/system; do
-  curl -s -o /dev/null -w "$ep %{http_code} %{time_total}s\n" "http://127.0.0.1:8080$ep"
-done
+# 演示页截图，确认真实渲染
+python scripts/shot_board.py
 
-# 演示页截图
-py scripts/shot_board.py
+# 单项手测
+curl -s http://127.0.0.1:27777/status | wc -c          # 应 < 4096
+curl -s http://127.0.0.1:27777/status | grep -c '"ok":true'
 ```
+
+`scripts/shot_board.py` 跨平台：浏览器用 playwright 自带的 chromium，
+端口默认 27777，可用 `BOARD_PORT=9000` 覆盖。
