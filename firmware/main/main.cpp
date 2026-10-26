@@ -43,6 +43,8 @@
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_st7789.h"
 
+#include "wifi_mgr.h"
+
 #include "lvgl.h"
 #include "board_config.h"
 #include "battery.h"
@@ -249,6 +251,19 @@ static volatile int s_page_req = -1; // 按键写入的切屏请求，由 LVGL �
 static int          s_nscr    = 1; // 屏数，由服务端下发
 static TaskHandle_t s_fetch_task = NULL;
 
+// ---- WiFi 状态浮层 ----
+// 连接失败或配网中时盖住整屏。内容全部来自 wifi_mgr 的查询接口，
+// 这边不做任何状态判断 —— 口径只有一处，改逻辑不用动 UI。
+static lv_obj_t *s_pg_wifi;
+static lv_obj_t *s_lbl_wifi_title;
+static lv_obj_t *s_lbl_wifi_l1;
+static lv_obj_t *s_lbl_wifi_l2;
+static lv_obj_t *s_lbl_wifi_l3;
+
+// 按键写入的配网请求，由 LVGL 任务消费（wifi_mgr_start_provision 里有
+// esp_wifi_set_mode / httpd_start，放按键任务里跑会长时间阻塞按键扫描）
+static volatile bool s_prov_req = false;
+
 // 标题只在内容变化时才 set_text —— 每次重设都会把跑马灯位置打回开头，
 // 服务端 5 秒推一轮，不判等的话滚动会一直"闪回"。
 static char     s_title_cache[MAX_SESSIONS][48];
@@ -287,7 +302,10 @@ static volatile const char *s_last_btn  = "none";  // 最后按下的键，随�
 //   4) 背景压深一点，底子更黑，所有前景色的实际观感对比都更强
 //
 // 数值为 WCAG 对比度（相对亮度比），括号内是调整前的值：
-#define COL_BG      lv_color_hex(0x06080C)   // 更深，原 0x0B0E14
+#define COL_BG      lv_color_hex(0x000000)   // 纯黑。原来 0x06080C 偏蓝灰，
+                                             // 在全黑的 OLED 观感对比下会显出底色。
+                                             // ⚠ 改这个必须同步重跑 tools/gen_logo.py，
+                                             // 否则 logo 边缘会露出一圈 0x06080C 的方块。
 #define COL_TEXT    lv_color_hex(0xFFFFFF)   // 20.0:1 (16.4)
 #define COL_DIM     lv_color_hex(0xB4BEC9)   // 10.6:1 ( 5.2) <- 最关键的一处
 #define COL_ACCENT  lv_color_hex(0x6FB6FF)   //  9.4:1 ( 7.7)
@@ -927,6 +945,35 @@ static void ui_build(void)
     // 后者在 LVGL 9 里只是 api_map_v8.h 里的 static inline 兼容别名
     // （内部就是 move_to_index(obj, 0)），直接用新名字更明确。
     lv_obj_move_to_index(s_pet_img, 0);
+
+    // ---- WiFi 状态浮层 ----
+    // 只有"连不上"和"配网中"两个状态才显示，盖住整屏（含宠物和页脚）。
+    // 放在最后创建 = 在子对象顺序里最靠上，天然盖住所有内容，不用管 z 序。
+    s_pg_wifi = mk_page(scr);
+    // mk_page 的底色是透明的，这里要一块不透明底，否则下面那屏的字会透上来
+    lv_obj_set_style_bg_color(s_pg_wifi, COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_pg_wifi, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_pg_wifi, LV_OBJ_FLAG_HIDDEN);
+
+    s_lbl_wifi_title = mk_label(s_pg_wifi, &font_cn_28, COL_WARN,
+                                LV_ALIGN_TOP_MID, 0, 40);
+    lv_label_set_text(s_lbl_wifi_title, "WiFi 未连接");
+
+    s_lbl_wifi_l1 = mk_label(s_pg_wifi, &font_cn_16, COL_TEXT,
+                             LV_ALIGN_TOP_MID, 0, 100);
+    lv_label_set_text(s_lbl_wifi_l1, "");
+
+    s_lbl_wifi_l2 = mk_label(s_pg_wifi, &font_cn_16, COL_ACCENT,
+                             LV_ALIGN_TOP_MID, 0, 132);
+    lv_label_set_text(s_lbl_wifi_l2, "");
+
+    s_lbl_wifi_l3 = mk_label(s_pg_wifi, &font_cn_12, COL_DIM,
+                             LV_ALIGN_TOP_MID, 0, 178);
+    lv_label_set_text(s_lbl_wifi_l3, "");
+    // 长按提示可能超过 224px，允许换行
+    lv_label_set_long_mode(s_lbl_wifi_l3, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_wifi_l3, 216);
+    lv_obj_set_style_text_align(s_lbl_wifi_l3, LV_TEXT_ALIGN_CENTER, 0);
 }
 
 // ===========================================================================
@@ -1543,51 +1590,15 @@ static void fetch_task(void *arg)
 
 // ===========================================================================
 // WiFi
+//
+// 连接、重试、配网全部收敛到 wifi_mgr.cpp。这里只保留两件事：
+//   · 启动时调一次 wifi_mgr_begin()
+//   · 屏幕按 wifi_mgr_state() 显示对应提示
+//
+// 为什么从本文件搬走：原来 wifi_handler 在 STA_DISCONNECTED 回调里
+// vTaskDelay(2000) 再重连，会把默认事件循环任务卡住（单线程），
+// 期间 WiFi/IP 的所有事件都出不来。新实现改用 esp_timer 调度。
 // ===========================================================================
-
-static EventGroupHandle_t s_wifi_ev;
-
-static void wifi_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "WiFi 断开，2s 后重连");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        esp_wifi_connect();
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "IP: " IPSTR, IP2STR(&e->ip_info.ip));
-    }
-}
-
-static void wifi_init(void)
-{
-    s_wifi_ev = xEventGroupCreate();
-
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_handler, NULL, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(
-        IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_handler, NULL, NULL));
-
-    wifi_config_t wc = {};
-    strncpy((char *)wc.sta.ssid, WIFI_SSID, sizeof(wc.sta.ssid) - 1);
-    strncpy((char *)wc.sta.password, WIFI_PASSWORD, sizeof(wc.sta.password) - 1);
-    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    ESP_LOGI(TAG, "连接 WiFi: %s", WIFI_SSID);
-}
 
 static void time_init(void)
 {
@@ -1672,6 +1683,11 @@ static void button_task(void *arg)
     // 所以动作只能等到"按住够久"或"松开"时才分派。
     const uint32_t LONG_MS = 700;
 
+    // WiFi 没连上时，BOOT 的长按改语义：按住 3 秒进配网。
+    // 这个状态下**不触发** 700ms 的亮度循环 —— 否则一次按住会先跳一档亮度
+    // 再进配网，用户会困惑"我明明只想配网，怎么屏幕变亮了"。
+    const uint32_t PROV_MS = 3000;
+
     bool     last[BTN_NUM];
     int      cnt[BTN_NUM]     = {0};
     int      rel[BTN_NUM];
@@ -1680,11 +1696,21 @@ static void button_task(void *arg)
 
     for (size_t i = 0; i < BTN_NUM; i++) {
         last[i] = gpio_get_level(k_btns[i].pin) != 0;
-        rel[i]  = REL;    // 开机就当作已松开
+        // 初始**必须**当作"还没松开"（rel=0），不能直接给 REL。
+        //
+        // 踩过的坑：给 REL 的话，开机第一次按压无条件被接受。而 GPIO0 是
+        // ESP32-S3 的启动 strapping 脚，插拔 USB / 开串口时自动复位电路会
+        // 把它拉低一下 —— 实测开机 3.5s 就误触发了一次"BOOT 长按调亮度"。
+        // 现在的规则是：必须先看到引脚稳定高电平 REL 次（= 确认松开了），
+        // 之后的高→低才算一次有效按压。误触发就被挡在外面了。
+        rel[i]  = 0;
     }
 
     while (1) {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+        // 每轮取一次即可：状态由 wifi_mgr 的事件回调更新，轮询频率 50Hz 够跟
+        bool wifi_ok = (wifi_mgr_state() == WIFI_ST_CONNECTED);
 
         for (size_t i = 0; i < BTN_NUM; i++) {
             bool now = gpio_get_level(k_btns[i].pin) != 0;
@@ -1695,13 +1721,32 @@ static void button_task(void *arg)
 
                 // 按住不放且已经够久 → 立刻按长按处理一次。
                 // 不等松手，否则按 3 秒才调一次亮度，手感很差。
-                if (!now && !fired[i] && down_at[i] &&
-                    now_ms - down_at[i] >= LONG_MS) {
-                    fired[i] = true;
-                    int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
-                             : (k_btns[i].pin == BOARD_BTN_VOL_DOWN) ? -1
-                             : 0;
-                    button_action(k_btns[i].name, step);
+                if (!now && !fired[i] && down_at[i]) {
+                    uint32_t held = now_ms - down_at[i];
+                    bool is_boot = (k_btns[i].pin == BOARD_BTN_BOOT);
+
+                    if (is_boot && !wifi_ok) {
+                        // **只有没联网时**，BOOT 长按才让给配网。
+                        //
+                        // 已联网时 BOOT 保持原语义（700ms 调亮度），按住多久都
+                        // 不会进配网 —— 配网会中断数据轮询，联网状态下不应该
+                        // 被误触。要换网络就先断网（或重新配网后重启）。
+                        //
+                        // 未联网时 700ms 什么都不做：那个状态下用户按 3 秒一定
+                        // 是想配网，先跳一档亮度只会让人困惑。
+                        if (held >= PROV_MS) {
+                            fired[i] = true;
+                            ESP_LOGW(TAG, ">>> BOOT 长按 %lums（未联网），进入配网",
+                                     (unsigned long)held);
+                            s_prov_req = true;      // 由 LVGL 任务执行
+                        }
+                    } else if (held >= LONG_MS) {
+                        fired[i] = true;
+                        int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
+                                 : (k_btns[i].pin == BOARD_BTN_VOL_DOWN) ? -1
+                                 : 0;
+                        button_action(k_btns[i].name, step);
+                    }
                 }
                 continue;
             }
@@ -1733,6 +1778,76 @@ static void button_task(void *arg)
 }
 
 // ===========================================================================
+// WiFi 状态浮层同步
+// ===========================================================================
+
+// 只做"把 wifi_mgr 的状态翻译成屏幕文字"，不含任何连接判断逻辑。
+// 状态口径全在 wifi_mgr.cpp 里，这边改文案不会影响连接行为。
+//
+// 只在状态变化时改控件：LVGL 每次 set_text 都会标脏重绘，
+// 240x240 的 SPI 屏刷一次要十几毫秒，每帧无脑刷会把帧率拖下去。
+static void wifi_ui_sync(void)
+{
+    static wifi_state_t last_st      = (wifi_state_t)-1;
+    static int          last_clients = -1;
+
+    wifi_state_t st = wifi_mgr_state();
+    /* 配网模式下文案还跟"有没有手机连上来"有关，所以那一位也要参与比对，
+     * 否则手机连上了屏幕不会变。 */
+    int clients = (st == WIFI_ST_PROVISION) ? wifi_mgr_ap_clients() : 0;
+    if (st == last_st && clients == last_clients) return;
+    last_st = st;
+    last_clients = clients;
+
+    if (st == WIFI_ST_CONNECTED) {
+        lv_obj_add_flag(s_pg_wifi, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    // 连接中不遮挡：开机到连上只有两三秒，中途闪一块"未连接"很难看。
+    // 真连不上会转 FAILED，那时再显示。
+    if (st == WIFI_ST_CONNECTING) {
+        lv_obj_add_flag(s_pg_wifi, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_obj_clear_flag(s_pg_wifi, LV_OBJ_FLAG_HIDDEN);
+
+    if (st == WIFI_ST_FAILED) {
+        lv_obj_set_style_text_color(s_lbl_wifi_title, COL_ERR, 0);
+        lv_label_set_text(s_lbl_wifi_title, "WiFi 未连接");
+
+        lv_label_set_text(s_lbl_wifi_l1, wifi_mgr_ssid()[0] ? wifi_mgr_ssid() : "未配置网络");
+        lv_obj_set_style_text_color(s_lbl_wifi_l1, COL_TEXT, 0);
+
+        lv_label_set_text(s_lbl_wifi_l2, "长按 BOOT 3 秒");
+        lv_obj_set_style_text_color(s_lbl_wifi_l2, COL_ACCENT, 0);
+
+        lv_label_set_text(s_lbl_wifi_l3, "进入配网模式\n用手机配置 WiFi");
+    } else {                                  // WIFI_ST_PROVISION
+        /* 热点是开放网络（无密码），所以第二行不再显示密码，
+         * 改成显示配置页地址 —— 这才是用户接下来真正要用的东西。 */
+        lv_obj_set_style_text_color(s_lbl_wifi_title, COL_ACCENT, 0);
+        lv_label_set_text(s_lbl_wifi_title, "配网模式");
+
+        lv_label_set_text(s_lbl_wifi_l1, wifi_mgr_ap_ssid());
+        lv_obj_set_style_text_color(s_lbl_wifi_l1, COL_TEXT, 0);
+
+        /* 第二行固定显示配置页地址（这才是用户接下来真正要用的东西）。
+         * 颜色和第三行文案随"手机有没有连上来"切换：
+         *   没连   → 灰色地址 + 先教怎么连热点
+         *   已连   → 绿色地址 + 直接让他打开浏览器
+         * 不做成"密码"那一行了，因为热点已经改成开放网络。 */
+        lv_label_set_text(s_lbl_wifi_l2, wifi_mgr_ap_ip());
+        lv_obj_set_style_text_color(s_lbl_wifi_l2, clients > 0 ? COL_OK : COL_ACCENT, 0);
+
+        lv_label_set_text(s_lbl_wifi_l3, clients > 0
+                          ? "手机已连接\n点开浏览器访问上面的地址"
+                          : "手机连上面这个热点\n（不需要密码）");
+    }
+}
+
+// ===========================================================================
 // LVGL 任务
 // ===========================================================================
 
@@ -1756,6 +1871,16 @@ static void lvgl_task(void *arg)
                 page_apply(req);
             }
         }
+
+        // 配网请求：按键任务只置标志，真正开热点/起 HTTP 服务在这里做。
+        // 那两个动作会阻塞几百毫秒，放按键任务里会让长按判定失灵。
+        if (s_prov_req) {
+            s_prov_req = false;
+            wifi_mgr_start_provision();
+        }
+
+        // WiFi 状态变了就更新浮层（内部有状态去重，每帧调用开销可忽略）
+        wifi_ui_sync();
 
         // 按键提示：显示 1.5 秒后自动消失
         if (s_toast_val >= 0) {
@@ -1836,7 +1961,7 @@ extern "C" void app_main(void)
     // 失败不影响主流程（内部只打日志、不 abort）。
     audio_init();
 
-    wifi_init();
+    wifi_mgr_begin();
     time_init();
 
     xTaskCreate(fetch_task,  "fetch",  8192, NULL, 5, NULL);

@@ -49,7 +49,7 @@
 因为耳朵听到的就是那个（见上面的谐波扫描）：
 
   段           组成              能量中心        时长    语义
-  DONE         叮 → 咚           1412 / 1051Hz   288ms   完成、落地（下行）
+  DONE         叮 → 咚           1412 / 1051Hz   358ms   完成、落地（下行，中间 70ms）
   ATTENTION    叮 叮             1187Hz ×2       233ms   还没完，等你（重复）
   CONNECTED    叮                1059Hz          84ms    连上了（单声，短）
   SESSION_END  咚                700Hz           266ms   收工（单声，偏低）
@@ -113,6 +113,9 @@ CONN_SEMITONES = 7         # 叮 706 -> 1059Hz，80ms
 END_SEMITONES = 9          # 咚 能量中心 525 -> 880Hz，198ms（见下方说明）
 
 ATTN_GAP_MS = 90           # 两声"叮"的间隔
+DONE_GAP_MS = 70           # DONE 里"叮"和"咚"的间隔。原来只有 5ms（素材自带），
+                           # 结果两个音全程重叠、产生互调失真，见 build_done
+DONE_DING_MS = 62          # "叮"保留到多少毫秒。再往后就是和"咚"重叠的尾巴
 PREVIEW_GAP_MS = 700       # 试听文件里各段之间的静音
 
 # ---- 提亮参数 ----
@@ -576,28 +579,49 @@ def split_notes(samples):
 
 # ------------------------------------------------------------------ 四段构建
 
-def build_done(samples):
-    """DONE：叮—咚，整体升八度。**完全沿用已验证的流程，参数不动。**
+def build_done(notes):
+    """DONE：叮—咚，整体升八度，中间留 DONE_GAP_MS。
 
-    不重拼单音而是整体处理，因为原素材两音之间的衔接（间隔只有 5ms）
-    是录音时自然形成的，重拼容易破坏这个紧凑感。而且这一版用户已经在
-    真机上听过，改成重拼等于引入回归风险。
+    ⚠️ 2026-10-26 改成"切开再拼"，不再沿用整段原始素材。
+
+    原做法是把整段 mp3（叮 + 5ms 间隔 + 咚）一起升八度。问题在于：
+    **素材里"叮"的衰减尾巴比"咚"的起音长得多，两者叠在一起，而且频率只差
+    5 个半音**（叮 706→1412Hz，咚 525→1040Hz）。两个富谐波音同时存在，
+    1.5W 小喇叭直接互调失真，用户反馈"沙哑、嗡嗡的震动"。
+
+    实测依据（1380-1460Hz / 1000-1100Hz 能量占比）：
+
+        时段      DONE（叮+咚）              END（纯咚）
+        96ms      1040Hz 79.2% + 1400Hz 15.3%    两者均 0.0%
+        120ms     1040Hz 22.8% + 1400Hz 57.9%    两者均 0.0%
+
+    "咚"本身完全没有 1040/1400Hz 成分 —— DONE 尾段那些 1400Hz 全是
+    "叮"没衰减完的残留。横向对照也印证：ATTENTION 同样是两个"叮"，
+    但中间留 90ms，用户没反馈它有问题；四段里只有 DONE 是无间隔叠加。
+
+    现在和 ATTENTION 一样走 split_notes + concat，并给两段各自做淡入淡出，
+    拼缝处不会留阶跃（阶跃 = 咔声）。
     """
-    peak = max(abs(v) for v in samples) or 1
-    th = peak * 0.02
-    n = len(samples)
-    start = next((i for i, v in enumerate(samples) if abs(v) > th), 0)
-    end = next((i for i in range(n - 1, -1, -1) if abs(samples[i]) > th), n - 1)
-    pad = int(8 / 1000.0 * RATE)
-    trimmed = samples[max(0, start - pad):min(n - 1, end + pad) + 1]
+    ding, dong = notes
+    ding = pitch_shift(ding, DONE_SEMITONES)
+    dong = pitch_shift(dong, DONE_SEMITONES)
 
-    shifted = pitch_shift(trimmed, DONE_SEMITONES)
-    shifted = apply_bright("DONE", shifted)
+    # 先各自归一化到 96%，让两段的相对响度不受原始音量差影响，
+    # 后面的提亮/限幅才有可预期的输入（同 split_notes 的注释）。
+    scale = 32767 * 0.96
+    ding = [v * scale / (max(abs(v) for v in ding) or 1) for v in ding]
+    dong = [v * scale / (max(abs(v) for v in dong) or 1) for v in dong]
 
-    pk = max(abs(v) for v in shifted) or 1
-    g = 32767 * 0.96 / pk
-    out = fade([v * g for v in shifted], fade_in_ms=2, fade_out_ms=15)
-    return out
+    # 叮按自然衰减截短到 ~62ms：再拖下去就是和咚重叠的那段尾巴。
+    # 咚保留完整衰减，尾巴是这个音色的主要成分。
+    keep = int(DONE_DING_MS / 1000.0 * RATE)
+    if len(ding) > keep:
+        ding = ding[:keep]
+
+    ding = fade(ding, fade_in_ms=0, fade_out_ms=6)
+    dong = fade(dong, fade_in_ms=3, fade_out_ms=15)
+
+    return concat(ding, silence(DONE_GAP_MS), dong)
 
 
 def apply_bright(name, x, target_loudness=0.0):
@@ -749,10 +773,11 @@ def main():
     #
     # 也正因为要在提亮**之后**才能归响度（限幅会压掉一点响度，见
     # brighten 的注释），所以这里是"先算基准 → 提亮 → 再归一"两步走。
-    target = loudness(build_done(samples))
+    raw_done = build_done((ding, dong))     # 只算一次，下面复用
+    target = loudness(raw_done)
     print("\n  响度基准（提亮前的 DONE）：%.0f" % target)
 
-    done = apply_bright("DONE", build_done(samples), target)
+    done = apply_bright("DONE", raw_done, target)
     attn = apply_bright("ATTENTION", build_attention(ding), target)
     conn = apply_bright("CONNECTED", build_connected(ding), target)
     end = apply_bright("SESSION_END", build_session_end(dong), target)
