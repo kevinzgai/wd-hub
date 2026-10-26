@@ -1,0 +1,18 @@
+idf_component_register(
+    SRCS
+        "main.cpp"
+        "font_cn_12.c"
+        "font_cn_16.c"
+        "font_cn_28.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_wifi
+        esp_netif
+        esp_http_client
+        esp_timer
+        esp_driver_spi
+        esp_driver_gpio
+        esp_driver_ledc
+        esp_lcd
+        nvs_flash
+)

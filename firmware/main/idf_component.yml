@@ -1,0 +1,12 @@
+## WorkBuddy 状态看板 · 组件依赖
+##
+## 注意：不要加 espressif/esp_lcd_st7789 —— ESP-IDF v6.1 已内置
+## components/esp_lcd/src/esp_lcd_panel_st7789.c，registry 上也没有这个包（404）。
+## 头文件：#include "esp_lcd_panel_st7789.h"
+
+dependencies:
+  idf:
+    version: ">=5.5.2"
+
+  lvgl/lvgl:
+    version: "^9.2.2"
