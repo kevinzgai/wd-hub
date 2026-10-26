@@ -7,12 +7,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 from typing import Any, Optional
 
+from . import ledger
 from .db import ARTIFACT_DIR, CHANGES_DIR, TASKS_DIR, SourceError, local_midnight_ms
+
+log = logging.getLogger("board.files")
 
 # 编译产物、依赖目录。今天改过的文件里这些占绝大多数（本机 build/ 有 700 个 .obj），
 # 不排除的话"改动文件数"这个指标就废了。
@@ -25,7 +29,7 @@ NOISE_MARKERS = (
     os.sep + "dist" + os.sep,
 )
 
-COMPLETED_STATES = ("completed", "done", "completed ", "Completed")
+# 完成态判定统一由 ledger.COMPLETED 提供，别在两处各写一份。
 IN_PROGRESS_STATES = ("in_progress", "pending", "running")
 
 
@@ -109,25 +113,38 @@ def _scan_tasks() -> list[dict[str, Any]]:
 
 
 def tasks_stat() -> dict[str, int]:
-    """任务统计：总数 / 累计完成 / 今日完成 / 进行中。"""
-    if not os.path.isdir(TASKS_DIR):
-        # 没装过任务功能：返回全 0，不算故障
-        return {"total": 0, "completed": 0, "today_completed": 0, "in_progress": 0}
+    """任务统计：总数 / 累计完成 / 今日完成 / 进行中。
 
-    midnight = local_midnight_ms()
-    total = completed = today_completed = in_progress = 0
+    total / completed / today_completed 走账本（ledger.py）：任务文件被删除
+    后历史不丢，否则清空任务清单一瞬间"今日完成"就归零（2026-10-26 实测踩过）。
 
-    for r in _scan_tasks():
-        total += 1
-        if r["status"] in ("completed", "done"):
-            completed += 1
-            if r["updated_at"] >= midnight:
-                today_completed += 1
-        elif r["status"] in IN_PROGRESS_STATES:
-            in_progress += 1
+    in_progress 只统计盘上实时状态 —— 任务删了就不该再算"进行中"，
+    否则账本里会永久挂着几十个僵尸 pending。
+    """
+    rows = _scan_tasks()
+    in_progress = sum(1 for r in rows if r["status"] in IN_PROGRESS_STATES)
 
-    return {"total": total, "completed": completed,
-            "today_completed": today_completed, "in_progress": in_progress}
+    try:
+        led = ledger.stats(
+            ledger.merge(rows, int(time.time() * 1000)), local_midnight_ms())
+        return {
+            "total": max(led["total"], len(rows)),
+            "completed": led["completed"],
+            "today_completed": led["today_completed"],
+            "in_progress": in_progress,
+        }
+    except Exception as e:                          # noqa: BLE001
+        # 账本出任何问题都退回"只看盘上"：宁可少算，不能整块任务统计挂掉。
+        log.warning("账本统计失败，退回盘上统计: %s", e)
+        midnight = local_midnight_ms()
+        completed = today = 0
+        for r in rows:
+            if r["status"] in ledger.COMPLETED:
+                completed += 1
+                if r["updated_at"] >= midnight:
+                    today += 1
+        return {"total": len(rows), "completed": completed,
+                "today_completed": today, "in_progress": in_progress}
 
 
 def tasks_pending_by_conversation() -> set[str]:
