@@ -13,7 +13,11 @@ py -m server.api_server                    # 默认 8080
 py -m server.api_server --port 9000 --refresh 2
 ```
 
-Windows 下也可直接双击 `server/start.bat`（带依赖自检）。
+Windows 下**双击项目根目录的 `启动看板.bat`** 即可（自动查依赖、查端口占用）。
+关闭那个黑窗口就是停止服务。
+
+> 该 .bat 用 GBK + CRLF 编码保存，才能让 cmd 正确显示中文。
+> 如果用编辑器改它，记得保持 GBK，否则双击后中文会变成乱码。
 
 > **必须用 `py` 而不是 `python`。** 本机 `python` 指向 WorkBuddy 自带的
 > 3.13（`~/.workbuddy/binaries/python/...`），里面没有 fastapi；
