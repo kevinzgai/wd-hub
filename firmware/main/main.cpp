@@ -295,6 +295,16 @@ static void display_init(void)
     lv_display_set_buffers(s_disp, s_buf1, s_buf2, buf_bytes,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
 
+    // 关键：ST7789 走 SPI 时按高字节优先接收 RGB565，而 LVGL 的 RGB565
+    // 在内存里是小端（低字节在前）。不做字节交换的话：
+    //   纯白 0xFFFF / 纯黑 0x0000 交换后还是自己 → 整体看着"正常"；
+    //   但抗锯齿文字的中间灰度（如 0x8000 <-> 0x0080）会彻底错乱，
+    //   沿字边冒出彩色噪点，看起来就是"文字花屏"。
+    // LVGL 9 没有 lv_draw_sw_rgb565_swap()，正确做法是把显示层
+    // 色彩格式设为 RGB565_SWAPPED，渲染时直接输出交换后的字节序，
+    // 零额外遍历开销（需 CONFIG_LV_DRAW_SW_SUPPORT_RGB565_SWAPPED=y）。
+    lv_display_set_color_format(s_disp, LV_COLOR_FORMAT_RGB565_SWAPPED);
+
     // 注意别加 const —— 声明成 const 再赋值会报
     // "assignment of member ... in read-only object"
     esp_lcd_panel_io_callbacks_t cbs = {};
