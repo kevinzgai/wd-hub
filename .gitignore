@@ -111,3 +111,10 @@ venv/
 tools/*_preview.wav
 tools/tone_compare.wav
 tools/done_tone.wav
+
+# ==================
+# 看板服务运行时状态
+# ==================
+# 任务账本（server/sources/ledger.py 生成）。是本机历史数据，不是代码：
+# 换机器重新累积即可，进版本库只会互相覆盖。
+server/state/

@@ -101,15 +101,15 @@ class SessionItem(BaseModel):
 
 class Summary(BaseModel):
     working: int = Field(description="近 30 分钟活跃的交互式会话数")
-    today_done: int = Field(description="今日转为 completed 的任务数")
+    today_done: int = Field(description="今日完成的任务数（账本口径，删除任务不清零）")
     automations: int = Field(description="已启用的自动化数（status=ACTIVE）")
 
 
 class TaskStat(BaseModel):
-    total: int = Field(description="任务总数")
-    completed: int = Field(description="累计已完成")
-    today_completed: int = Field(description="今日完成")
-    in_progress: int = Field(description="进行中")
+    total: int = Field(description="任务总数（含已删除的历史任务，来自本地账本）")
+    completed: int = Field(description="累计已完成（含已删除任务）")
+    today_completed: int = Field(description="今日完成（按完成时刻算，删除任务不影响）")
+    in_progress: int = Field(description="进行中（仅统计盘上现存任务）")
 
 
 class AutomationStat(BaseModel):
