@@ -67,6 +67,17 @@ adc-probe/
 # 素材真身是 pet_frames.c，这张 png 只是给人看的，随时可重生成。
 tools/pet_preview.png
 
+# 宠物造型的调参过程图（8 版迭代的中间产物，共 600KB）。
+# 结论已固化进 gen_pet.py 的注释，过程图没有留存价值。
+tools/petproto/
+
+# 屏显模拟与方案对比图，由 tools/pet_mock_screen.py、pet_opa_compare.py 生成。
+# 只用于验证时肉眼看，不进版本库。
+tools/pet_screen_*.png
+tools/pet_opa_options.png
+tools/pet_compare.png
+tools/pet_done_frames.png
+
 # ================
 # Logs & Archives
 # ================

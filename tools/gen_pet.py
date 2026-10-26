@@ -1,287 +1,316 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """生成像素宠物的 C 素材（firmware/main/pet_frames.c）。
 
-为什么用 ARGB8888 而不是 RGB565 预合成背景
--------------------------------------------
-上一版把透明格预合成成背景色（和 logo_wb.c 同一套路），省内存也免解码。
-但宠物现在要"半透明浮动"—— 预合成方案下，透明区会变成一块半透明黑罩，
-把底下的文字压暗，看起来像蒙了层灰纱。
+设计依据（用户提供的参考图：猫耳机器人 + 圆黑面罩 + 青色眼镜 + 两侧耳机）
+------------------------------------------------------------------------
+参考图是 556x556 的完整角色，暗部占 70%（面罩 #1A191C / 马甲 #121214 /
+裤子 #1D1E21），而屏底色是 #06080C、宠物又以 LV_OPA_30 半透明压在最底层。
+直接把整图缩到 120px 后，暗部与背景几乎同色 —— 实测只能看出"一坨黑的"，
+猫耳和眼镜之外全部消失。
 
-要"只有猫半透明、其他完全透"就必须带真正的 alpha 通道。
-ARGB8888 的 sw 渲染器支持已开（CONFIG_LV_DRAW_SW_SUPPORT_ARGB8888=y）。
+所以只取**头部**，并手绘成 40x32 的像素画：
+  - 头部是唯一有高对比结构的区域（白头盔 + 青眼镜 + 深面罩）
+  - 手绘而不是自动量化，因为自动量化在 40 列下会在面罩里留下反光噪点
+    （原图面罩是玻璃质感，渐变被压成零散亮点）
+  - 40x32 -> 120x96，横向 3 倍整数放大，纵向居中留 12px 上下留白
 
-尺寸策略：直接生成 120×120（屏 240px 的一半），运行时不做任何缩放。
+为什么是 40 列而不是 24
+------------------------
+24x24 试过：耳机、眼镜、猫耳三者放不下，画出来是个"通用机器人"，
+丢掉了参考图的辨识度。40 列刚好能同时容纳猫耳轮廓 + 椭圆面罩 +
+两条 2px 青眼镜 + 两侧耳机。
 
-为什么不省这 345KB —— 踩过的坑：
-上一版生成 60×60 然后 lv_image_set_scale(512) 想放大到 120。
-结果屏幕上宠物只露出左上角一块。原因是 lv_image_set_scale 只改"绘制变换"，
-**对象自身尺寸仍然是 60×60**，而 pivot 默认在图像中心，放大 2 倍后图像
-以中心向四周各溢出 30px，超出对象边界和屏幕边缘就被裁掉。
-
-要绕过它得手动 set_pivot(0,0) + set_size(120,120)，依赖 LVGL 内部
-变换区域的实现细节，脆弱且难排查。直接在生成阶段画成 120 就是零变换、
-零溢出、零歧义。
-
-代价：ARGB8888 是 32 位，8 帧 120×120 共 460800B。
-16MB 片子完全放得下（app 分区 3MB，加完还剩约 1.1MB）。
-
-像素画怎么改
+运行时零缩放
 ------------
-改下面的 EAR_* / EYE_* / MOUTH_* / LAPTOP，改完重跑：
-    python tools/gen_pet.py
-逻辑画布 20×20，PIX=6 六倍绘制成 120×120。
-每块像素 6×6，马赛克感明显 —— 这正是像素宠物该有的样子，
-而且天然没有缩放插值造成的糊边。
+素材就是 120x120，1:1 上屏。不用 lv_image_set_scale —— 那个函数只改
+"绘制变换"不改对象 w/h，pivot 默认在中心，放大后会以中心向四周溢出、
+超出对象边界被裁掉（踩过，屏幕只露左上角）。
 
-    .  透明（填背景色）
-    W  身体（白）      #E6EDF3  COL_TEXT
-    K  眼睛/嘴（挖洞）  #0B0E14  与背景同色，在身体上打洞
-    P  内耳/鼻/口      #F85149  COL_ERR
-    B  笔记本（工作）   #58A6FF  COL_ACCENT
+8 帧 x 120x96 x 4B(ARGB8888) = 368640B（上下各留 12px 透明凑满 120x120 画布）
 
-四种状态靠"有没有笔记本 + 眼神 + 耳朵"区分：
-    idle     无笔记本，睁眼，慢眨眼
-    working  身前有蓝色笔记本，眯眼盯着屏幕
-    done     无笔记本，眼睛弯成笑眼，张口
-    auto     无笔记本，耳朵被压扁一下（后台在跑）
-
-所有行必须左右镜像对称（col c == col 19-c）。validate() 会逐行检查，
-画歪了直接报错，不至于上屏才发现。
+换帧差异
+--------
+只改眼睛。青色眼镜是 30% 透明度下唯一还能看清的元素，用它承载状态：
+    idle    睁眼 -> 闭眼（慢眨眼）
+    working 睁眼 -> 睁眼（高频抖动，配合更短的周期）
+    done    弯眼 ^ -> 弯眼 ^^（笑）
+    auto    睁眼 -> 眼睛变窄（等待你操作）
 """
 import io
 import os
 
-# 索引 0 是"透明"：现在输出 ARGB8888，alpha=0 即可，不需要预合成背景色。
-# 留个占位 RGB 只为让 PALETTE 下标对齐。
-PALETTE = [
-    (0x00, 0x00, 0x00),      # 0 透明（alpha=0，RGB 无意义）
-    (0xE6, 0xED, 0xF3),      # 1 W 身体
-    (0x0B, 0x0E, 0x14),      # 2 K 眼/嘴（洞）
-    (0xF8, 0x51, 0x49),      # 3 P 内耳/鼻/口
-    (0x58, 0xA6, 0xFF),      # 4 B 笔记本
-]
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'firmware', 'main', 'pet_frames.c')
 
-CHAR_MAP = {
-    '.': -1,   # 透明
-    'W': 1,
-    'K': 2,
-    'E': 2,    # 眼睛同 K
-    'P': 3,
-    'B': 4,
+# 逻辑画布 40x32，放大 3 倍 -> 120x96，纵向居中到 120
+N, H, PIX = 40, 32, 3
+DISP = N * PIX               # 120
+
+# 调色板。'.' 是透明，其余对齐屏底色 #06080C 之后的可辨识亮度。
+#
+# 为什么面罩 K 不是参考图的 #1A191C：
+# --------------------------------
+# 屏底色 #06080C 已经极暗，K 若照抄参考图（#1A191C），在 PET_OPA_40 下
+# 上屏只剩 #0F1115，和背景的对比度 1.15:1 —— 面罩和背景直接融成一片，
+# 头部看起来就是个"白圈里挖了个洞"，分不出脸。
+# 提到 #1C212C 后上屏 #14171E，对比度约 1.5:1，能看出一个独立的深色椭圆。
+# 这是"可辨识"与"别太亮抢文字"之间的折中值，不要随意调回。
+PAL = {
+    '.': (0x00, 0x00, 0x00, 0),        # 透明
+    'W': (0xEC, 0xF1, 0xF8, 0xFF),     # 头盔亮白
+    'w': (0xB4, 0xBD, 0xCB, 0xFF),     # 头盔暗侧
+    'K': (0x1C, 0x21, 0x2C, 0xFF),     # 面罩主体（比参考图亮一档，见上）
+    'k': (0x32, 0x3A, 0x4A, 0xFF),     # 面罩高光/镜梁
+    'H': (0x6E, 0x78, 0x88, 0xFF),     # 耳机
+    'h': (0x44, 0x4B, 0x56, 0xFF),     # 耳机外沿
+    'C': (0x35, 0xE8, 0xF5, 0xFF),     # 眼镜亮
+    'c': (0x1C, 0x91, 0x9E, 0xFF),     # 眼镜暗（上下端）
+    'E': (0x6B, 0x74, 0x83, 0xFF),     # 内耳
 }
 
-SIZE  = 20      # 逻辑画布边长（字符画）
-PIX   = 6       # 每个逻辑像素绘制成 6x6，得 120x120
-DISP  = SIZE * PIX            # 120，素材实际边长 = 屏宽一半
+def blank():
+    return [['.'] * N for _ in range(H)]
 
-# ---------------------------------------------------------------------------
-# 骨架。行号分工：
-#   0-3   耳朵（auto 会压扁）
-#   4-13  头
-#   14-19 身体（working 会被笔记本覆盖）
-# ---------------------------------------------------------------------------
+def ell(cx, cy, rx, ry, x, y):
+    return ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2
 
-EAR_TALL = [
-    ".....WW......WW.....",   # 0 耳尖
-    "....WWWW....WWWW....",   # 1
-    "....WPPW....WPPW....",   # 2 内耳
-    "...WWWWWW..WWWWWW...",   # 3 耳根并入头顶
-]
+def compose(eyes):
+    """eyes: 'open' | 'blink' | 'happy' | 'narrow'
 
-# 压扁：整体下移一行，视觉上"被按了一下"
-EAR_FLAT = [
-    "....................",
-    ".....WW......WW.....",
-    "....WWWW....WWWW....",
-    "....WPPW....WPPW....",
-]
-
-# 头身骨架。7/8 是眼睛、10/11 是口鼻，由下面的片段覆盖
-BODY = {
-    4:  "..WWWWWWWWWWWWWWWW..",
-    5:  ".WWWWWWWWWWWWWWWWWW.",
-    6:  ".WWWWWWWWWWWWWWWWWW.",
-    7:  ".WWWWWWWWWWWWWWWWWW.",   # 眼睛行 1
-    8:  ".WWWWWWWWWWWWWWWWWW.",   # 眼睛行 2
-    9:  ".WWWWWWWWWWWWWWWWWW.",
-    10: ".WWWWWWWWWWWWWWWWWW.",   # 鼻
-    11: ".WWWWWWWWWWWWWWWWWW.",   # 口
-    12: "..WWWWWWWWWWWWWWWW..",
-    13: "...WWWWWWWWWWWWWW...",
-    14: "....WWWWWWWWWWWW....",   # 脖子收窄
-    15: "...WWWWWWWWWWWWWW...",
-    16: "...WWWWWWWWWWWWWW...",
-    17: "...WWWWWWWWWWWWWW...",
-    18: "...WWWWWWWWWWWWWW...",
-    19: "....WWWWWWWWWWWW....",   # 末行收 2px 做圆角；不收会变成硬切平边
-}
-
-# ---- 眼睛：2x2 黑豆眼，位置 cols 4-5 / 14-15 ----
-EYE_OPEN = {
-    7: ".WWWKKWWWWWWWWKKWWW.",
-    8: ".WWWKKWWWWWWWWKKWWW.",
-}
-EYE_BLINK = {                    # 闭眼：只留下缘，压成一条线
-    7: ".WWWWWWWWWWWWWWWWWW.",
-    8: ".WWWKKWWWWWWWWKKWWW.",
-}
-EYE_SQUINT = {                   # 眯眼盯着屏幕
-    7: ".WWWKKWWWWWWWWKKWWW.",
-    8: ".WWWWWWWWWWWWWWWWWW.",
-}
-EYE_HAPPY = {                    # 笑眼：下缘两点向外撇，读作 "^ ^" 的弯
-    7: ".WWWWWWWWWWWWWWWWWW.",
-    8: ".WWWKKWWWWWWWWKKWWW.",
-}
-
-# ---- 口鼻 ----
-MOUTH_NORMAL = {
-    10: ".WWWWWWWWPPWWWWWWWW.",   # 小鼻子（2px 是镜像对称的最小单位）
-    11: ".WWWWWWWWKKWWWWWWWW.",   # 一字嘴，收窄到 2px，太宽会像涂了口红
-}
-MOUTH_HAPPY = {                  # 张口笑：鼻子下面接红色小口
-    10: ".WWWWWWWWPPWWWWWWWW.",
-    11: ".WWWWWWWPPPPWWWWWWW.",
-}
-
-# ---- 笔记本：工作状态在身前，盖住身体下半 ----
-LAPTOP = {
-    17: "...BBBBBBBBBBBBBB...",   # 屏
-    18: "...BBBBBBBBBBBBBB...",
-    19: "...BBBBBBBBBBBBBB...",   # 底座与屏同宽，别超出身体轮廓
-}
-
-
-def compose(ears, eyes, mouth, extra=None):
-    rows = dict(BODY)
-    rows.update(eyes)
-    rows.update(mouth)
-    if extra:
-        rows.update(extra)
-    return list(ears) + [rows[i] for i in range(4, SIZE)]
-
-
-FRAMES = {
-    # ---- 待机：安静眨眼，1600ms 一换 ----
-    "idle": [
-        compose(EAR_TALL, EYE_OPEN,  MOUTH_NORMAL),
-        compose(EAR_TALL, EYE_BLINK, MOUTH_NORMAL),
-    ],
-    # ---- 工作中：眯眼 + 身前笔记本，屏幕亮度闪一下（两帧同图，靠定时器切）----
-    "working": [
-        compose(EAR_TALL, EYE_SQUINT, MOUTH_NORMAL, LAPTOP),
-        compose(EAR_TALL, EYE_SQUINT, MOUTH_NORMAL, LAPTOP),
-    ],
-    # ---- 完成：笑眼 + 张口，500ms 一换（嘴一开一合）----
-    "done": [
-        compose(EAR_TALL, EYE_HAPPY, MOUTH_HAPPY),
-        compose(EAR_TALL, EYE_HAPPY, MOUTH_NORMAL),
-    ],
-    # ---- 自动化：耳朵压扁，700ms 一换 ----
-    "auto": [
-        compose(EAR_TALL, EYE_OPEN, MOUTH_NORMAL),
-        compose(EAR_FLAT, EYE_OPEN, MOUTH_NORMAL),
-    ],
-}
-
-ORDER = ["idle", "working", "done", "auto"]
-
-
-def validate(name, frame):
-    if len(frame) != SIZE:
-        raise ValueError("%s: 行数 %d != %d" % (name, len(frame), SIZE))
-    for i, row in enumerate(frame):
-        if len(row) != SIZE:
-            raise ValueError("%s 第 %d 行长度 %d != %d: %r"
-                             % (name, i, len(row), SIZE, row))
-        for ch in row:
-            if ch not in CHAR_MAP:
-                raise ValueError("%s 第 %d 行有非法字符 %r" % (name, i, ch))
-        if row != row[::-1]:
-            raise ValueError("%s 第 %d 行不对称: %r" % (name, i, row))
-
-
-def expand(frame):
-    """20x20 逻辑图 -> 60x60 ARGB8888 字节流。
-
-    LVGL 的 ARGB8888 在内存里是 B,G,R,A 顺序（小端下等价于 0xAARRGGBB 的
-    32 位值按字节倒序落盘）。这里直接按 B,G,R,A 逐字节写，不依赖任何端序假设。
+    只有眼睛部分随状态变化，其余（猫耳/头盔/面罩/耳机）完全一致，
+    这样换帧时不会出现"整个头在抖"的廉价感。
     """
+    g = blank()
+
+    # ---- 猫耳：逐行区间表，避免用取整造成锯齿 ----
+    EAR_L = {
+        1: (8, 11), 2: (8, 11), 3: (7, 12), 4: (7, 12),
+        5: (6, 12), 6: (6, 12), 7: (5, 12), 8: (5, 12),
+        9: (5, 12), 10: (5, 12), 11: (5, 12),
+    }
+    for y, (a, b) in EAR_L.items():
+        for x in range(a, b + 1):
+            g[y][x] = 'W'
+        for x in range(a + 1, b):
+            g[y][x] = 'E'
+    for y in range(1, 12):                      # 右耳镜像
+        for x in range(N // 2):
+            g[y][N - 1 - x] = g[y][x]
+
+    # ---- 头盔 ----
+    for y in range(H):
+        for x in range(N):
+            d = ell(19.5, 17.5, 13.8, 13.2, x, y)
+            if d <= 1.0:
+                g[y][x] = 'w' if d > 0.84 else 'W'
+
+    # ---- 耳机：贴住头两侧 ----
+    for y in range(15, 28):
+        for x in range(2, 7):
+            if ell(19.5, 21, 15.4, 8.4, x, y) <= 1.0:
+                g[y][x] = 'h' if x == 2 else 'H'
+        for x in range(33, 38):
+            if ell(19.5, 21, 15.4, 8.4, x, y) <= 1.0:
+                g[y][x] = 'h' if x == 37 else 'H'
+
+    # ---- 面罩 ----
+    for y in range(H):
+        for x in range(N):
+            d = ell(19.5, 19.5, 11.4, 8.8, x, y)
+            if d <= 1.0:
+                g[y][x] = 'k' if d > 0.88 else 'K'
+
+    # ---- 眼睛 ----
+    # 镜梁（y=19 的 'k' 横线）不在这里画，统一放到函数末尾 —— 见下方注释。
+    if eyes == 'open':
+        for y in range(16, 24):
+            for x in (13, 14):
+                g[y][x] = 'C' if 17 <= y <= 22 else 'c'
+            for x in (25, 26):
+                g[y][x] = 'C' if 17 <= y <= 22 else 'c'
+    elif eyes == 'blink':
+        # 闭眼：只留一条 1px 的暗青横线
+        for x in range(13, 15):
+            g[20][x] = 'c'
+        for x in range(25, 27):
+            g[20][x] = 'c'
+    elif eyes == 'narrow':
+        # 变窄：中间几行，表示"在等你"
+        for y in range(18, 23):
+            for x in (13, 14):
+                g[y][x] = 'C'
+            for x in (25, 26):
+                g[y][x] = 'C'
+    elif eyes == 'happy':
+        # 笑眼 ^：每只眼画成 3 列阶梯，中间列最高，两侧各降 1 行。
+        # 左右必须严格镜像，否则 validate() 会直接报错。
+        #   左眼中心 x=13, 右眼中心 x=26（相对 19.5 对称）
+        for cx in (13, 26):
+            g[18][cx]   = 'C'
+            g[19][cx-1] = 'C'; g[19][cx+1] = 'C'
+            g[20][cx-2] = 'C'; g[20][cx+2] = 'C'
+    elif eyes == 'happy_small':
+        # 笑收：弧高只有 happy 的一半（2 行阶梯而不是 3 行）。
+        # 和 happy 交替形成"笑开 -> 笑收"，避免两帧一模一样导致动画静止。
+        # 注意阶梯宽度也随之收窄，否则同高度的横线会和 happy 撞脸。
+        for cx in (13, 26):
+            g[19][cx]   = 'C'
+            g[20][cx-1] = 'C'; g[20][cx+1] = 'C'
+    else:
+        raise ValueError(eyes)
+
+    # 镜梁 y=19 x=15..24（面罩高光 'k'，横贯两眼之间）。
+    # 必须在眼睛之后统一补，不能只写在 open/blink/narrow 三个分支里：
+    # happy 分支的弧线会覆盖 y=19 的中间段，漏补的话面罩中央少一条亮边，
+    # 上屏表现为"笑的那一帧脸突然暗了一块"，两帧交替时就是闪烁。
+    # 放在这里而不是各分支里，也保证了四种表情的镜梁绝对一致。
+    for x in range(15, 25):
+        g[19][x] = 'k'
+
+    return g
+
+# 8 帧：4 态 x 2 帧
+#
+# 每种状态的两帧必须是**不同画面**，否则定时器换帧等于没换，动画是死的。
+# 踩过：done 原本写 ('happy','happy')，两帧字节完全相同，
+# "笑口一开一合"变成了静止画面；直接白占 46KB 且肉眼完全无变化。
+# 现在 done 用 happy/happy_small 两档弧高，形成"笑开 -> 笑收"的呼吸感。
+FRAMES = [
+    ('idle',    'open'),
+    ('idle',    'blink'),
+    ('working', 'open'),
+    ('working', 'narrow'),
+    ('done',    'happy'),
+    ('done',    'happy_small'),
+    ('auto',    'narrow'),
+    ('auto',    'blink'),
+]
+
+def validate(g, name):
+    for y in range(H):
+        assert len(g[y]) == N, '%s row %d' % (name, y)
+        for ch in g[y]:
+            assert ch in PAL, '%s row %d bad char %r' % (name, y, ch)
+        # 左右必须严格镜像（画歪了直接报错，别等到烧进板子才发现）
+        row = ''.join(g[y])
+        if row != row[::-1]:
+            raise ValueError('%s 第 %d 行不对称: %r' % (name, y, row))
+def expand(g):
+    """40x32 -> 120x96 的 BGRA 字节流（纵向 3 倍、横向 3 倍）。"""
     out = bytearray()
-    for row in frame:
-        # 先把一行逻辑像素展开成 PIX 倍宽的字节串
+    for y in range(H):
         line = bytearray()
-        for ch in row:
-            idx = CHAR_MAP[ch]
-            if idx < 0:
-                b, g, r, a = 0, 0, 0, 0          # 完全透明
-            else:
-                r, g, b = PALETTE[idx]
-                a = 0xFF
-            line += bytes((b, g, r, a)) * PIX
-        out += line * PIX                        # 纵向重复 PIX 行
-    assert len(out) == DISP * DISP * 4, len(out)
+        for x in range(N):
+            # PAL 里的元组是 (R,G,B,A)。要写成 LVGL ARGB8888 的内存序 B,G,R,A，
+            # 所以必须显式重排：bytes((b, g, r, a))。
+            # 踩过：这里曾写成 `b, gg, r, a = PAL[...]`，等于把 R 当 B、B 当 R，
+            # 青色眼镜 0x35E8F5 上屏后变成黄褐色（R<->B 互换）。
+            r, gg, b, a = PAL[g[y][x]]
+            line += bytes((b, gg, r, a)) * PIX
+        out += line * PIX
+    assert len(out) == DISP * (H * PIX) * 4, len(out)
     return bytes(out)
 
-
 def main():
-    here = os.path.dirname(os.path.abspath(__file__))
-    dst = os.path.join(here, '..', 'firmware', 'main', 'pet_frames.c')
+    parts = []
+    parts.append('// 自动生成，请勿手改。改工具后重跑：python tools/gen_pet.py\n')
+    parts.append('// 源：40x32 手绘像素画（头部特写），3 倍整数放大到 120x96 后纵向居中。\n')
+    parts.append('#include "pet.h"\n\n')
 
-    L = []
-    L.append('// 像素宠物素材 —— 由 tools/gen_pet.py 生成，请勿手改')
-    L.append('//')
-    L.append('// 每帧 %dx%d ARGB8888，内存序 B,G,R,A；透明像素 alpha=0。' % (DISP, DISP))
-    L.append('// 尺寸即最终上屏尺寸（屏 240 的一半），运行时不做缩放。')
-    L.append('// 帧表排布：pet_frames[state * PET_FRAMES_EACH + frame]')
-    L.append('')
-    L.append('#include "pet.h"')
-    L.append('')
+    # ---- 生成所有帧的字节，并做两项检查 ----
+    # 1) 同状态的两帧必须不同。否则定时器换帧等于没换，动画是死的。
+    #    踩过：done 原本写 ('happy','happy')，两帧字节完全相同，
+    #    笑口"一开一合"变成静止画面，肉眼毫无变化。
+    # 2) 不同状态之间允许画面相同（如 idle 与 working 都用 open 眼），
+    #    但必须**共享同一份静态数组**，否则同样的 46KB 重复存多份。
+    #    实测 8 帧里只有 5 张不同画面，去重省 135KB。
+    blobs = []          # 每个 FRAMES 项对应的字节
+    for idx, (state, eyes) in enumerate(FRAMES):
+        g = compose(eyes)
+        validate(g, '%s_%d' % (state, idx))
+        blobs.append(expand(g))
 
-    for state in ORDER:
-        for fi, frame in enumerate(FRAMES[state]):
-            validate("%s_%d" % (state, fi), frame)
-            data = expand(frame)
-            L.append('// %s 帧 %d' % (state, fi))
-            L.append('static const uint8_t pv_%s_%d[PET_DISP * PET_DISP * 4] = {'
-                     % (state, fi))
-            for i in range(0, len(data), 16):
-                chunk = data[i:i + 16]
-                L.append('    ' + ', '.join('0x%02X' % b for b in chunk) + ',')
-            L.append('};')
-            L.append('')
+    for i in range(0, len(FRAMES), 2):
+        if blobs[i] == blobs[i + 1]:
+            raise ValueError(
+                '状态 %s 的两帧画面完全相同（%s / %s），换帧不会有任何变化'
+                % (FRAMES[i][0], FRAMES[i][1], FRAMES[i + 1][1]))
 
-    L.append('// ---- 帧描述符 ----')
-    for state in ORDER:
-        for fi in range(2):
-            L.append('static const lv_image_dsc_t pe_%s_%d = {' % (state, fi))
-            L.append('    .header.magic  = LV_IMAGE_HEADER_MAGIC,')
-            L.append('    .header.cf     = LV_COLOR_FORMAT_ARGB8888,')
-            L.append('    .header.flags  = 0,')
-            L.append('    .header.w      = PET_DISP,')
-            L.append('    .header.h      = PET_DISP,')
-            L.append('    .header.stride = PET_DISP * 4,')
-            L.append('    .data_size     = PET_DISP * PET_DISP * 4,')
-            L.append('    .data          = pv_%s_%d,' % (state, fi))
-            L.append('};')
-            L.append('')
+    # 按内容去重：相同字节只输出一个 static 数组
+    uniq = []           # [(name, data)]
+    alias = []          # 每个帧 -> uniq 下标
+    by_hash = {}
+    for idx, data in enumerate(blobs):
+        key = bytes(data)
+        if key in by_hash:
+            ui = by_hash[key]
+            alias.append(ui)
+            print('  帧 %d (%s) 与帧 %d 画面相同，复用数组 %s'
+                  % (idx, FRAMES[idx][0], ui, uniq[ui][0]))
+        else:
+            ui = len(uniq)
+            by_hash[key] = ui
+            nm = 'pv_%s_%d' % (FRAMES[idx][0], idx)
+            uniq.append((nm, data))
+            alias.append(ui)
 
-    L.append('const lv_image_dsc_t pet_frames[PET_FRAME_COUNT] = {')
-    for state in ORDER:
-        for fi in range(2):
-            L.append('    pe_%s_%d,' % (state, fi))
-    L.append('};')
-    L.append('')
+    for nm, data in uniq:
+        parts.append('static const uint8_t %s[%d] = {\n' % (nm, len(data)))
+        # 每行 24 字节，便于 diff
+        for i in range(0, len(data), 24):
+            chunk = data[i:i + 24]
+            parts.append('  ' + ','.join('0x%02X' % b for b in chunk) + ',\n')
+        parts.append('};\n\n')
 
-    text = '\n'.join(L)
-    with io.open(dst, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(text)
+    # 描述符表。注意这里不再输出 PAD_Y —— 素材就是 120x96 本身，
+    # 没有留白，pet.h 里也删掉了同名宏（原来那两处都是错的、且从未被引用）。
+    parts.append('const lv_image_dsc_t pet_frames[PET_FRAME_COUNT] = {\n')
+    for idx in range(len(FRAMES)):
+        nm = uniq[alias[idx]][0]
+        parts.append('    {\n')
+        parts.append('        .header = { .cf = LV_COLOR_FORMAT_ARGB8888, .w = %d, .h = %d, .stride = %d },\n'
+                     % (DISP, H * PIX, DISP * 4))
+        parts.append('        .data_size = %d,\n' % (DISP * H * PIX * 4))
+        parts.append('        .data = %s,\n' % nm)
+        parts.append('    },\n')
+    parts.append('};\n')
 
-    total = len(ORDER) * 2
-    print('已生成 %s' % os.path.normpath(dst))
-    print('  %d 帧，素材 %dx%d ARGB8888（1:1 上屏），共 %d 字节'
-          % (total, DISP, DISP, total * DISP * DISP * 4))
-
+    src = ''.join(parts)
+    io.open(OUT, 'w', encoding='utf-8', newline='\n').write(src)
+    print('写入 %s  (%.1f KB)' % (OUT, len(src) / 1024.0))
+    print('  %d 帧 -> %d 份数组，省 %.0f KB'
+          % (len(FRAMES), len(uniq),
+             (len(FRAMES) - len(uniq)) * DISP * H * PIX * 4 / 1024.0))
+    # 同时输出预览图，方便肉眼核对
+    try:
+        from PIL import Image
+        cell = 130
+        sheet = Image.new('RGB', (cell * 4 + 10, cell * 2 + 10), (0x06, 0x08, 0x0C))
+        for idx, (state, eyes) in enumerate(FRAMES):
+            g = compose(eyes)
+            img = Image.new('RGBA', (N, H))
+            p = img.load()
+            for y in range(H):
+                for x in range(N):
+                    # PAL 已经是 (R,G,B,A)，和 PIL 的 RGBA 顺序一致，直接赋值。
+                    # 踩过：这里曾写成 (c[2],c[1],c[0],c[3])，预览图跟着固件一起错，
+                    # 两边"互相印证"，导致 R<->B 互换一直没被发现。
+                    p[x, y] = PAL[g[y][x]]
+            big = img.resize((DISP, H * PIX), Image.NEAREST)
+            r, gg, b, a = big.split()
+            # 与 main.cpp 的 PET_OPA 保持一致（LV_OPA_40 = 102/255）。
+            # 这里必须跟着改，否则预览图的亮度跟屏上对不上，
+            # 就会得出"屏上应该更亮"之类的错误结论。
+            a = a.point(lambda v: int(v * 102 / 255.0))
+            hero = Image.new('RGBA', (DISP, H * PIX), (0x06, 0x08, 0x0C, 255))
+            hero.alpha_composite(Image.merge('RGBA', (r, gg, b, a)), (0, 0))
+            sheet.paste(hero.convert('RGB'),
+                        ((idx % 4) * cell + 5, (idx // 4) * cell + 5))
+        pv = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pet_preview.png')
+        sheet.save(pv)
+        print('预览 %s' % pv)
+    except ImportError:
+        pass
 
 if __name__ == '__main__':
     main()

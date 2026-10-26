@@ -267,14 +267,27 @@ static volatile int16_t  s_toast_val    = -1;  // 待显示的亮度值，-1 = �
 static volatile uint32_t s_toast_until  = 0;   // 提示到期时刻（毫秒）
 static volatile const char *s_last_btn  = "none";  // 最后按下的键，随轮询日志打出来
 
-// 深色底 + 高对比，小屏远看更清楚
-#define COL_BG      lv_color_hex(0x0B0E14)
-#define COL_TEXT    lv_color_hex(0xE6EDF3)
-#define COL_DIM     lv_color_hex(0x7D8590)
-#define COL_ACCENT  lv_color_hex(0x58A6FF)
-#define COL_OK      lv_color_hex(0x3FB950)
-#define COL_WARN    lv_color_hex(0xD29922)
-#define COL_ERR     lv_color_hex(0xF85149)
+// 深色底 + 高对比，小屏远看更清楚。
+//
+// 2026-10-26 整体提亮一轮。原因是 240x240 IPS 在强环境光下对比不足，
+// 尤其 12px 的小字（会话副标题、页脚、日期、详情数值）远看糊成一片。
+//
+// 调整思路不是"把白色调更白" —— COL_TEXT 原来已是 16.35:1，足够。
+// 真正的问题在辅助色 COL_DIM：它承载了大量 12px 文字，原值只有 5.18:1，
+// 是整屏最低的一处，却用在最细的字上。所以：
+//   1) COL_DIM 大幅提亮 #7D8590 -> #B4BEC9，对比度 5.18 -> 10.26
+//   2) COL_TEXT 推到纯白，让主次层级进一步拉开
+//   3) 彩色（蓝/绿/黄/红）各提一档，避免提亮灰阶后彩色显得发闷
+//   4) 背景压深一点，底子更黑，所有前景色的实际观感对比都更强
+//
+// 数值为 WCAG 对比度（相对亮度比），括号内是调整前的值：
+#define COL_BG      lv_color_hex(0x06080C)   // 更深，原 0x0B0E14
+#define COL_TEXT    lv_color_hex(0xFFFFFF)   // 20.0:1 (16.4)
+#define COL_DIM     lv_color_hex(0xB4BEC9)   // 10.6:1 ( 5.2) <- 最关键的一处
+#define COL_ACCENT  lv_color_hex(0x6FB6FF)   //  9.4:1 ( 7.7)
+#define COL_OK      lv_color_hex(0x4FD463)   // 10.4:1 ( 7.6)
+#define COL_WARN    lv_color_hex(0xE8B33A)   // 10.4:1 ( 7.7)
+#define COL_ERR     lv_color_hex(0xFF6E66)   //  7.3:1 ( 5.8)
 
 // ===========================================================================
 // 屏幕
@@ -434,19 +447,29 @@ static void display_init(void)
 // 先按 -5 左移，用户反馈"多了"，再右移 2px -> -3。
 #define BAT_LABEL_DX    (-3)
 
-// ---- 像素宠物：浮动在右下角，占屏幕 1/2 ----
-// 素材就是 120x120（屏 240 的一半），BOTTOM_RIGHT 对齐：
-//   偏移 (4, 4) => 占 x=124..243、y=124..243
-// 故意让右下各出屏 4px：像素画的边缘是硬直边，正好压在屏幕边框上会像
+// ---- 像素宠物：浮动在右下角 ----
+// 素材是 PET_IMG_W x PET_IMG_H = 120x96（不是 120x120 —— 之前这里的注释
+// 写错了，描述符实际 .h=96）。BOTTOM_RIGHT 对齐 + 偏移 (4, 4)：
+//   对象右下角对齐屏幕右下角，再往右下各挪 4px
+//   => 占 x=124..243、y=148..243
+// 屏幕可见区是 0..239，所以右侧 4px、底部 4px 出屏被裁。
+// 故意让它出屏一点：像素画的边缘是硬直边，正好压在屏幕边框上会像
 // "贴了张方块贴纸"；溢出一点被裁掉后，视觉上更像浮在角落。
+// 底部裁掉的是头盔最下沿那 1 行暗边（逻辑行 30），不影响观感。
 #define PET_X           (4)
 #define PET_Y           (4)
-// 半透明。50% 时仍然压得会话列表的文字看不清，降到 30%。
+// 半透明。实测数据（sRGB 线性化 + WCAG 公式）：
+//   LV_OPA_30(29.8%) -> 白头盔上屏 #4B4D52，与底色 #06080C 对比 2.37:1
+//                       低于 WCAG 非文本图形 3:1 门槛，猫脸糊成一团
+//   LV_OPA_40(40.0%) -> 上屏 #62656A，3.43:1 过线；压在猫身上的
+//                       COL_DIM(#B4BEC9) 文字仍有 3.11:1，勉强够用
+//   LV_OPA_45(45.1%) -> 猫更清楚，但文字掉到 2.60:1，会话列表开始糊
+// 所以 40% 是这个布局的实际拐点：再高就伤到要读的文字了。
 // 注意这里混的是屏幕背景色，不是上面的文字 —— 宠物在最底层，
 // 文字画在它上面，但页脚/会话用的是灰色(COL_DIM)，压在白色猫身上
 // 对比度天生不足，所以只能把猫本身压淡来让文字浮出来。
-// LV_OPA_30 = 77（范围 0..255）。
-#define PET_OPA         LV_OPA_30
+// LV_OPA_40 = 102（范围 0..255）。
+#define PET_OPA         LV_OPA_40
 // 页脚右侧"★ 时间"。上一版为了给页脚里 20px 的宠物让位，这里改成过 -32；
 // 宠物现已独立浮在右下角（不占页脚高度），让位不再需要，恢复 -8。
 #define FOOTER_TEXT_RIGHT (-8)
@@ -482,7 +505,9 @@ static void mk_hline(lv_obj_t *parent, lv_coord_t y)
     lv_obj_set_size(line, 224, 1);
     lv_obj_align(line, LV_ALIGN_TOP_MID, 0, y);
     lv_obj_set_style_bg_color(line, COL_DIM, 0);
-    lv_obj_set_style_bg_opa(line, LV_OPA_30, 0);
+    // 底色压深后 OPA_30 的灰线几乎看不见了，提到 OPA_50 保持可见但不抢眼
+    // （LVGL 只提供 10/20/30/40/50 这几档，没有更细的粒度）
+    lv_obj_set_style_bg_opa(line, LV_OPA_50, 0);
     lv_obj_set_style_border_width(line, 0, 0);
     lv_obj_set_style_pad_all(line, 0, 0);
     lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
@@ -650,7 +675,8 @@ static void ui_build(void)
     lv_obj_set_style_arc_width(s_arc_bat, BAT_ARC_WIDTH, LV_PART_INDICATOR);
     // 背景轨道：暗灰，让"未充满"的部分也能看出是圆圈
     lv_obj_set_style_arc_color(s_arc_bat, COL_DIM, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(s_arc_bat, LV_OPA_30, LV_PART_MAIN);
+    // 未填充的轨道。底色变深后 30% 太弱，看不出圆圈轮廓，提到 OPA_50
+    lv_obj_set_style_arc_opa(s_arc_bat, LV_OPA_50, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_arc_bat, COL_OK, LV_PART_INDICATOR);
     lv_obj_set_style_arc_rounded(s_arc_bat, true, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(s_arc_bat, LV_OPA_TRANSP, LV_PART_MAIN);
@@ -792,7 +818,7 @@ static void ui_build(void)
     s_pet_img = lv_image_create(scr);
     lv_image_set_src(s_pet_img, &pet_frames[PET_ST_IDLE * PET_FRAMES_EACH]);
 
-    // 不做缩放。素材本身就是 120x120，1:1 绘制。
+    // 不做缩放。素材本身就是 120x96，1:1 绘制。
     //
     // 上一版用 lv_image_set_scale(512) 想把 60x60 放大到 120，屏幕上只露出
     // 左上角一块。原因是 set_scale 只改"绘制变换"，对象尺寸仍是 60x60，
