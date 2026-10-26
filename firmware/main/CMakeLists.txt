@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "main.cpp"
+        "audio.cpp"
         "battery.cpp"
         "font_cn_12.c"
         "font_cn_16.c"
@@ -16,6 +17,7 @@ idf_component_register(
         esp_driver_spi
         esp_driver_gpio
         esp_driver_ledc
+        esp_driver_i2s
         esp_adc
         esp_lcd
         nvs_flash

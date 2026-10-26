@@ -47,6 +47,7 @@
 #include "board_config.h"
 #include "battery.h"
 #include "pet.h"
+#include "audio.h"
 
 // 中文字体（由 tools/gen_charset.py + lv_font_conv 生成）
 LV_FONT_DECLARE(font_cn_12);
@@ -585,25 +586,84 @@ static void pet_set_state(uint8_t st)
 static int64_t s_done_until_ms = 0;
 static int     s_prev_today_done = -1;
 
+// 上一轮的"有没有会话在等操作"。语音提示靠它的**上升沿**触发。
+// 用边沿而不是电平，因为服务端 5 秒推一轮，等待状态通常持续好几分钟 ——
+// 用电平的话会每 5 秒叫一次，夜里能把人吵醒。
+static bool s_prev_any_waiting = false;
+
+// 上一轮的活跃会话数，用于检测"会话收工"（working 减少）。
+//
+// ⚠️ 这里有个必须处理的数据特性：working 的 SQL 是
+//     LOWER(status) IN ('working','active') AND last_activity_at >= now-30min
+// 也就是说会话超过 30 分钟没动静，会自动滑出计数 —— 这不是"完成"，
+// 只是"过期"。如果直接对 working 减少就响铃，那么任何一次长时间离开
+// 电脑再回来，都会听到莫名其妙的"完成"提示。
+//
+// 对策：减少时再确认一次 today_done 没有同时变化（那是真的完成 todo，
+// 已经由上面分支响过 DONE 音了），并且要求减少后仍有数据、非首次同步。
+// 更关键的是这里**不做任何猜测性播放**：只把减少也算作"有进展"，
+// 让它和 todo 完成共用去抖窗口，短时间内只响一次，避免连响。
+static int  s_prev_working = -1;
+
 static void pet_update_state(void)
 {
+    // 只有概览屏（第 0 屏，走 /status）的数据里带 working / today_done / sessions。
+    // 详情屏（/screen/<i>）只下发 rows，这三个字段在 parse_into 里 fallback 成 0。
+    //
+    // 如果照旧参与判断，切一次屏就会：
+    //   概览(working=2, done=3) -> 详情(0, 0)  : working 减少 → 误响"收工"
+    //   详情(0, 0) -> 概览(2, 3)               : done 增加   → 误响"完成"
+    // 也就是每切一圈屏白响两声。加音频之前只表现为表情闪一下，
+    // 现在会变成实体噪音，所以非第 0 屏直接跳过，宠物保持原状态不动。
+    if (s_data.page != 0) return;
+
     int64_t now = esp_timer_get_time() / 1000;
+
+    // 本轮是否已经因为"todo 完成"响过。用于避免同一轮里
+    // DONE 和 SESSION_END 连着响两声。
+    bool played_done = false;
 
     // 首次拿到数据时只记基线，不触发完成动画 —— 否则每次开机都要先笑一下
     if (s_prev_today_done < 0) {
         s_prev_today_done = s_data.today_done;
+        s_prev_working    = s_data.working;
     } else if (s_data.today_done > s_prev_today_done) {
+        // todo 勾完一项或多项。
+        // 一次完成多项（0 -> 3）也只响一次：连响三次纯属噪音，
+        // "刚才有进展"这一条信息响一声就够了。
         s_done_until_ms = now + PET_DONE_HOLD_MS;
         s_prev_today_done = s_data.today_done;
+        audio_play(AUDIO_EV_DONE);
+        played_done = true;
     } else if (s_data.today_done < s_prev_today_done) {
         s_prev_today_done = s_data.today_done;   // 跨天归零，跟一下基线
     }
+
+    // 会话收工：working 减少。
+    //
+    // ⚠️ working 的 SQL 带 30 分钟活跃窗口：
+    //     LOWER(status) IN ('working','active') AND last_activity_at >= now-30min
+    // 所以会话只是"久没动静"也会滑出计数，那不是完成。
+    // 完全靠这个信号会误报，因此：
+    //   - 本轮已经响过 DONE（真的完成了 todo）就不再响，避免连响两声
+    //   - 用 played_done 判断而不是比较 s_prev_today_done ——
+    //     后者在上一分支里已经更新过了，比较永远成立，是个隐蔽的 bug
+    if (s_prev_working >= 0 && s_data.working < s_prev_working && !played_done) {
+        audio_play(AUDIO_EV_SESSION_END);
+    }
+    s_prev_working = s_data.working;
 
     // 有没有会话在等用户操作 —— 比"有几个自动化"重要得多
     bool any_waiting = false;
     for (int i = 0; i < s_data.session_count; i++) {
         if (s_data.sessions[i].waiting) { any_waiting = true; break; }
     }
+
+    // 只在"从无到有"那一刻响。持续等待期间不重复提示。
+    if (any_waiting && !s_prev_any_waiting) {
+        audio_play(AUDIO_EV_ATTENTION);
+    }
+    s_prev_any_waiting = any_waiting;
 
     // 优先级：刚完成 > 有会话在等 > 有任务在跑 > 待机
     //
@@ -1367,6 +1427,17 @@ static void fetch_task(void *arg)
             parse_into(&parsed, s_http_buf);
             parsed.page = req_page;             // parse_into 里 memset 过，要重设
             fails = 0;
+
+            // 首次拉取成功响一声"已连接"。
+            // 用静态标志而不是比较 s_data.ok：后者在短暂失败时会沿用旧数据
+            // 保持 true，网络抖一下就重响，很烦。这里严格只在**第一次**
+            // 拿到 200 时响一次，之后无论断连多少次都不再响。
+            static bool s_greeted = false;
+            if (!s_greeted) {
+                s_greeted = true;
+                audio_play(AUDIO_EV_CONNECTED);
+            }
+
             // 屏数由服务端说了算，改屏数不用重烧固件
             if (parsed.nscr > 0) s_nscr = parsed.nscr;
             ESP_LOGI(TAG, "OK p=%d n=%d working=%d done=%d auto=%d sess=%d rows=%d btn=%s",
@@ -1696,6 +1767,12 @@ extern "C" void app_main(void)
     backlight_set(k_bright_steps[s_bright_idx]);   // 默认 100%
 
     button_init();
+
+    // 提示音。放在 button_init 之后、wifi 之前：
+    // I2S 初始化只依赖 GPIO，与网络无关；早开的好处是第一次
+    // "任务完成"事件就能响，不会因为还在连 WiFi 而静音。
+    // 失败不影响主流程（内部只打日志、不 abort）。
+    audio_init();
 
     wifi_init();
     time_init();

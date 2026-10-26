@@ -90,6 +90,10 @@ tools/pet_done_frames.png
 # 语音播报音频（edge-tts 生成，可重新生成）
 .tts/
 
+# 喇叭引脚的一次性探测工程（2026-10-26 实测 BCLK=15/LRCK=16/DOUT=7 时用的）
+# 已经得出结论并写进 firmware/main/audio.cpp 注释，属于历史工具，不参与正式构建
+probe-spk/
+
 # ================
 # Node / Python deps
 # ================
