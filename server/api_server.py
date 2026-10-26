@@ -179,6 +179,34 @@ def _waiting_flag(row: dict, pending_convs: set[str]) -> bool:
     return int(time.time() * 1000) - last >= WAIT_IDLE_MS
 
 
+def _firmware_session(row: dict, pending_convs: set[str]) -> dict:
+    """单行会话的固件载荷。
+
+    `e` = 距最近活动的**原始秒数**（2026-10-27 加）。只发 `elapsed` 那种成品
+    字符串的话，板子只能跟着 5 秒轮询一起跳字，看着像卡住；发了原始秒数，
+    固件用本地单调时钟自己累加，秒针就能一秒一跳。
+
+    ⚠ `e` 必须和 `elapsed` 并存下发：旧固件只认 `elapsed`，删掉它那批设备
+    会显示空白。固件侧同样保留字符串作为 `e` 缺失时的回退。
+
+    ⚠ 这里不能再报 `last_activity_at` 的毫秒原值：固件 `json_int` 走 atoi，
+    32 位装不下 1.7e12 的 epoch 毫秒，会解析成垃圾。传"差了多少秒"既小又够用。
+    """
+    item = _session_item(row)       # 一次算完，原先是 title/project/elapsed 各调一次
+    last = item.last_activity_at
+    age_s = int((time.time() * 1000 - last) / 1000) if last else 0
+    out = {
+        "title": utf8_trunc(item.title, 40),
+        "project": utf8_trunc(project_name(row.get("cwd")), 20),
+        "elapsed": utf8_trunc(item.elapsed, 12),
+        "e": max(0, age_s),
+    }
+    # w=1 表示等待操作，固件闪黄灯。不等待时**不发这个键**，省字节
+    if _waiting_flag(row, pending_convs):
+        out["w"] = 1
+    return out
+
+
 def _pct(v) -> int:
     """百分比取整并夹到 0..100。psutil 缺失时 system_stat() 给 0.0，原样下发。"""
     try:
@@ -205,14 +233,7 @@ def _firmware_payload(snap) -> dict:
         "today_done": snap.today_done,
         "automations": snap.automations,
         "sessions": [
-            {
-                "title": utf8_trunc(_session_item(r).title, 40),
-                "project": utf8_trunc(project_name(r.get("cwd")), 20),
-                "elapsed": utf8_trunc(_session_item(r).elapsed, 12),
-                # w=1 表示等待操作，固件闪黄灯。不等待时**不发这个键**，
-                # 省字节（固件 buffer 只有 4096，3 行 × 8 字节也不该白占）
-                **({"w": 1} if _waiting_flag(r, pending_convs) else {}),
-            }
+            _firmware_session(r, pending_convs)
             for r in snap.sessions[:MAX_SESSION_ROWS]
         ],
         # 设备（本机）指标：页脚状态条。全部取整下发——屏幕只有 12px 字体，

@@ -172,7 +172,8 @@ typedef struct {
 typedef struct {
     char    title[TEXT_TITLE];
     char    project[TEXT_PROJECT];
-    char    elapsed[TEXT_ELAPSED];
+    char    elapsed[TEXT_ELAPSED];  // 服务端算好的成品串，e 缺失时的回退
+    int     age_s;          // 服务端拍下这一行时，距最近活动多少秒
     uint8_t waiting;        // 1 = 等待操作，行首黄灯闪
 } session_t;
 
@@ -196,6 +197,10 @@ typedef struct {
     int       row_count;
     int       nscr;         // 服务端下发的屏数（含概览屏）
     int       page;         // 这批数据属于第几屏，用于丢弃"切页前发出的请求"的回包
+    // 本地单调时钟在这批数据被解析时的读数（ms）。会话计时靠它做锚点：
+    // 屏幕上的"多久之前" = age_s + (现在 - sample_ms)/1000，所以秒针能一秒一跳，
+    // 不受 5 秒轮询节奏约束。拉取失败沿用旧数据时这个值原样保留，计时继续走。
+    int64_t   sample_ms;
 } board_data_t;
 
 static board_data_t       s_data;
@@ -941,6 +946,35 @@ static lv_color_t row_color(uint8_t c)
 }
 
 // 第 0 屏主体：三格统计 + 会话列表
+
+// 秒数 → "12s" / "7m23s" / "2h05m" / "3d4h"
+//
+// 区别于服务端 human_ago() 只给 `7m`：那种粒度一秒内不变，想"按秒走动"就
+// 必须多带一位。分档口径和 human_ago 对齐，只是每档补上更细的单位。
+// 最长的 "59m59s" 是 6 个 ASCII 字符，12px 字体约 42px，左侧 214px 装得下。
+static void fmt_age(char *out, size_t n, int sec)
+{
+    if (sec < 0) sec = 0;
+    if (sec < 60) {
+        snprintf(out, n, "%ds", sec);
+    } else if (sec < 3600) {
+        snprintf(out, n, "%dm%02ds", sec / 60, sec % 60);
+    } else if (sec < 86400) {
+        snprintf(out, n, "%dh%02dm", sec / 3600, (sec % 3600) / 60);
+    } else {
+        snprintf(out, n, "%dd%dh", sec / 86400, (sec % 86400) / 3600);
+    }
+}
+
+// 会话此刻的年龄（秒）= 服务端拍下的值 + 本地从那一刻起流逝的时间。
+// 调用方需持 s_data_lock（ui_render 已持），不再单独加锁。
+static int session_age_s(int idx)
+{
+    int64_t extra = (esp_timer_get_time() / 1000) - s_data.sample_ms;
+    if (extra < 0) extra = 0;            // 时钟异常时不要倒退
+    return s_data.sessions[idx].age_s + (int)(extra / 1000);
+}
+
 static void ui_render_overview(void)
 {
     char buf[16];
@@ -964,9 +998,20 @@ static void ui_render_overview(void)
                 lv_label_set_text(s_lbl_sess_title[i], title);
             }
 
+            // 计时：服务端下发了原始秒数(e)就本地每秒累加，否则回退到它算好的串。
+            // 这行每秒都会重设文字，但内容不变时 strcmp 会拦住，不会白白刷屏；
+            // 周期性的 set_text 也不影响上面标题的跑马灯（那是另一个控件）。
+            char agebuf[TEXT_ELAPSED];
+            const char *age;
+            if (s_data.sessions[i].age_s >= 0) {
+                fmt_age(agebuf, sizeof(agebuf), session_age_s(i));
+                age = agebuf;
+            } else {
+                age = s_data.sessions[i].elapsed;   // 旧版服务端没发 e
+            }
+
             char meta[64];
-            snprintf(meta, sizeof(meta), "%s · %s",
-                     proj, s_data.sessions[i].elapsed);
+            snprintf(meta, sizeof(meta), "%s · %s", proj, age);
             // meta 也判等，避免每轮都触发该行的重绘
             if (strcmp(meta, s_meta_cache[i]) != 0) {
                 strncpy(s_meta_cache[i], meta, sizeof(s_meta_cache[i]) - 1);
@@ -1347,10 +1392,19 @@ static void parse_into(board_data_t *d, const char *json)
         json_str(sub, "title",   d->sessions[i].title,   sizeof(d->sessions[i].title));
         json_str(sub, "project", d->sessions[i].project, sizeof(d->sessions[i].project));
         json_str(sub, "elapsed", d->sessions[i].elapsed, sizeof(d->sessions[i].elapsed));
+        // e = 距最近活动的原始秒数，固件据此本地每秒累加。
+        // 缺省 -1 表示"服务端没发"，此时回退到 elapsed 那个成品串，
+        // 与真实的 0s（刚刚活动过）区分开
+        int e = json_int(sub, "e", -1);
+        d->sessions[i].age_s = (e < 0) ? -1 : e;
         // w 只在等待操作时下发，缺省即 0
         d->sessions[i].waiting = (uint8_t)json_int(sub, "w", 0);
         d->session_count++;
     }
+
+    // 计时锚点：这批数据被解析时的本地时刻。会话年龄是相对服务端 now 的，
+    // 加上从这一刻起流逝的时间 = 此刻的年龄。放在 memset 之后设，否则会被清掉。
+    d->sample_ms = esp_timer_get_time() / 1000;
 }
 
 // ===========================================================================
@@ -1462,8 +1516,10 @@ static void fetch_task(void *arg)
                                      esp_err_to_name(err));
             parsed.page = req_page;
 
+            // 短暂失败沿用旧数据，只把状态点变红。
+            // sample_ms 跟着旧数据一起留下来 —— 计时锚点不变，
+            // 断网期间秒针照常走，比冻在最后一格诚实
             if (xSemaphoreTake(s_data_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
-                // 短暂失败沿用旧数据，只把状态点变红
                 bool had = s_data.ok;
                 if (had) {
                     int keep = parsed.page;
