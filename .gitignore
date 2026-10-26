@@ -106,3 +106,6 @@ __pycache__/
 .venv/
 venv/
 .envtools/tone_preview.wav
+tools/*_preview.wav
+tools/tone_compare.wav
+tools/done_tone.wav

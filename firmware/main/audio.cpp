@@ -13,6 +13,7 @@
 #include "esp_log.h"
 
 #include "board_config.h"
+#include "tone_pcm.h"     // 完成音的 PCM 采样表（由 tools/gen_tone_from_mp3.py 生成）
 
 static const char *TAG = "audio";
 
@@ -31,16 +32,22 @@ static QueueHandle_t     s_q;
 static volatile int      s_volume = AUDIO_VOL_DEF;
 static bool              s_ready;
 
-// 播放用的交错立体声缓冲，AUDIO_RATE/2 帧（500ms）够放最长的 k_done(360ms)。
+// 播放用的交错立体声缓冲。
 //
 // 在 init 时用 heap_caps_malloc 一次性分配并**永不释放**，而不是每次
-// 播放都 malloc/free 47KB：
+// 播放都 malloc/free：
 //   1) 服务端每 5 秒推一轮，频响意味着高频次分配，长期跑必留堆碎片；
 //   2) 明确要求 MALLOC_CAP_INTERNAL —— 内部 RAM 才能被 I2S DMA 直接搬运。
 //      裸 malloc 可能落到 PSRAM，DMA 从 PSRAM 取数据要靠 bounce buffer，
 //      这里没必要冒这个风险。
+//
+// 长度按**最长的一段**算：现在是完成音的 0.58 秒（TONE_PCM_LEN），
+// 留一倍余量到 1.2 秒。合成出来的和弦音最长 0.45 秒，也在范围内。
+// 1.2s × 24000 × 2ch × 2B = 115KB。内部 RAM 够（8MB PSRAM 没用，
+// 但 DMA 要求内部），实测分配成功。
+#define AUDIO_MS_MAX     1200
+#define AUDIO_FRAMES_MAX (AUDIO_RATE * AUDIO_MS_MAX / 1000)
 static int16_t *s_buf;
-#define AUDIO_FRAMES_MAX (AUDIO_RATE / 2)
 
 // ===========================================================================
 // 音符与包络
@@ -98,28 +105,25 @@ typedef struct {
 // 改音符后要重跑 tools/verify_tone.py 复核，别凭感觉调。
 //
 //   段           感知响度(未补偿)   gain   补偿后
-//   DONE              1049         200     2098
-//   SESSION_END       1167         180     2101
-//   ATTENTION          838         250     2095
-//   CONNECTED          631         340     2145
+//   DONE              采样（真实铃声）    —     见 tone_pcm.h
+//   SESSION_END       1167              180     2101
+//   ATTENTION          838              250     2095
+//   CONNECTED          631              340     2145
 //
 // 四段补偿后基本齐平（2095~2145），不会出现"连接提示最轻"这种问题。
 // CONNECTED 补得最多，因为它只有两个单频、没有和弦叠加，
 // 高音区泛音又全被 Nyquist 限制跳过，天生最单薄。
+//
+// ⚠️ DONE 已改为播放真实采样（tone_pcm.h），不再走合成路径。
+// 原因是合成音怎么调泛音都还是"电子味" —— 实测用户一耳朵就听出来。
+// 真实录制的铃声里有合成无法复现的东西：材质噪声、房间反射、
+// 录制链路的频响。所以完成音用采样，另外三段仍用合成
+// （它们只是状态提示，不需要"好听"，合成反而更可控）。
 
-// ---- 四段提示音 ----
+// ---- 余下三段提示音（完成音见 tone_pcm.h）----
 //
 // 设计原则：和弦比单音饱满得多，而"和弦进行"还能表达情绪。
 // 全部用三和弦，且只用大三/小三两种，保证 2~3 个音同时响时不浑浊。
-//
-// 完成 todo：V -> I 的**完美终止**。这是西方音乐里"结束"的固定语法，
-//   听感就是"事情办妥了、落了地"。G大三和弦解决到 C大三和弦。
-//   最后一个和弦给足 280ms 余韵，让金属泛音自然衰减，像敲了一下铃。
-static const hit_t k_done[] = {
-    {  784,  988, 1175, 140, 160 },   // G5 + B5 + D6 = G 大三和弦（属和弦 V）
-    {    0,    0,    0,  25,   0 },   // 换和弦的呼吸口，不能省，否则两个和弦糊在一起
-    { 1047, 1319, 1568, 280, 200 },   // C6 + E6 + G6 = C 大三和弦（主和弦 I）
-};
 
 // 会话收工：**单个 Am 小三和弦**，240ms。
 //
@@ -287,6 +291,42 @@ static void play_notes(const hit_t *notes, int n)
     }
 }
 
+// 播放 PCM 采样表（完成音用的"叮咚"铃声）。
+//
+// 采样表是单声道 24kHz，与 I2S 输出格式的差异只有"交错立体声"这一步：
+// 把每个样本复制到左右两个声道。没有重采样、没有格式转换，
+// 所以这一步几乎不耗 CPU。
+//
+// 为什么不用 i2s_channel_write 直接送原始数据
+// ----------------------------------------------
+// 因为 I2S 配的是立体声（I2S_SLOT_MODE_STEREO），DMA 按 L/R 成对取数。
+// 如果直接把单声道数据扔进去，左声道会播到右声道的位置，
+// 结果就是左右交错成两个不同时刻的样本 —— 听起来是失真加噪声。
+void play_pcm(const int16_t *pcm, int frames)
+{
+    if (!s_ready || !s_buf || !pcm || frames <= 0) return;
+    if (frames > AUDIO_FRAMES_MAX) frames = AUDIO_FRAMES_MAX;   // 防御性截断
+
+    float vol = s_volume / 100.0f;
+    for (int i = 0; i < frames; i++) {
+        // 乘音量后再转 int16。不能先转再乘 —— 那样会在低音量时累积截断误差。
+        int32_t v = (int32_t)((float)pcm[i] * vol);
+        if (v > 32767)  v = 32767;
+        if (v < -32768) v = -32768;
+        int16_t s = (int16_t)v;
+        s_buf[i * 2]     = s;   // 左
+        s_buf[i * 2 + 1] = s;   // 右
+    }
+
+    size_t written = 0;
+    esp_err_t err = i2s_channel_write(s_tx, s_buf,
+                                     (size_t)frames * 2 * sizeof(int16_t),
+                                     &written, 1000);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "i2s 写入失败: %s", esp_err_to_name(err));
+    }
+}
+
 static void audio_task(void *arg)
 {
     audio_event_t ev;
@@ -295,8 +335,10 @@ static void audio_task(void *arg)
 
         switch (ev) {
         case AUDIO_EV_DONE:
+            // 完成音用真实采样（用户指定的"叮咚"铃声），不是合成音。
+            // 合成怎么调都还是电子味，而真实录制的铃声一耳朵就是"铃声"。
             ESP_LOGI(TAG, "提示音: 任务完成");
-            play_notes(k_done, sizeof(k_done) / sizeof(k_done[0]));
+            play_pcm(k_tone_pcm, TONE_PCM_LEN);
             break;
         case AUDIO_EV_ATTENTION:
             ESP_LOGI(TAG, "提示音: 等待操作");
