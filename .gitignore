@@ -43,9 +43,6 @@ sdkconfig.h
 sdkconfig.json
 hints.yml
 
-# Upstream reference project (third-party source, not maintained here)
-xiaozhi-esp32-st7789-main/
-
 # ================
 # IDE / Editor
 # ================
@@ -66,6 +63,9 @@ Thumbs.db
 *.tgz
 *.zip
 *.7z
+
+# 语音播报音频（edge-tts 生成，可重新生成）
+.tts/
 
 # ================
 # Node / Python deps

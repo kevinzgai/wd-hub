@@ -86,7 +86,7 @@ def main() -> int:
         print(f"[+] bridge 可达: http://{host}:{port}/status  ({detail})")
     else:
         print(f"[!] bridge 不可达: {detail}")
-        print(f"    请先启动: python bridge/server.py --port {port}")
+        print(f"    请先启动: py -m server.api_server --port {port}")
         if input("    仍然写入配置? [y/N] ").strip().lower() != "y":
             return 1
 

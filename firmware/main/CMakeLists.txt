@@ -4,6 +4,7 @@ idf_component_register(
         "font_cn_12.c"
         "font_cn_16.c"
         "font_cn_28.c"
+        "logo_wb.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_wifi

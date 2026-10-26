@@ -136,9 +136,11 @@ static void utf8_sanitize(const lv_font_t *font, const char *in, char *out, size
 #define WIFI_PASSWORD     "12345677"
 #endif
 // 本机以太网 192.168.0.89，设备必须连同一个路由器
-#ifndef BRIDGE_URL
-#define BRIDGE_URL        "http://192.168.0.89:8080/status"
+// 只给 base：第 0 屏走 /status，其余屏走 /screen/<i>，路径由 s_page 决定
+#ifndef BRIDGE_BASE
+#define BRIDGE_BASE       "http://192.168.0.89:8080"
 #endif
+#define BRIDGE_PATH_MAIN  "/status"
 
 #define POLL_INTERVAL_MS  (5 * 1000)
 
@@ -151,10 +153,23 @@ static void utf8_sanitize(const lv_font_t *font, const char *in, char *out, size
 #define TEXT_PROJECT 20
 #define TEXT_ELAPSED 12
 
+// 详情屏：服务端下发"标签 + 右值"的行，固件只负责画，不认识业务语义。
+// 想改每屏显示什么只改服务端 _screen_rows()，固件不用动。
+#define MAX_ROWS     6
+#define TEXT_ROW     40        // 行主文本，16px 字体约 13 个中文
+#define TEXT_ROWVAL  16        // 右侧数值，12px 字体
+
 typedef struct {
-    char title[TEXT_TITLE];
-    char project[TEXT_PROJECT];
-    char elapsed[TEXT_ELAPSED];
+    char    t[TEXT_ROW];
+    char    v[TEXT_ROWVAL];
+    uint8_t color;             // 0 普通 / 1 强调蓝 / 2 成功绿 / 3 警告黄 / 4 暗灰
+} row_t;
+
+typedef struct {
+    char    title[TEXT_TITLE];
+    char    project[TEXT_PROJECT];
+    char    elapsed[TEXT_ELAPSED];
+    uint8_t waiting;        // 1 = 等待操作，行首黄灯闪
 } session_t;
 
 typedef struct {
@@ -165,8 +180,18 @@ typedef struct {
     int       working;
     int       today_done;
     int       automations;
+    int       cpu;          // %，-1 = 服务端没给该字段（旧版服务）
+    int       mem;          // %
+    int       disk;         // %
+    int       temp;         // °C，0 = 取不到（Windows 上通常如此）
     session_t sessions[MAX_SESSIONS];
     int       session_count;
+    // ---- 详情屏 ----
+    char      page_title[24];
+    row_t     rows[MAX_ROWS];
+    int       row_count;
+    int       nscr;         // 服务端下发的屏数（含概览屏）
+    int       page;         // 这批数据属于第几屏，用于丢弃"切页前发出的请求"的回包
 } board_data_t;
 
 static board_data_t       s_data;
@@ -186,8 +211,37 @@ static lv_obj_t *s_lbl_status;
 static lv_obj_t *s_lbl_stat[3];
 static lv_obj_t *s_lbl_sess_title[MAX_SESSIONS];
 static lv_obj_t *s_lbl_sess_meta[MAX_SESSIONS];
+static lv_obj_t *s_dot[MAX_SESSIONS];        // 行首状态灯：等待操作时闪黄
 static lv_obj_t *s_lbl_footer;
+static lv_obj_t *s_lbl_sys;        // 页脚左侧：CPU / 内存 / 磁盘
 static lv_obj_t *s_lbl_toast;      // 按键操作的临时提示
+
+// ---- 多屏 ----
+// 两组控件放在各自的容器里，切页只是切 HIDDEN，不销毁重建。
+// 页头（logo/时钟/日期/状态）和页脚两组屏共用，所以留在 scr 上。
+static lv_obj_t *s_pg_main;        // 第 0 屏：三格统计 + 会话列表
+static lv_obj_t *s_pg_list;        // 第 1..N-1 屏：标题 + 6 行
+static lv_obj_t *s_lbl_page;       // 详情屏标题
+static lv_obj_t *s_lbl_row_t[MAX_ROWS];
+static lv_obj_t *s_lbl_row_v[MAX_ROWS];
+
+static volatile int s_page    = 0; // 当前屏号，按键切换
+static volatile int s_page_req = -1; // 按键写入的切屏请求，由 LVGL 任务消费
+static int          s_nscr    = 1; // 屏数，由服务端下发
+static TaskHandle_t s_fetch_task = NULL;
+
+// 标题只在内容变化时才 set_text —— 每次重设都会把跑马灯位置打回开头，
+// 服务端 5 秒推一轮，不判等的话滚动会一直"闪回"。
+static char     s_title_cache[MAX_SESSIONS][48];
+static char     s_meta_cache[MAX_SESSIONS][64];
+static bool     s_waiting[MAX_SESSIONS];     // 当前哪些行在等待操作
+static bool     s_blink_on;                  // 黄灯亮/灭相位
+
+// 详情屏的判等缓存（理由同上：每帧 set_text 会把 SPI 刷屏占满）
+static char     s_row_t_cache[MAX_ROWS][TEXT_ROW];
+static char     s_row_v_cache[MAX_ROWS][TEXT_ROWVAL];
+static uint8_t  s_row_c_cache[MAX_ROWS];
+static char     s_page_title_cache[32];
 
 // ---- 按键状态（按键任务写，LVGL 任务读，避免跨任务碰 LVGL）----
 // 升序排列：索引越大越亮。默认停在最亮那档。
@@ -351,6 +405,20 @@ static lv_obj_t *mk_label(lv_obj_t *parent, const lv_font_t *font,
     return l;
 }
 
+// 全屏透明容器：装一屏的控件，切页时整组 HIDDEN，比逐个控件改可见性可靠
+static lv_obj_t *mk_page(lv_obj_t *parent)
+{
+    lv_obj_t *p = lv_obj_create(parent);
+    lv_obj_set_size(p, 240, 240);
+    lv_obj_set_pos(p, 0, 0);
+    lv_obj_set_style_bg_opa(p, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(p, 0, 0);
+    lv_obj_set_style_pad_all(p, 0, 0);
+    lv_obj_set_style_radius(p, 0, 0);
+    lv_obj_clear_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    return p;
+}
+
 static void mk_hline(lv_obj_t *parent, lv_coord_t y)
 {
     lv_obj_t *line = lv_obj_create(parent);
@@ -363,6 +431,20 @@ static void mk_hline(lv_obj_t *parent, lv_coord_t y)
     lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 }
 
+// 黄灯相位翻转。只在 LVGL 任务里（lv_timer_handler）跑，和 ui_render 同线程，
+// 所以直接改控件样式不需要加锁。
+static void blink_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_blink_on = !s_blink_on;
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (!s_dot[i]) continue;
+        lv_obj_set_style_bg_opa(s_dot[i],
+                                (s_waiting[i] && !s_blink_on) ? LV_OPA_20
+                                                              : LV_OPA_COVER, 0);
+    }
+}
+
 static void ui_build(void)
 {
     lv_obj_t *scr = lv_screen_active();
@@ -370,9 +452,19 @@ static void ui_build(void)
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // ---- 时钟 ----
-    s_lbl_clock = mk_label(scr, &font_cn_28, COL_TEXT, LV_ALIGN_TOP_LEFT, 8, -4);
+    // ---- logo + 时钟 ----
+    // logo 24x24 RGB565，透明底已预合成到 COL_BG，由 tools/gen_logo.py 生成。
+    // 先摆 logo 再让时钟参照它对齐，比手算像素可靠：
+    // OUT_RIGHT_MID 保证两者垂直中心线重合，改 logo 尺寸时时钟会自动跟着移。
+    LV_IMAGE_DECLARE(logo_wb);
+    lv_obj_t *logo = lv_image_create(scr);
+    lv_image_set_src(logo, &logo_wb);
+    lv_obj_align(logo, LV_ALIGN_TOP_LEFT, 8, 0);
+
+    s_lbl_clock = mk_label(scr, &font_cn_28, COL_TEXT, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_label_set_text(s_lbl_clock, "--:--");
+    // font_cn_28 行高 30，对齐 24px logo 的中心 → y=-3，与原来手调的 -4 只差 1px
+    lv_obj_align_to(s_lbl_clock, logo, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
 
     s_lbl_date = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_RIGHT, -8, 4);
     lv_label_set_text(s_lbl_date, "--");
@@ -380,20 +472,21 @@ static void ui_build(void)
     s_lbl_status = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_RIGHT, -8, 20);
     lv_label_set_text(s_lbl_status, "● 连接中");
 
-    // ---- 符号渲染测试条（临时，验证完可删）----
-    // 放在时钟和日期之间的空白区，16px 下看 ★⚡✓☀ 的清晰度
-    lv_obj_t *sym_test = mk_label(scr, &font_cn_16, COL_WARN,
-                                  LV_ALIGN_TOP_LEFT, 92, 6);
-    lv_label_set_text(sym_test, "★⚡✓☀");
+    // ---- WorkBuddy logo 已移到时钟左侧，见上方"logo + 时钟" ----
 
     mk_hline(scr, 36);
+
+    // ---- 两组屏容器（全屏透明，不拦截任何东西）----
+    s_pg_main = mk_page(scr);
+    s_pg_list = mk_page(scr);
+    lv_obj_add_flag(s_pg_list, LV_OBJ_FLAG_HIDDEN);   // 开机停在概览屏
 
     // ---- 三格统计（每格 72 宽 + 4 间距，共 224）----
     static const char *captions[3] = { "⚙ 工作", "✓ 完成", "⚡ 自动" };
     static const lv_color_t colors[3] = { COL_ACCENT, COL_OK, COL_WARN };
 
     for (int i = 0; i < 3; i++) {
-        lv_obj_t *box = lv_obj_create(scr);
+        lv_obj_t *box = lv_obj_create(s_pg_main);
         lv_obj_set_size(box, 72, 46);
         lv_obj_set_pos(box, 8 + i * 76, 42);
         lv_obj_set_style_bg_color(box, lv_color_hex(0x161B22), 0);
@@ -417,29 +510,78 @@ static void ui_build(void)
     }
 
     // ---- 会话列表（3 条 x 40px）----
+    // 行首 6px 状态灯 + 标题跑马灯。标题右侧到 232，所以宽度 214。
     for (int i = 0; i < MAX_SESSIONS; i++) {
         lv_coord_t y = 94 + i * 40;
 
-        s_lbl_sess_title[i] = mk_label(scr, &font_cn_16, COL_TEXT,
-                                       LV_ALIGN_TOP_LEFT, 8, y);
-        lv_label_set_text(s_lbl_sess_title[i], "");
-        lv_obj_set_width(s_lbl_sess_title[i], 224);
-        lv_label_set_long_mode(s_lbl_sess_title[i], LV_LABEL_LONG_DOT);
+        s_dot[i] = lv_obj_create(s_pg_main);
+        lv_obj_set_size(s_dot[i], 6, 6);
+        lv_obj_set_pos(s_dot[i], 8, y + 7);
+        lv_obj_set_style_radius(s_dot[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(s_dot[i], lv_color_hex(0x2A3038), 0);
+        lv_obj_set_style_bg_opa(s_dot[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_dot[i], 0, 0);
+        lv_obj_set_style_pad_all(s_dot[i], 0, 0);
+        lv_obj_clear_flag(s_dot[i], LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
 
-        s_lbl_sess_meta[i] = mk_label(scr, &font_cn_12, COL_DIM,
-                                      LV_ALIGN_TOP_LEFT, 8, y + 19);
+        s_lbl_sess_title[i] = mk_label(s_pg_main, &font_cn_16, COL_TEXT,
+                                       LV_ALIGN_TOP_LEFT, 18, y);
+        lv_label_set_text(s_lbl_sess_title[i], "");
+        lv_obj_set_width(s_lbl_sess_title[i], 214);
+        // 一行显示，放不下就横向循环滚动（放得下时 LVGL 自动不动）
+        lv_label_set_long_mode(s_lbl_sess_title[i], LV_LABEL_LONG_SCROLL_CIRCULAR);
+        // 滚动一轮的时长，太慢看不完、太快读不清，6s 折中
+        lv_obj_set_style_anim_duration(s_lbl_sess_title[i], 6000, 0);
+
+        s_lbl_sess_meta[i] = mk_label(s_pg_main, &font_cn_12, COL_DIM,
+                                      LV_ALIGN_TOP_LEFT, 18, y + 19);
         lv_label_set_text(s_lbl_sess_meta[i], "");
-        lv_obj_set_width(s_lbl_sess_meta[i], 224);
+        lv_obj_set_width(s_lbl_sess_meta[i], 214);
         lv_label_set_long_mode(s_lbl_sess_meta[i], LV_LABEL_LONG_DOT);
 
         lv_obj_add_flag(s_lbl_sess_title[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_lbl_sess_meta[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    // ---- 页脚 ----
+    // ---- 详情屏：页标题 + 最多 6 行（每行 23px，末行到 210，不压页脚线 216）----
+    s_lbl_page = mk_label(s_pg_list, &font_cn_16, COL_ACCENT,
+                          LV_ALIGN_TOP_LEFT, 8, 42);
+    lv_label_set_text(s_lbl_page, "");
+    lv_obj_set_width(s_lbl_page, 200);
+    lv_label_set_long_mode(s_lbl_page, LV_LABEL_LONG_DOT);
+
+    mk_hline(s_pg_list, 66);
+
+    for (int i = 0; i < MAX_ROWS; i++) {
+        lv_coord_t y = 72 + i * 23;
+
+        // 左：16px 主文本，宽度让出右侧数值的位置
+        s_lbl_row_t[i] = mk_label(s_pg_list, &font_cn_16, COL_TEXT,
+                                  LV_ALIGN_TOP_LEFT, 8, y + 2);
+        lv_label_set_text(s_lbl_row_t[i], "");
+        lv_obj_set_width(s_lbl_row_t[i], 170);
+        lv_label_set_long_mode(s_lbl_row_t[i], LV_LABEL_LONG_DOT);
+
+        // 右：12px 数值
+        s_lbl_row_v[i] = mk_label(s_pg_list, &font_cn_12, COL_DIM,
+                                  LV_ALIGN_TOP_RIGHT, -8, y + 5);
+        lv_label_set_text(s_lbl_row_v[i], "");
+
+        lv_obj_add_flag(s_lbl_row_t[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_lbl_row_v[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // 黄灯闪烁：500ms 一个相位，只动透明度不动颜色（颜色变化会触发重排）
+    lv_timer_create(blink_timer_cb, 500, NULL);
+
+    // ---- 页脚：左设备指标，右最后更新时间 ----
     mk_hline(scr, 216);
-    s_lbl_footer = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_LEFT, 8, 222);
-    lv_label_set_text(s_lbl_footer, "等待数据");
+    s_lbl_sys = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_LEFT, 8, 222);
+    lv_label_set_text(s_lbl_sys, "等待数据");
+    s_lbl_footer = mk_label(scr, &font_cn_12, COL_DIM,
+                            LV_ALIGN_TOP_RIGHT, -8, 222);
+    lv_label_set_text(s_lbl_footer, "");
 
     // ---- 按键提示（默认隐藏，只在按的时候闪一下）----
     s_lbl_toast = mk_label(scr, &font_cn_16, COL_ACCENT,
@@ -451,26 +593,21 @@ static void ui_build(void)
 // 渲染（调用方需持 s_data_lock）
 // ===========================================================================
 
-static void ui_render(void)
+// 服务端只发 0..4 的小整数，色板留在固件 —— 换配色不用改服务端
+static lv_color_t row_color(uint8_t c)
 {
-    if (!s_data.ok) {
-        lv_obj_set_style_text_color(s_lbl_status, COL_ERR, 0);
-        lv_label_set_text(s_lbl_status, "● 离线");
-        char fbuf[96], ebuf[64];
-        utf8_sanitize(&font_cn_12,
-                      s_data.error[0] ? s_data.error : "无法连接 bridge",
-                      ebuf, sizeof(ebuf));
-        snprintf(fbuf, sizeof(fbuf), "✗ %s", ebuf);
-        lv_label_set_text(s_lbl_footer, fbuf);
-        return;   // 保留上次数据，避免清零闪屏
+    switch (c) {
+        case 1:  return COL_ACCENT;
+        case 2:  return COL_OK;
+        case 3:  return COL_WARN;
+        case 4:  return COL_DIM;
+        default: return COL_TEXT;
     }
+}
 
-    lv_obj_set_style_text_color(s_lbl_status, COL_OK, 0);
-    lv_label_set_text(s_lbl_status, "● 在线");
-
-    lv_label_set_text(s_lbl_clock, s_data.clock);
-    lv_label_set_text(s_lbl_date, s_data.date);
-
+// 第 0 屏主体：三格统计 + 会话列表
+static void ui_render_overview(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", s_data.working);
     lv_label_set_text(s_lbl_stat[0], buf);
@@ -484,16 +621,41 @@ static void ui_render(void)
             char title[48], proj[24];
             utf8_sanitize(&font_cn_12, s_data.sessions[i].title,   title, sizeof(title));
             utf8_sanitize(&font_cn_12, s_data.sessions[i].project, proj,  sizeof(proj));
-            lv_label_set_text(s_lbl_sess_title[i], title);
+
+            // 内容没变就别重设 —— set_text 会把跑马灯位置打回开头
+            if (strcmp(title, s_title_cache[i]) != 0) {
+                strncpy(s_title_cache[i], title, sizeof(s_title_cache[i]) - 1);
+                s_title_cache[i][sizeof(s_title_cache[i]) - 1] = '\0';
+                lv_label_set_text(s_lbl_sess_title[i], title);
+            }
 
             char meta[64];
             snprintf(meta, sizeof(meta), "%s · %s",
                      proj, s_data.sessions[i].elapsed);
-            lv_label_set_text(s_lbl_sess_meta[i], meta);
+            // meta 也判等，避免每轮都触发该行的重绘
+            if (strcmp(meta, s_meta_cache[i]) != 0) {
+                strncpy(s_meta_cache[i], meta, sizeof(s_meta_cache[i]) - 1);
+                s_meta_cache[i][sizeof(s_meta_cache[i]) - 1] = '\0';
+                lv_label_set_text(s_lbl_sess_meta[i], meta);
+            }
+
+            // 等待操作 → 灯变黄 + 交给 blink_timer_cb 闪；不等待就整颗隐藏，
+            // 行首留 10px 白，比常亮一个灰点干净
+            bool waiting = s_data.sessions[i].waiting != 0;
+            s_waiting[i] = waiting;
+            if (waiting) {
+                lv_obj_set_style_bg_color(s_dot[i], COL_WARN, 0);
+                lv_obj_set_style_bg_opa(s_dot[i], LV_OPA_COVER, 0);
+                lv_obj_clear_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
+            }
 
             lv_obj_clear_flag(s_lbl_sess_title[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(s_lbl_sess_meta[i], LV_OBJ_FLAG_HIDDEN);
         } else {
+            s_waiting[i] = false;
+            lv_obj_add_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_lbl_sess_title[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_lbl_sess_meta[i], LV_OBJ_FLAG_HIDDEN);
         }
@@ -506,10 +668,154 @@ static void ui_render(void)
     } else {
         lv_obj_set_style_text_color(s_lbl_sess_title[0], COL_TEXT, 0);
     }
+}
 
-    char footer[32];
-    snprintf(footer, sizeof(footer), "★ 更新 %s", s_data.clock);
+// 第 1..N-1 屏主体：页标题 + 最多 6 行
+static void ui_render_list(void)
+{
+    char tb[32];
+    if (s_data.page_title[0]) {
+        utf8_sanitize(&font_cn_16, s_data.page_title, tb, sizeof(tb));
+    } else {
+        tb[0] = '\0';
+    }
+    if (strcmp(tb, s_page_title_cache) != 0) {
+        strncpy(s_page_title_cache, tb, sizeof(s_page_title_cache) - 1);
+        s_page_title_cache[sizeof(s_page_title_cache) - 1] = '\0';
+        lv_label_set_text(s_lbl_page, tb);
+    }
+
+    for (int i = 0; i < MAX_ROWS; i++) {
+        if (i >= s_data.row_count) {
+            lv_obj_add_flag(s_lbl_row_t[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_lbl_row_v[i], LV_OBJ_FLAG_HIDDEN);
+            s_row_t_cache[i][0] = '\0';
+            s_row_v_cache[i][0] = '\0';
+            continue;
+        }
+
+        char tt[TEXT_ROW], vv[TEXT_ROWVAL];
+        utf8_sanitize(&font_cn_16, s_data.rows[i].t, tt, sizeof(tt));
+        utf8_sanitize(&font_cn_12, s_data.rows[i].v, vv, sizeof(vv));
+
+        // 三样都判等：文本变了才 set_text，颜色变了才改样式。
+        // ui_render 每帧都跑，不判等会一直触发重绘把 SPI 占满。
+        if (strcmp(tt, s_row_t_cache[i]) != 0) {
+            strncpy(s_row_t_cache[i], tt, sizeof(s_row_t_cache[i]) - 1);
+            s_row_t_cache[i][sizeof(s_row_t_cache[i]) - 1] = '\0';
+            lv_label_set_text(s_lbl_row_t[i], tt);
+        }
+        if (strcmp(vv, s_row_v_cache[i]) != 0) {
+            strncpy(s_row_v_cache[i], vv, sizeof(s_row_v_cache[i]) - 1);
+            s_row_v_cache[i][sizeof(s_row_v_cache[i]) - 1] = '\0';
+            lv_label_set_text(s_lbl_row_v[i], vv);
+        }
+        if (s_row_c_cache[i] != s_data.rows[i].color) {
+            s_row_c_cache[i] = s_data.rows[i].color;
+            lv_color_t cc = row_color(s_row_c_cache[i]);
+            lv_obj_set_style_text_color(s_lbl_row_t[i], cc, 0);
+            lv_obj_set_style_text_color(s_lbl_row_v[i], cc, 0);
+        }
+
+        lv_obj_clear_flag(s_lbl_row_t[i], LV_OBJ_FLAG_HIDDEN);
+        if (vv[0]) lv_obj_clear_flag(s_lbl_row_v[i], LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_add_flag(s_lbl_row_v[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// 切页瞬间清空详情屏：否则会闪一下上一屏的内容。缓存也要一起清，
+// 不然新数据和旧缓存"相等"，label 就永远停在空白状态。
+static void ui_list_reset(void)
+{
+    for (int i = 0; i < MAX_ROWS; i++) {
+        s_row_t_cache[i][0] = '\0';
+        s_row_v_cache[i][0] = '\0';
+        s_row_c_cache[i]    = 0xFF;      // 0xFF 不等于任何合法颜色，强制重设
+        lv_label_set_text(s_lbl_row_t[i], "");
+        lv_label_set_text(s_lbl_row_v[i], "");
+        lv_obj_add_flag(s_lbl_row_t[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_lbl_row_v[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    strcpy(s_page_title_cache, "加载中");
+    lv_label_set_text(s_lbl_page, "加载中");
+}
+
+// 切换屏幕：只切容器可见性，不销毁控件
+static void page_apply(int page)
+{
+    if (s_nscr < 1) s_nscr = 1;
+    page = ((page % s_nscr) + s_nscr) % s_nscr;   // 环形，负数也安全
+    if (page == s_page) return;
+
+    s_page = page;
+
+    if (page == 0) {
+        lv_obj_clear_flag(s_pg_main, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_pg_list, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        ui_list_reset();
+        lv_obj_add_flag(s_pg_main, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_pg_list, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // 叫醒拉取任务立刻换 URL 重拉，不等下一个 5 秒周期
+    if (s_fetch_task) xTaskNotifyGive(s_fetch_task);
+    ESP_LOGI(TAG, ">>> 切屏 -> %d/%d", page, s_nscr);
+}
+
+static void ui_render(void)
+{
+    // ---- 页头（两屏共用，随时更新）----
+    if (!s_data.ok) {
+        lv_obj_set_style_text_color(s_lbl_status, COL_ERR, 0);
+        lv_label_set_text(s_lbl_status, "● 离线");
+        char fbuf[96], ebuf[64];
+        utf8_sanitize(&font_cn_12,
+                      s_data.error[0] ? s_data.error : "无法连接 bridge",
+                      ebuf, sizeof(ebuf));
+        snprintf(fbuf, sizeof(fbuf), "✗ %s", ebuf);
+        // 离线时页脚左侧让给错误原因（右侧更新时间清空，不然两条挤在一起）
+        lv_obj_set_style_text_color(s_lbl_sys, COL_ERR, 0);
+        lv_label_set_text(s_lbl_sys, fbuf);
+        lv_label_set_text(s_lbl_footer, "");
+        return;   // 保留上次数据，避免清零闪屏
+    }
+
+    lv_obj_set_style_text_color(s_lbl_status, COL_OK, 0);
+    lv_label_set_text(s_lbl_status, "● 在线");
+
+    lv_label_set_text(s_lbl_clock, s_data.clock);
+    lv_label_set_text(s_lbl_date, s_data.date);
+
+    // ---- 页脚（两屏共用）----
+    // 左：本机 CPU / 内存 / 磁盘占用。超阈值时整条变黄，
+    // 12px 字号做不到逐段着色，整条变色足够提醒。
+    char sbuf[56];
+    if (s_data.cpu < 0) {
+        // 旧版服务端没下发这些字段，明确显示 -- 而不是假的 0%
+        snprintf(sbuf, sizeof(sbuf), "CPU --  MEM --");
+    } else {
+        int n = snprintf(sbuf, sizeof(sbuf), "CPU %d%%  MEM %d%%",
+                         s_data.cpu, s_data.mem);
+        if (s_data.disk >= 0 && n > 0 && n < (int)sizeof(sbuf) - 12) {
+            snprintf(sbuf + n, sizeof(sbuf) - n, "  DSK %d%%", s_data.disk);
+        }
+    }
+    lv_label_set_text(s_lbl_sys, sbuf);
+    bool hot = (s_data.cpu >= 85) || (s_data.mem >= 90);
+    lv_obj_set_style_text_color(s_lbl_sys, hot ? COL_WARN : COL_DIM, 0);
+
+    char footer[24];
+    snprintf(footer, sizeof(footer), "★ %s", s_data.clock);
     lv_label_set_text(s_lbl_footer, footer);
+
+    // ---- 主体 ----
+    // 回包可能属于"切页前"发出的那个请求（s_data.page 落后于 s_page），
+    // 这时只更新页头页脚，主体等下一轮，别把上一屏的字画到新屏上
+    if (s_data.page != s_page) return;
+
+    if (s_page == 0) ui_render_overview();
+    else             ui_render_list();
 }
 
 // ===========================================================================
@@ -597,6 +903,32 @@ static void parse_into(board_data_t *d, const char *json)
     d->working     = json_int(json, "working", 0);
     d->today_done  = json_int(json, "today_done", 0);
     d->automations = json_int(json, "automations", 0);
+    // 缺省 -1 表示"服务端没下发"，页脚显示 --，不与真实的 0% 混为一谈
+    d->cpu  = json_int(json, "cpu",  -1);
+    d->mem  = json_int(json, "mem",  -1);
+    d->disk = json_int(json, "disk", -1);
+    d->temp = json_int(json, "temp",  0);
+    // 屏数：/status 和 /screen 都下发 nscr，固件据此决定按几屏循环
+    d->nscr = json_int(json, "nscr", 0);
+
+    // ---- 详情屏：页标题 + rows 数组 ----
+    json_str(json, "t", d->page_title, sizeof(d->page_title));
+    for (int i = 0; i < MAX_ROWS; i++) {
+        const char *start = NULL, *end = NULL;
+        if (!json_nth_object(json, "rows", i, &start, &end)) break;
+
+        char sub[256];
+        size_t len = (size_t)(end - start) + 1;
+        if (len >= sizeof(sub)) len = sizeof(sub) - 1;
+        memcpy(sub, start, len);
+        sub[len] = '\0';
+
+        json_str(sub, "t", d->rows[i].t, sizeof(d->rows[i].t));
+        json_str(sub, "v", d->rows[i].v, sizeof(d->rows[i].v));
+        int c = json_int(sub, "c", 0);
+        d->rows[i].color = (uint8_t)(c < 0 ? 0 : (c > 4 ? 4 : c));
+        d->row_count++;
+    }
 
     for (int i = 0; i < MAX_SESSIONS; i++) {
         const char *start = NULL, *end = NULL;
@@ -611,6 +943,8 @@ static void parse_into(board_data_t *d, const char *json)
         json_str(sub, "title",   d->sessions[i].title,   sizeof(d->sessions[i].title));
         json_str(sub, "project", d->sessions[i].project, sizeof(d->sessions[i].project));
         json_str(sub, "elapsed", d->sessions[i].elapsed, sizeof(d->sessions[i].elapsed));
+        // w 只在等待操作时下发，缺省即 0
+        d->sessions[i].waiting = (uint8_t)json_int(sub, "w", 0);
         d->session_count++;
     }
 }
@@ -645,10 +979,13 @@ static esp_err_t http_event_cb(esp_http_client_event_t *evt)
 
 static void fetch_task(void *arg)
 {
+    // 让按键能 xTaskNotifyGive 叫醒本任务，切屏后立刻重拉，不等 5 秒周期
+    s_fetch_task = xTaskGetCurrentTaskHandle();
+
     accum_t acc = { s_http_buf, 0, HTTP_BUF_SIZE };
 
     esp_http_client_config_t cfg = {};
-    cfg.url        = BRIDGE_URL;
+    cfg.url        = BRIDGE_BASE BRIDGE_PATH_MAIN;
     cfg.method     = HTTP_METHOD_GET;
     cfg.event_handler = http_event_cb;
     cfg.user_data  = &acc;
@@ -664,33 +1001,60 @@ static void fetch_task(void *arg)
     int fails = 0;
 
     while (1) {
+        // 每轮都重新读屏号：按钮随时可能切屏，URL 必须跟着换。
+        // 第 0 屏是概览（/status），其余屏按需拉 /screen/<i>。
+        int req_page = s_page;
+        char url[96];
+        if (req_page == 0) {
+            snprintf(url, sizeof(url), "%s%s", BRIDGE_BASE, BRIDGE_PATH_MAIN);
+        } else {
+            snprintf(url, sizeof(url), "%s/screen/%d", BRIDGE_BASE, req_page);
+        }
+        esp_http_client_set_url(client, url);
+
         acc.len = 0;
         s_http_buf[0] = '\0';
 
         esp_err_t err = esp_http_client_perform(client);
-        int status    = esp_http_client_get_status_code(client);
+        // perform 失败时 handle 里的 status_code 是**上一轮的残留值**，
+        // 直接打印会看到 "err=ESP_ERR_HTTP_CONNECT status=200" 这种自相矛盾的日志，
+        // 排查时极易误判成"服务端返回 200 但解析失败"。连接没通就没有 HTTP 状态码。
+        int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : 0;
 
         board_data_t parsed = {};
+        parsed.page = req_page;                 // 标记这批数据属于哪一屏
         bool got = (err == ESP_OK && status == 200 && acc.len > 0);
 
         if (got) {
             parse_into(&parsed, s_http_buf);
+            parsed.page = req_page;             // parse_into 里 memset 过，要重设
             fails = 0;
-            ESP_LOGI(TAG, "OK working=%d done=%d auto=%d sess=%d btn=%s",
-                     parsed.working, parsed.today_done,
-                     parsed.automations, parsed.session_count,
+            // 屏数由服务端说了算，改屏数不用重烧固件
+            if (parsed.nscr > 0) s_nscr = parsed.nscr;
+            ESP_LOGI(TAG, "OK p=%d n=%d working=%d done=%d auto=%d sess=%d rows=%d btn=%s",
+                     req_page, s_nscr, parsed.working, parsed.today_done,
+                     parsed.automations, parsed.session_count, parsed.row_count,
                      (const char *)s_last_btn);
         } else {
             fails++;
             ESP_LOGW(TAG, "拉取失败 err=%s status=%d (连续%d次)",
                      esp_err_to_name(err), status, fails);
             parsed.ok = false;
-            snprintf(parsed.error, sizeof(parsed.error), "HTTP %d", status);
+            // status==0 表示没拿到 HTTP 响应（连不上/超时），这时写 "HTTP 0"
+            // 会让人以为是服务端返回了非法状态码，其实压根没连上。
+            if (status > 0) snprintf(parsed.error, sizeof(parsed.error), "HTTP %d", status);
+            else            snprintf(parsed.error, sizeof(parsed.error), "%.40s",
+                                     esp_err_to_name(err));
+            parsed.page = req_page;
 
             if (xSemaphoreTake(s_data_lock, pdMS_TO_TICKS(500)) == pdTRUE) {
                 // 短暂失败沿用旧数据，只把状态点变红
                 bool had = s_data.ok;
-                if (had) parsed = s_data;
+                if (had) {
+                    int keep = parsed.page;
+                    parsed = s_data;
+                    parsed.page = keep;
+                }
                 parsed.ok = false;
                 xSemaphoreGive(s_data_lock);
             }
@@ -701,7 +1065,8 @@ static void fetch_task(void *arg)
             xSemaphoreGive(s_data_lock);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(fails > 3 ? 15000 : POLL_INTERVAL_MS));
+        // 用通知代替死等：切屏时 xTaskNotifyGive 会让它立刻醒来换 URL
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(fails > 3 ? 15000 : POLL_INTERVAL_MS));
     }
 }
 
@@ -832,10 +1197,15 @@ static void button_task(void *arg)
     // 否则引脚抖动会把一次按压刷成好几次，亮度乱跳。
     const int NEED = 5;    // 20ms * 5  = 100ms 按下确认
     const int REL  = 10;   // 20ms * 10 = 200ms 松开确认
+    // 短按 = 切屏，长按 = 调亮度。按下那一刻不知道用户要干嘛，
+    // 所以动作只能等到"按住够久"或"松开"时才分派。
+    const uint32_t LONG_MS = 700;
 
-    bool last[BTN_NUM];
-    int  cnt[BTN_NUM]  = {0};
-    int  rel[BTN_NUM];
+    bool     last[BTN_NUM];
+    int      cnt[BTN_NUM]     = {0};
+    int      rel[BTN_NUM];
+    uint32_t down_at[BTN_NUM] = {0};
+    bool     fired[BTN_NUM]   = {false};   // 本次按压是否已按长按处理过
 
     for (size_t i = 0; i < BTN_NUM; i++) {
         last[i] = gpio_get_level(k_btns[i].pin) != 0;
@@ -843,12 +1213,25 @@ static void button_task(void *arg)
     }
 
     while (1) {
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
         for (size_t i = 0; i < BTN_NUM; i++) {
             bool now = gpio_get_level(k_btns[i].pin) != 0;
 
             if (now == last[i]) {
                 cnt[i] = 0;
                 if (now && rel[i] < REL) rel[i]++;   // 持续高电平 → 累计松开时间
+
+                // 按住不放且已经够久 → 立刻按长按处理一次。
+                // 不等松手，否则按 3 秒才调一次亮度，手感很差。
+                if (!now && !fired[i] && down_at[i] &&
+                    now_ms - down_at[i] >= LONG_MS) {
+                    fired[i] = true;
+                    int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
+                             : (k_btns[i].pin == BOARD_BTN_VOL_DOWN) ? -1
+                             : 0;
+                    button_action(k_btns[i].name, step);
+                }
                 continue;
             }
             if (++cnt[i] < NEED) continue;
@@ -858,14 +1241,20 @@ static void button_task(void *arg)
 
             if (!now) {                              // 高→低 = 按下
                 if (rel[i] >= REL) {                 // 之前确实松开了才算一次有效按压
-                    int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
-                             : (k_btns[i].pin == BOARD_BTN_VOL_DOWN) ? -1
-                             : 0;
-                    button_action(k_btns[i].name, step);
+                    down_at[i] = now_ms;
+                    fired[i]   = false;
                 }
                 rel[i] = 0;
-            } else {
-                rel[i] = 0;                          // 刚松开，重新计时
+            } else {                                 // 低→高 = 松开
+                // 短按（没走长按分支）→ 下一屏。
+                // **不能直接调 page_apply**：它要动控件，而 LVGL 不是线程安全的，
+                // 这里只投递请求，由 lvgl_task 在持有 LVGL 上下文时执行。
+                if (down_at[i] && !fired[i]) {
+                    s_page_req = s_page + 1;
+                }
+                down_at[i] = 0;
+                fired[i]   = false;
+                rel[i]     = 0;                      // 刚松开，重新计时
             }
         }
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -885,6 +1274,16 @@ static void lvgl_task(void *arg)
         if (s_bright_apply) {
             s_bright_apply = 0;
             backlight_set(k_bright_steps[s_bright_idx]);
+        }
+
+        // 切屏请求也在这里执行：LVGL 的控件操作必须留在本任务，
+        // 按钮任务只负责投递 s_page_req
+        {
+            int req = s_page_req;
+            if (req >= 0) {
+                s_page_req = -1;
+                page_apply(req);
+            }
         }
 
         // 按键提示：显示 1.5 秒后自动消失

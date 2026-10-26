@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WorkBuddy 看板 · API 演示</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='4' fill='%237170ff'/></svg>">
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --ink: #14181f;
+    --dim: #6b7280;
+    --line: #e6e8ec;
+    --accent: #7170ff;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --err: #dc2626;
+    --cyan: #0891b2;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    padding: 40px 24px 64px;
+    font-variant-numeric: tabular-nums;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: -.2px; }
+  .ver { font-size: 12px; color: var(--dim); }
+  .pulse { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); margin-left: auto; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .dot.bad { background: var(--err); }
+  .dot.stale { background: var(--warn); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+  .dot.live { animation: blink 2s ease-in-out infinite; }
+
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 32px; }
+  .sub code { background: #eef0f3; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+
+  section { margin-bottom: 40px; }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+  .stat { background: var(--card); border-radius: 12px; padding: 20px 22px; }
+  .stat .n { font-size: 34px; font-weight: 600; line-height: 1.1; letter-spacing: -.5px; }
+  .stat .k { font-size: 12px; color: var(--dim); margin-top: 6px; }
+  .stat .h { font-size: 11px; color: #9aa3af; margin-top: 2px; }
+  .c1 .n { color: var(--accent); }
+  .c2 .n { color: var(--ok); }
+  .c3 .n { color: var(--warn); }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  .card { background: var(--card); border-radius: 12px; padding: 20px 22px; }
+  .card h2 { font-size: 13px; font-weight: 600; color: var(--dim); text-transform: uppercase;
+             letter-spacing: .6px; margin-bottom: 14px; }
+
+  .kv { display: flex; justify-content: space-between; padding: 7px 0; font-size: 13px; }
+  .kv + .kv { border-top: 1px solid #f2f3f5; }
+  .kv .v { color: var(--dim); }
+
+  .sess { padding: 10px 0; }
+  .sess + .sess { border-top: 1px solid #f2f3f5; }
+  .sess .t { font-size: 13px; font-weight: 500; margin-bottom: 2px; word-break: break-all; }
+  .sess .m { font-size: 11.5px; color: var(--dim); display: flex; gap: 8px; flex-wrap: wrap; }
+  .tag { background: #eef0f3; border-radius: 4px; padding: 0 5px; font-size: 10.5px; }
+  .tag.wk { background: #eef0ff; color: var(--accent); }
+
+  .bars { display: flex; flex-direction: column; gap: 12px; }
+  .bar { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .bar .lbl { width: 46px; color: var(--dim); flex: none; }
+  .bar .track { flex: 1; height: 7px; background: #eef0f3; border-radius: 4px; overflow: hidden; }
+  .bar .fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--cyan));
+               border-radius: 4px; transition: width .5s ease; }
+  .bar .num { width: 52px; text-align: right; color: var(--dim); flex: none; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-weight: 500; color: var(--dim); font-size: 11px;
+       text-transform: uppercase; letter-spacing: .5px; padding-bottom: 8px; }
+  td { padding: 7px 0; border-top: 1px solid #f2f3f5; vertical-align: top; }
+  td.num { text-align: right; }
+
+  .src { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 0; }
+  .src .nm { width: 100px; flex: none; color: var(--dim); }
+  .badge { font-size: 10.5px; border-radius: 4px; padding: 1px 6px; }
+  .badge.ok { background: #e8f7ee; color: var(--ok); }
+  .badge.no { background: #fdeaea; color: var(--err); }
+
+  .err-box { background: #fdeaea; color: #8a1c1c; border-radius: 8px;
+             padding: 12px 16px; font-size: 13px; margin-bottom: 24px; display: none; }
+  .err-box.show { display: block; }
+
+  footer { margin-top: 40px; font-size: 12px; color: var(--dim); }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  @media (max-width: 760px) {
+    body { padding: 24px 16px 48px; }
+    .grid2 { grid-template-columns: 1fr; }
+    .stats { gap: 10px; }
+    .stat { padding: 16px; }
+    .stat .n { font-size: 26px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>WorkBuddy 看板</h1>
+    <span class="ver" id="ver">v—</span>
+    <span class="pulse"><span class="dot live" id="dot"></span><span id="pulseTxt">连接中</span></span>
+  </header>
+  <p class="sub">
+    只读 API 演示 · 数据源 <code>~/.workbuddy</code> · 每 2 秒自动刷新
+  </p>
+
+  <div class="err-box" id="errBox"></div>
+
+  <section>
+    <div class="stats">
+      <div class="stat c1"><div class="n" id="sWorking">—</div><div class="k">工作中</div>
+        <div class="h">近 30 分钟活跃会话</div></div>
+      <div class="stat c2"><div class="n" id="sDone">—</div><div class="k">今日完成</div>
+        <div class="h">任务转 completed</div></div>
+      <div class="stat c3"><div class="n" id="sAuto">—</div><div class="k">自动化</div>
+        <div class="h">status=ACTIVE</div></div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>活跃会话</h2>
+      <div id="sessList"><div class="sess"><div class="m">加载中…</div></div></div>
+    </div>
+    <div class="card">
+      <h2>系统 / 自动化</h2>
+      <div class="bars">
+        <div class="bar"><span class="lbl">CPU</span><div class="track"><div class="fill" id="barCpu" style="width:0"></div></div><span class="num" id="numCpu">—</span></div>
+        <div class="bar"><span class="lbl">内存</span><div class="track"><div class="fill" id="barMem" style="width:0"></div></div><span class="num" id="numMem">—</span></div>
+        <div class="bar"><span class="lbl">磁盘</span><div class="track"><div class="fill" id="barDisk" style="width:0"></div></div><span class="num" id="numDisk">—</span></div>
+      </div>
+      <div style="margin-top:18px">
+        <div class="kv"><span>温度</span><span class="v" id="vTemp">—</span></div>
+        <div class="kv"><span>进程数</span><span class="v" id="vProc">—</span></div>
+        <div class="kv"><span>今日自动化运行</span><span class="v" id="vRuns">—</span></div>
+        <div class="kv"><span>待审阅</span><span class="v" id="vPending">—</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>任务</h2>
+      <div class="kv"><span>总数</span><span class="v" id="tTotal">—</span></div>
+      <div class="kv"><span>累计完成</span><span class="v" id="tDone">—</span></div>
+      <div class="kv"><span>今日完成</span><span class="v" id="tToday">—</span></div>
+      <div class="kv"><span>进行中</span><span class="v" id="tProg">—</span></div>
+    </div>
+    <div class="card">
+      <h2>今日代码改动</h2>
+      <div class="kv"><span>改动文件</span><span class="v" id="aFiles">—</span></div>
+      <div class="kv"><span>新增行</span><span class="v" id="aAdd">—</span></div>
+      <div class="kv"><span>删除行</span><span class="v" id="aDel">—</span></div>
+      <div class="kv"><span>涉及项目</span><span class="v" id="aProj">—</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>数据源自检</h2>
+      <div id="healthList"><div class="src"><span class="nm">—</span></div></div>
+    </div>
+  </section>
+
+  <footer>
+    接口：<a href="/api/v1/board" target="_blank">/api/v1/board</a> ·
+    <a href="/status" target="_blank">/status</a>（固件契约）·
+    <a href="/api/v1/health" target="_blank">/api/v1/health</a> ·
+    <a href="/docs" target="_blank">/docs</a>
+    <span id="foot" style="float:right"></span>
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let timer = null;
+
+function setBars(sys) {
+  const set = (bar, num, val) => {
+    const v = Math.max(0, Math.min(100, Number(val) || 0));
+    $(bar).style.width = v + '%';
+    $(num).textContent = v.toFixed(0) + '%';
+  };
+  set('barCpu', 'numCpu', sys.cpu);
+  set('barMem', 'numMem', sys.mem);
+  set('barDisk', 'numDisk', sys.disk);
+  $('vTemp').textContent = sys.temp ? sys.temp + ' °C' : '不可用';
+  $('vProc').textContent = sys.proc;
+}
+
+function render(d) {
+  const s = d.summary;
+  $('sWorking').textContent = s.working;
+  $('sDone').textContent = s.today_done;
+  $('sAuto').textContent = s.automations;
+
+  const list = $('sessList');
+  if (!d.sessions || !d.sessions.length) {
+    list.innerHTML = '<div class="sess"><div class="m">空闲中 · 近 30 分钟无活跃会话</div></div>';
+  } else {
+    list.innerHTML = d.sessions.slice(0, 5).map(x => `
+      <div class="sess">
+        <div class="t">${esc(x.title)}</div>
+        <div class="m">
+          <span class="tag ${x.status === 'working' ? 'wk' : ''}">${esc(x.status)}</span>
+          <span>${esc(x.project)}</span>
+          <span>${esc(x.elapsed)}</span>
+          ${x.is_background ? '<span class="tag">后台</span>' : ''}
+        </div>
+      </div>`).join('');
+  }
+
+  setBars(d.system);
+
+  const a = d.automations || {};
+  $('vRuns').textContent = (a.runs_today ?? 0) + ' 次';
+  $('vPending').textContent = (a.pending_review ?? 0) + ' 条';
+
+  const t = d.tasks || {};
+  $('tTotal').textContent = t.total ?? '—';
+  $('tDone').textContent = t.completed ?? '—';
+  $('tToday').textContent = t.today_completed ?? '—';
+  $('tProg').textContent = t.in_progress ?? '—';
+
+  const ac = d.activity || {};
+  $('aFiles').textContent = ac.files ?? '—';
+  $('aAdd').textContent = ac.additions != null ? '+' + ac.additions : '—';
+  $('aDel').textContent = ac.deletions != null ? '−' + ac.deletions : '—';
+  $('aProj').textContent = (ac.projects && ac.projects.length) ? ac.projects.join(' / ') : '—';
+
+  $('foot').textContent = '快照 ' + (d.generated_at || '').replace('T', ' ').slice(0, 19)
+    + ' · 缓存 ' + (d.cache_age_ms >= 0 ? d.cache_age_ms + 'ms' : '无');
+}
+
+function renderHealth(h) {
+  const src = h.sources || {};
+  const keys = Object.keys(src);
+  if (!keys.length) { $('healthList').innerHTML = '<div class="src"><span class="nm">无数据</span></div>'; return; }
+  $('healthList').innerHTML = keys.map(k => {
+    const v = src[k] || {};
+    return `<div class="src">
+      <span class="nm">${esc(k)}</span>
+      <span class="badge ${v.ok ? 'ok' : 'no'}">${v.ok ? 'OK' : 'FAIL'}</span>
+      <span style="color:var(--dim)">${v.count} 条</span>
+      ${v.detail ? `<span style="color:var(--err);font-size:11px">${esc(v.detail)}</span>` : ''}
+    </div>`;
+  }).join('');
+
+  const dot = $('dot');
+  const txt = $('pulseTxt');
+  dot.className = 'dot live';
+  if (h.stale) { dot.className = 'dot stale'; txt.textContent = '数据陈旧'; }
+  else if (!h.ok) { dot.className = 'dot bad'; txt.textContent = '部分降级'; }
+  else { txt.textContent = '在线'; }
+  $('ver').textContent = 'v' + (h.version || '—');
+}
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function showErr(msg) {
+  const b = $('errBox');
+  if (!msg) { b.classList.remove('show'); return; }
+  b.textContent = msg;
+  b.classList.add('show');
+}
+
+async function tick() {
+  try {
+    const [b, h] = await Promise.all([
+      fetch('/api/v1/board', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/v1/health', { cache: 'no-store' }).then(r => r.json()),
+    ]);
+    render(b);
+    renderHealth(h);
+    showErr(b.degraded ? '部分数据源降级，显示的是上一次成功采集的数据' : '');
+  } catch (e) {
+    $('dot').className = 'dot bad';
+    $('pulseTxt').textContent = '连接失败';
+    showErr('无法连接后端：' + e.message);
+  }
+}
+
+tick();
+timer = setInterval(tick, 2000);
+</script>
+</body>
+</html>
