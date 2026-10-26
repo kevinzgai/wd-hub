@@ -27,9 +27,23 @@
 #define BOARD_BTN_VOL_DOWN   GPIO_NUM_39
 
 // ---- 音频 I2S（本固件未启用，仅预留）----
+// ⚠️ 绝对不要对这些脚调用 gpio_config() / 加内部上下拉。
+//    它们是 I2S 信号线，被 codec 偏置在 VDD/2（实测 ~2.0V），
+//    一旦被内部拉电阻或被误当 ADC 采样来回翻转，功放会收到
+//    无效数据流并发出噪音（本项目踩过这个坑）。
 #define BOARD_MIC_WS         GPIO_NUM_4
 #define BOARD_MIC_SCK        GPIO_NUM_5
 #define BOARD_MIC_DIN        GPIO_NUM_6
 #define BOARD_SPK_DOUT       GPIO_NUM_7
 #define BOARD_SPK_BCLK       GPIO_NUM_15
 #define BOARD_SPK_LRCK       GPIO_NUM_16
+
+// ---- 电池 ----
+// 来源：上游 main/boards/nologo/xingzhi-cube-1.54tft-wifi/power_manager.h
+//   adc_oneshot_unit_init_cfg_t = { .unit_id = ADC_UNIT_2 }
+//   adc_oneshot_config_channel(handle, ADC_CHANNEL_6, ...)
+// IDF soc/esp32s3/adc_channel.h: #define ADC2_CHANNEL_6_GPIO_NUM 17
+#define BOARD_BAT_GPIO       GPIO_NUM_17
+#define BOARD_BAT_ADC_UNIT   2          // ADC_UNIT_2
+#define BOARD_BAT_ADC_CH     6          // ADC_CHANNEL_6 -> GPIO17
+#define BOARD_CHRG_GPIO      GPIO_NUM_38  // 高电平 = 正在充电

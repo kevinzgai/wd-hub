@@ -1,10 +1,12 @@
 idf_component_register(
     SRCS
         "main.cpp"
+        "battery.cpp"
         "font_cn_12.c"
         "font_cn_16.c"
         "font_cn_28.c"
         "logo_wb.c"
+        "pet_frames.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_wifi
@@ -14,6 +16,7 @@ idf_component_register(
         esp_driver_spi
         esp_driver_gpio
         esp_driver_ledc
+        esp_adc
         esp_lcd
         nvs_flash
 )

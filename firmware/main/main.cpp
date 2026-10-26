@@ -45,6 +45,8 @@
 
 #include "lvgl.h"
 #include "board_config.h"
+#include "battery.h"
+#include "pet.h"
 
 // 中文字体（由 tools/gen_charset.py + lv_font_conv 生成）
 LV_FONT_DECLARE(font_cn_12);
@@ -137,8 +139,9 @@ static void utf8_sanitize(const lv_font_t *font, const char *in, char *out, size
 #endif
 // 本机以太网 192.168.0.89，设备必须连同一个路由器
 // 只给 base：第 0 屏走 /status，其余屏走 /screen/<i>，路径由 s_page 决定
+// 端口 27777 与服务端 DEFAULT_PORT 保持一致（刻意避开 8080）
 #ifndef BRIDGE_BASE
-#define BRIDGE_BASE       "http://192.168.0.89:8080"
+#define BRIDGE_BASE       "http://192.168.0.89:27777"
 #endif
 #define BRIDGE_PATH_MAIN  "/status"
 
@@ -215,6 +218,16 @@ static lv_obj_t *s_dot[MAX_SESSIONS];        // 行首状态灯：等待操作�
 static lv_obj_t *s_lbl_footer;
 static lv_obj_t *s_lbl_sys;        // 页脚左侧：CPU / 内存 / 磁盘
 static lv_obj_t *s_lbl_toast;      // 按键操作的临时提示
+static lv_obj_t *s_pet_img;        // 页脚右下角像素宠物
+static uint8_t   s_pet_state = PET_ST_IDLE;   // 当前宠物状态
+static uint8_t   s_pet_frame = 0;             // 当前帧号（0/1）
+static lv_timer_t *s_pet_timer;     // 换帧定时器，切状态时要改周期
+
+// ---- 电量圆圈（页头右上角）----
+// 外圈弧 = 进度，中心文字 = 百分比。充电时弧变绿并绕行。
+static lv_obj_t *s_arc_bat;        // 进度弧
+static lv_obj_t *s_lbl_bat;        // 中心百分比文字
+static lv_obj_t *s_lbl_chrg;       // 充电时在圆圈下方补一个闪电
 
 // ---- 多屏 ----
 // 两组控件放在各自的容器里，切页只是切 HIDDEN，不销毁重建。
@@ -383,7 +396,7 @@ static void display_init(void)
 // ===========================================================================
 // UI 布局（240x240 精算）
 //
-//   y=0    09:44          10-26      28px 时钟行
+//   y=0    09:44        10-26  ◕     28px 时钟行（右侧圆圈=电量）
 //   y=34   ─────────────────────     1px 分隔
 //   y=40   [ 1 ] [ 1 ] [ 5 ]        46px 三格统计
 //   y=92   ● 会话标题 1              40px
@@ -393,6 +406,50 @@ static void display_init(void)
 //   y=216  ─────────────────────
 //   y=220  更新 09:44:12            20px 页脚
 // ===========================================================================
+
+// 电量圆圈几何。34px 直径塞进 0..36 的页头行（y=1..35，留 1px 呼吸）。
+// 减掉弧宽 3px 后内径 26px，font_cn_12 的 ASCII 是 6px/字符，
+// 三字符 "100%" 正好 24px，放得下，不用为 100% 做特殊处理。
+#define BAT_ARC_SIZE    34
+#define BAT_ARC_WIDTH   3
+#define BAT_ARC_X       (-6)            // 距右边 6px
+#define BAT_ARC_Y       1
+// 日期/状态右对齐的偏移 = 6(右边距) + 34(圆圈) + 6(间隔)
+#define BAT_TEXT_RIGHT  (-46)
+
+// 页头整行下移量。原来 logo 顶边贴 y=0，时钟（30px 行高）以 logo 中心对齐后
+// 顶边落到 -3，被屏幕顶裁掉；下移 4px 后 logo 占 4..28、时钟 1..31，都完整可见。
+#define HEADER_LOGO_Y   4
+
+// 电量数字的视觉居中补偿。
+// LVGL 绘制字形用的是（见 lv_draw_label.c:671）：
+//   glyph_y1 = pos->y + (line_height - base_line) - box_h - ofs_y
+// font_cn_12: line_height=13, base_line=2；数字 box_h=10, ofs_y=0
+//   → glyph_y1 = 0 + (13-2) - 10 - 0 = 1，字高 10，底边在 11
+// 行框 13px 内：上方空 1px、下方空 2px → 墨迹重心比行框中心高 0.5px。
+// lv_obj_align_to(CENTER) 对齐的是行框，所以要往下补 1px 才是视觉正中。
+#define BAT_LABEL_DY    1
+// 横向同理：数字字形有 ofs_x=1（左边留 1px 空白），"100%" 总宽 24px 但墨迹
+// 实际只占 x=1..22，视觉重心偏右 0.5px。
+// 先按 -5 左移，用户反馈"多了"，再右移 2px -> -3。
+#define BAT_LABEL_DX    (-3)
+
+// ---- 像素宠物：浮动在右下角，占屏幕 1/2 ----
+// 素材就是 120x120（屏 240 的一半），BOTTOM_RIGHT 对齐：
+//   偏移 (4, 4) => 占 x=124..243、y=124..243
+// 故意让右下各出屏 4px：像素画的边缘是硬直边，正好压在屏幕边框上会像
+// "贴了张方块贴纸"；溢出一点被裁掉后，视觉上更像浮在角落。
+#define PET_X           (4)
+#define PET_Y           (4)
+// 半透明。50% 时仍然压得会话列表的文字看不清，降到 30%。
+// 注意这里混的是屏幕背景色，不是上面的文字 —— 宠物在最底层，
+// 文字画在它上面，但页脚/会话用的是灰色(COL_DIM)，压在白色猫身上
+// 对比度天生不足，所以只能把猫本身压淡来让文字浮出来。
+// LV_OPA_30 = 77（范围 0..255）。
+#define PET_OPA         LV_OPA_30
+// 页脚右侧"★ 时间"。上一版为了给页脚里 20px 的宠物让位，这里改成过 -32；
+// 宠物现已独立浮在右下角（不占页脚高度），让位不再需要，恢复 -8。
+#define FOOTER_TEXT_RIGHT (-8)
 
 static lv_obj_t *mk_label(lv_obj_t *parent, const lv_font_t *font,
                           lv_color_t color, lv_align_t align,
@@ -445,6 +502,100 @@ static void blink_timer_cb(lv_timer_t *t)
     }
 }
 
+// ===========================================================================
+// 像素宠物：状态机 + 换帧
+// ===========================================================================
+// 四种状态对应四种"心情"，换帧周期也不同 —— 越忙动得越快，静止时慢慢眨眼，
+// 一眼就能看出机器在干什么，不用去读文字。
+static const struct {
+    uint16_t period_ms;
+    const char *name;
+} PET_CFG[PET_STATES] = {
+    [PET_ST_IDLE]    = { 1600, "idle"    },   // 没人用：慢眨眼，像在喘气
+    [PET_ST_WORKING] = {  500, "working" },   // 干活中：眯眼盯屏，动得快
+    [PET_ST_DONE]    = {  600, "done"    },   // 刚完成：张口笑，一开一合
+    [PET_ST_AUTO]    = {  800, "auto"    },   // 自动化：耳朵被压，中速
+};
+
+static void pet_apply_frame(void)
+{
+    if (!s_pet_img) return;
+    // 帧表排布 pet_frames[state * PET_FRAMES_EACH + frame]
+    const lv_image_dsc_t *dsc =
+        &pet_frames[s_pet_state * PET_FRAMES_EACH + s_pet_frame];
+    // 切帧 = 换指针。图像本身在 flash 里，不分配、不拷贝。
+    lv_image_set_src(s_pet_img, dsc);
+}
+
+// 换帧定时器。周期跟着状态走，由 pet_set_state 负责改，这里只管翻帧。
+// （LVGL 9 只有 lv_timer_set_period，没有 get_period，不要试图在这里回读校验。）
+static void pet_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_pet_state >= PET_STATES) s_pet_state = PET_ST_IDLE;
+    s_pet_frame ^= 1;                       // 0 <-> 1，两帧循环
+    pet_apply_frame();
+}
+
+// 状态变更入口：同状态重复调用直接返回，避免每轮刷新都重设图像源。
+static void pet_set_state(uint8_t st)
+{
+    if (st >= PET_STATES || st == s_pet_state) return;
+    s_pet_state = st;
+    s_pet_frame = 0;
+    pet_apply_frame();
+
+    // 周期跟着状态换，并且立刻重置计时。不 reset 的话，从 idle(1600ms)
+    // 切到 working(500ms) 得等这一轮剩余的 1600ms 走完才动第一帧，
+    // 用户看到的就是"有任务了但宠物愣了一秒多"。
+    if (s_pet_timer) {
+        lv_timer_set_period(s_pet_timer, PET_CFG[st].period_ms);
+        lv_timer_reset(s_pet_timer);
+    }
+}
+
+// "刚完成"高亮：today_done 增加时记一个到期时间戳，8 秒内保持 DONE 表情。
+// 用时间戳而不是计数器，是为了不依赖刷新频率（HTTP 轮询间隔可能变）。
+#define PET_DONE_HOLD_MS  8000
+static int64_t s_done_until_ms = 0;
+static int     s_prev_today_done = -1;
+
+static void pet_update_state(void)
+{
+    int64_t now = esp_timer_get_time() / 1000;
+
+    // 首次拿到数据时只记基线，不触发完成动画 —— 否则每次开机都要先笑一下
+    if (s_prev_today_done < 0) {
+        s_prev_today_done = s_data.today_done;
+    } else if (s_data.today_done > s_prev_today_done) {
+        s_done_until_ms = now + PET_DONE_HOLD_MS;
+        s_prev_today_done = s_data.today_done;
+    } else if (s_data.today_done < s_prev_today_done) {
+        s_prev_today_done = s_data.today_done;   // 跨天归零，跟一下基线
+    }
+
+    // 有没有会话在等用户操作 —— 比"有几个自动化"重要得多
+    bool any_waiting = false;
+    for (int i = 0; i < s_data.session_count; i++) {
+        if (s_data.sessions[i].waiting) { any_waiting = true; break; }
+    }
+
+    // 优先级：刚完成 > 有会话在等 > 有任务在跑 > 待机
+    //
+    // 注意不能拿 s_data.automations 判断"自动化在跑"：
+    // 那个字段是"已启用的自动化总数"，配置了就一直 >0（当前机器是 5），
+    // 用它做条件等于永远进不了 IDLE，宠物会一直抖耳朵。
+    // AUTO 只用于"确实没有会话、但也不该显示纯待机"的兜底，这里索性并入
+    // WORKING 之外的判断 —— 让 idle 真的能出现。
+    uint8_t st;
+    if (now < s_done_until_ms)     st = PET_ST_DONE;
+    else if (any_waiting)          st = PET_ST_AUTO;     // 耳朵压扁：等你操作
+    else if (s_data.working > 0)   st = PET_ST_WORKING;  // 干活中
+    else                           st = PET_ST_IDLE;
+
+    pet_set_state(st);
+}
+
 static void ui_build(void)
 {
     lv_obj_t *scr = lv_screen_active();
@@ -456,21 +607,73 @@ static void ui_build(void)
     // logo 24x24 RGB565，透明底已预合成到 COL_BG，由 tools/gen_logo.py 生成。
     // 先摆 logo 再让时钟参照它对齐，比手算像素可靠：
     // OUT_RIGHT_MID 保证两者垂直中心线重合，改 logo 尺寸时时钟会自动跟着移。
+    //
+    // y 从 0 改成 4：原来 logo 顶边贴 y=0，而时钟 30px 行高以 logo 中心(12)
+    // 对齐后顶边落到 y=-3，被屏幕顶端裁掉 3px，整体观感偏上。
+    // 下移 4px 后 logo 占 4..28、时钟占 1..31，顶边不越界，底部离分隔线(36)还有 5px。
     LV_IMAGE_DECLARE(logo_wb);
     lv_obj_t *logo = lv_image_create(scr);
     lv_image_set_src(logo, &logo_wb);
-    lv_obj_align(logo, LV_ALIGN_TOP_LEFT, 8, 0);
+    lv_obj_align(logo, LV_ALIGN_TOP_LEFT, 8, HEADER_LOGO_Y);
 
     s_lbl_clock = mk_label(scr, &font_cn_28, COL_TEXT, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_label_set_text(s_lbl_clock, "--:--");
-    // font_cn_28 行高 30，对齐 24px logo 的中心 → y=-3，与原来手调的 -4 只差 1px
     lv_obj_align_to(s_lbl_clock, logo, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
 
-    s_lbl_date = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_RIGHT, -8, 4);
+    s_lbl_date = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_RIGHT, BAT_TEXT_RIGHT, 6);
     lv_label_set_text(s_lbl_date, "--");
 
-    s_lbl_status = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_RIGHT, -8, 20);
+    s_lbl_status = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_RIGHT, BAT_TEXT_RIGHT, 20);
     lv_label_set_text(s_lbl_status, "● 连接中");
+
+    // ---- 电量圆圈（右上角）----
+    // lv_arc 的角度体系有两个必踩的坑，这里都绕开了：
+    //
+    // 坑1：set_bg_angles 内部会把 >360 的值 `while(x>360) x-=360` 折回来。
+    //      所以 set_bg_angles(90, 450) 会变成 (90, 90) —— 360° 的整圈
+    //      退化成 0°，圆圈整个不可见。整圈只能用 (0,360) 这个特例，
+    //      起始方向改用 set_rotation 旋转来实现。
+    //
+    // 坑2：0° 在三点钟方向、顺时针增长。想让进度从 12 点开始，
+    //      需要 rotation = 270（因为绘制时用的是 angle + rotation）。
+    s_arc_bat = lv_arc_create(scr);
+    lv_obj_set_size(s_arc_bat, BAT_ARC_SIZE, BAT_ARC_SIZE);
+    lv_obj_align(s_arc_bat, LV_ALIGN_TOP_RIGHT, BAT_ARC_X, BAT_ARC_Y);
+    lv_arc_set_bg_angles(s_arc_bat, 0, 360);    // 整圈背景轨道
+    lv_arc_set_rotation(s_arc_bat, 270);        // 起点转到 12 点
+    lv_arc_set_range(s_arc_bat, 0, 100);
+    lv_arc_set_value(s_arc_bat, 0);
+    // 去掉旋钮和点击交互 —— 这是指示器不是滑块，能被拖动会误触
+    lv_obj_remove_style(s_arc_bat, NULL, LV_PART_KNOB);
+    lv_obj_clear_flag(s_arc_bat, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(s_arc_bat, BAT_ARC_WIDTH, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_arc_bat, BAT_ARC_WIDTH, LV_PART_INDICATOR);
+    // 背景轨道：暗灰，让"未充满"的部分也能看出是圆圈
+    lv_obj_set_style_arc_color(s_arc_bat, COL_DIM, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(s_arc_bat, LV_OPA_30, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_arc_bat, COL_OK, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(s_arc_bat, true, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(s_arc_bat, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_arc_bat, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_arc_bat, 0, LV_PART_MAIN);
+
+    // 中心百分比。font_cn_12 的 ASCII 是 6px/字符，34px 圆圈内径 26px，
+    // "100%" 占 24px 放得下 —— 全部带百分号，口径统一。
+    // 用 align_to(CENTER) 之后再加 BAT_LABEL_DY：CENTER 对齐的是行框(13px)，
+    // 而数字墨迹只有 10px 且下方留白比上方多 1px，直接居中会显得偏高。
+    s_lbl_bat = lv_label_create(scr);
+    lv_obj_set_style_text_font(s_lbl_bat, &font_cn_12, 0);
+    lv_obj_set_style_text_color(s_lbl_bat, COL_TEXT, 0);
+    lv_label_set_text(s_lbl_bat, "--");
+    lv_obj_align_to(s_lbl_bat, s_arc_bat, LV_ALIGN_CENTER, BAT_LABEL_DX, BAT_LABEL_DY);
+
+    // 充电闪电：字体里没有 ⚡，用 ASCII 字符拼不行，
+    // 改为在圆圈右上角点一个小绿点表示正在充电。
+    s_lbl_chrg = lv_label_create(scr);
+    lv_obj_set_style_text_font(s_lbl_chrg, &font_cn_12, 0);
+    lv_obj_set_style_text_color(s_lbl_chrg, COL_OK, 0);
+    lv_label_set_text(s_lbl_chrg, "");
+    lv_obj_align_to(s_lbl_chrg, s_arc_bat, LV_ALIGN_TOP_RIGHT, 2, -3);
 
     // ---- WorkBuddy logo 已移到时钟左侧，见上方"logo + 时钟" ----
 
@@ -580,13 +783,53 @@ static void ui_build(void)
     s_lbl_sys = mk_label(scr, &font_cn_12, COL_DIM, LV_ALIGN_TOP_LEFT, 8, 222);
     lv_label_set_text(s_lbl_sys, "等待数据");
     s_lbl_footer = mk_label(scr, &font_cn_12, COL_DIM,
-                            LV_ALIGN_TOP_RIGHT, -8, 222);
+                            LV_ALIGN_TOP_RIGHT, FOOTER_TEXT_RIGHT, 222);
     lv_label_set_text(s_lbl_footer, "");
 
+    // ---- 像素宠物：右下角浮动，占屏幕一半 ----
+    // 素材是 ARGB8888（带真 alpha），所以可以整体设不透明度而不产生黑罩：
+    // 透明区 alpha=0 完全透出下层，只有猫本身半透明。
+    s_pet_img = lv_image_create(scr);
+    lv_image_set_src(s_pet_img, &pet_frames[PET_ST_IDLE * PET_FRAMES_EACH]);
+
+    // 不做缩放。素材本身就是 120x120，1:1 绘制。
+    //
+    // 上一版用 lv_image_set_scale(512) 想把 60x60 放大到 120，屏幕上只露出
+    // 左上角一块。原因是 set_scale 只改"绘制变换"，对象尺寸仍是 60x60，
+    // 而 pivot 默认在图像中心，放大后图像以中心向四周各溢出 30px，
+    // 超出对象边界就被裁掉。改素材尺寸比改 pivot/size 组合可靠得多。
+
+    // 半透明。注意用 image_opa 而不是 obj_set_style_opa：
+    // 后者会把整个对象（含可能的子对象）整体合成一次，开销更大；
+    // image_opa 直接作用在图像绘制阶段，正是我们要的效果。
+    lv_obj_set_style_image_opa(s_pet_img, PET_OPA, 0);
+
+    // 不让它拦截按键/点击，纯装饰
+    lv_obj_clear_flag(s_pet_img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_pet_img, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_align(s_pet_img, LV_ALIGN_BOTTOM_RIGHT, PET_X, PET_Y);
+
+    // 定时换帧，间隔按状态在 pet_set_state 里动态改
+    s_pet_timer = lv_timer_create(pet_timer_cb, PET_CFG[PET_ST_IDLE].period_ms, NULL);
+
     // ---- 按键提示（默认隐藏，只在按的时候闪一下）----
+    // 原来放 BOTTOM_RIGHT(-8,-4)，正好被页脚宠物整块盖住 —— 挪到分隔线上方居中。
+    // 只在按住键的那一秒多出现，短暂压住会话行可以接受。
     s_lbl_toast = mk_label(scr, &font_cn_16, COL_ACCENT,
-                           LV_ALIGN_BOTTOM_RIGHT, -8, -4);
+                           LV_ALIGN_BOTTOM_MID, 0, -26);
     lv_obj_add_flag(s_lbl_toast, LV_OBJ_FLAG_HIDDEN);
+
+    // 宠物压到最底层：作为屏幕的第 0 个子对象，先于所有内容绘制。
+    //
+    // LVGL 没有 z-index，子对象顺序就是绘制顺序 —— index 0 最先画（最底），
+    // index 越大越靠上。所以这里显式移到 0，让页头、三格统计、会话列表、
+    // 页脚文字全都盖在它上面。
+    //
+    // 用 lv_obj_move_to_index 而不是 lv_obj_move_background：
+    // 后者在 LVGL 9 里只是 api_map_v8.h 里的 static inline 兼容别名
+    // （内部就是 move_to_index(obj, 0)），直接用新名字更明确。
+    lv_obj_move_to_index(s_pet_img, 0);
 }
 
 // ===========================================================================
@@ -763,8 +1006,71 @@ static void page_apply(int page)
     ESP_LOGI(TAG, ">>> 切屏 -> %d/%d", page, s_nscr);
 }
 
+// 电量圆圈渲染。只在 LVGL 任务里调用（和 ui_render 同线程）。
+//
+// 分档着色：
+//   >50%  绿   20~50%  黄   <20%  红
+// 充电中：进度弧固定绿色，并在圆圈右上角显示 "+" 标记。
+//
+// 注意 percent 与 volt_pct 的区别（见 battery.h）：
+//   percent  = 显示用，充电时是"充电前的真实电量"，不会虚高到 100%
+//   volt_pct = 纯电压换算，充电时虚高，只用于调试日志
+static void ui_render_battery(void)
+{
+    battery_state_t b;
+    battery_get(&b);
+
+    // 判等缓存：每帧 set_value / set_text 都会触发重绘，
+    // 5 秒一轮刷新时百分比通常不变，跳过能省下 SPI 带宽。
+    static int  last_pct  = -2;
+    static bool last_chrg = false;
+
+    if (!b.valid) {
+        if (last_pct != -1) {
+            last_pct = -1;
+            lv_arc_set_value(s_arc_bat, 0);
+            lv_label_set_text(s_lbl_bat, "--");
+            lv_obj_set_style_text_color(s_lbl_bat, COL_DIM, 0);
+            lv_obj_set_style_arc_color(s_arc_bat, COL_DIM, LV_PART_INDICATOR);
+            lv_label_set_text(s_lbl_chrg, "");
+        }
+        return;
+    }
+
+    int pct = b.percent;
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+
+    if (pct != last_pct || b.charging != last_chrg) {
+        last_pct  = pct;
+        last_chrg = b.charging;
+
+        lv_arc_set_value(s_arc_bat, pct);
+
+        // 三档配色。充电中固定绿色，避免"充电时红光"的矛盾观感。
+        lv_color_t col;
+        if (b.charging)     col = COL_OK;
+        else if (pct > 50)  col = COL_OK;
+        else if (pct >= 20) col = COL_WARN;
+        else                col = COL_ERR;
+
+        lv_obj_set_style_arc_color(s_arc_bat, col, LV_PART_INDICATOR);
+        lv_obj_set_style_text_color(s_lbl_bat,
+                                    (pct < 20 && !b.charging) ? col : COL_TEXT, 0);
+
+        lv_label_set_text_fmt(s_lbl_bat, "%d%%", pct);
+
+        // 充电标记。字体没有 ⚡，用 "+"。
+        // 放电时不显示，避免和百分比抢视觉。
+        lv_label_set_text(s_lbl_chrg, b.charging ? "+" : "");
+    }
+}
+
 static void ui_render(void)
 {
+    // ---- 电量圆圈（独立于网络状态，离线时也照常更新）----
+    ui_render_battery();
+
     // ---- 页头（两屏共用，随时更新）----
     if (!s_data.ok) {
         lv_obj_set_style_text_color(s_lbl_status, COL_ERR, 0);
@@ -778,6 +1084,9 @@ static void ui_render(void)
         lv_obj_set_style_text_color(s_lbl_sys, COL_ERR, 0);
         lv_label_set_text(s_lbl_sys, fbuf);
         lv_label_set_text(s_lbl_footer, "");
+        // 离线时宠物回到待机表情（慢眨眼）—— 它还在呼吸，只是没活干，
+        // 比冻在最后一帧上更像"设备活着但连不上"。
+        pet_set_state(PET_ST_IDLE);
         return;   // 保留上次数据，避免清零闪屏
     }
 
@@ -808,6 +1117,9 @@ static void ui_render(void)
     char footer[24];
     snprintf(footer, sizeof(footer), "★ %s", s_data.clock);
     lv_label_set_text(s_lbl_footer, footer);
+
+    // 宠物表情跟着数据走（本屏两页共用，放在这里只算一次）
+    pet_update_state();
 
     // ---- 主体 ----
     // 回包可能属于"切页前"发出的那个请求（s_data.page 落后于 s_page），
@@ -1345,6 +1657,10 @@ extern "C" void app_main(void)
     display_init();
 
     font_probe();
+
+    // 电量采样与 WiFi 无关，越早开越好 —— 首帧就能带出真实百分比，
+    // 而不是先显示 "--" 再跳变。放在 ui_build() 之前即可。
+    battery_init();
 
     ui_build();
 
