@@ -105,4 +105,4 @@ __pycache__/
 *.pyo
 .venv/
 venv/
-.env
+.envtools/tone_preview.wav
