@@ -39,9 +39,12 @@ MAIN_DIR  = ROOT / "firmware" / "main"
 OUT_UI   = TOOLS_DIR / "charset_ui.txt"    # 28px 用：只含 UI 文案
 OUT_FULL = TOOLS_DIR / "charset.txt"       # 12/16px 用：含常用汉字底座
 
-# 界面里当图标用的几何符号。字体里没有就会显示成方格，
-# 所以必须显式列出来（源里用到的会自动收进 charset，这里是兜底）。
-EXTRA_SYMBOLS = "●○◆★☆▲△▼■□✓✔✗⚡♥♪☀⏱⏰⚙▶⏸☰✈↔→↑↓"
+# 界面里当图标用的几何符号。
+#
+# 从 gen_fonts 导入而不是各写一份：这两处必须完全一致，否则会出现
+# "字符集里有、但生成时被排除"，白白让自检报警告。之前就是两处各写一份，
+# 改了一边忘了另一边。
+from gen_fonts import EXTRA_SYMBOLS
 
 # UI 里当分隔符 / 装饰的标点，源码字符串之外单独补
 #
@@ -70,8 +73,17 @@ def gb2312_level1() -> str:
 def chars_in_source() -> tuple[set[str], set[str]]:
     """从固件源码里收字符。
 
-    返回 (全部, 仅 UI)。UI 那套排除 ESP_LOG / printf —— 那些只进串口日志，
-    不占屏幕字库。
+    返回 (全部, 仅 UI)。
+
+    **不用正则去提取字符串字面量** —— 试过，会错位。
+    `re.findall(r'"((?:[^"\\\\]|\\\\.)*)"', text)` 在源码里一旦遇到引号配对
+    被打乱（转义、字符字面量等），就会把中间的整段字符串跳过去。
+    实测 `{ "⚙ 工作", "✓ 完成", "⚡ 自动" }` 里的 ⚙ 就是这样漏掉的，
+    而它恰好是"完成"前面那个图标 —— 漏掉就是屏上一个方格。
+
+    改成：剥掉注释后，直接收集文件里**所有**非 ASCII 字符。
+    代码里除注释外，非 ASCII 只可能出现在字符串字面量里，所以这个口径
+    既不会漏、也不会多收。
     """
     allc: set[str] = set()
     uic:  set[str] = set()
@@ -82,18 +94,17 @@ def chars_in_source() -> tuple[set[str], set[str]]:
             continue
         txt = f.read_text(encoding="utf-8", errors="ignore")
 
-        # 去注释：注释里的中文不上屏，收进来纯属浪费
-        clean = re.sub(r"//[^\n]*", "", txt)
-        clean = re.sub(r"/\*.*?\*/", "", clean, flags=re.S)
-        for s in re.findall(r'"((?:[^"\\]|\\.)*)"', clean):
-            allc.update(ch for ch in s if ord(ch) > 0x7F)
+        # 先剥注释。注释里的中文不上屏，收进来纯属浪费。
+        clean = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
+        clean = re.sub(r"//[^\n]*", "", clean)
 
-        # UI 子集：逐行扫，跳过日志行
-        for line in txt.splitlines():
-            if "ESP_LOG" in line or "printf" in line or "snprintf(buf" in line:
+        allc.update(ch for ch in clean if ord(ch) > 0x7F)
+
+        # UI 子集：跳过日志行（那些只进串口，不占屏幕字库）
+        for line in clean.splitlines():
+            if "ESP_LOG" in line or "printf" in line:
                 continue
-            for s in re.findall(r'"((?:[^"\\]|\\.)*)"', line):
-                uic.update(ch for ch in s if ord(ch) > 0x7F)
+            uic.update(ch for ch in line if ord(ch) > 0x7F)
 
     return allc, uic
 
@@ -188,9 +199,21 @@ def chars_from_db() -> set[str]:
 
 
 def norm(chars: set[str]) -> str:
-    """去掉控制字符和不该上屏的字符，排序输出。"""
+    """去掉不该进字库的字符，排序输出。
+
+    两条硬规则，都是踩过坑的：
+
+    1. **丢掉 BMP 之外的字符**（U+10000 以上）。
+       LVGL 的 cmap 表里 unicode_list 是 uint16 的"相对 range_start 偏移"，
+       字符码点跨度一旦超过 65535 就没法表达。实测配网页 HTML 里那个 🔒
+       (U+1F512) 被扫进来，把跨度撑到 128091，生成出来的 cmap 是坏的。
+       反正 emoji 只给浏览器看，LVGL 根本不渲染，直接丢。
+
+    2. 丢掉控制字符。
+    """
     bad = set("\r\n\t\x00")
-    keep = {c for c in chars if c.isprintable() and c not in bad}
+    keep = {c for c in chars
+            if c.isprintable() and c not in bad and ord(c) <= 0xFFFF}
     return "".join(sorted(keep))
 
 
