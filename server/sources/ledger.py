@@ -95,9 +95,11 @@ def merge(rows: Iterable[dict[str, Any]], now_ms: int) -> dict[str, dict[str, An
     data = _state()
     tasks: dict[str, dict[str, Any]] = data["tasks"]
     dirty = False
+    alive: set[str] = set()
 
     for r in rows:
         k = _key(r)
+        alive.add(k)
         status = r.get("status") or ""
         updated = int(r.get("updated_at") or 0)
         cur = tasks.get(k)
@@ -120,9 +122,12 @@ def merge(rows: Iterable[dict[str, Any]], now_ms: int) -> dict[str, dict[str, An
                 cur["completed_at"] = updated
             dirty = True
 
+    # 修剪只清"盘上已经不存在、且超过保留期"的记录。
+    # 盘上还在的哪怕很老也必须留 —— 否则每轮 merge 加进来又被剪掉，
+    # dirty 永远是 True，等于每 2s 重写一次盘（实测有 31 个 5 月的任务踩过）。
     cutoff = now_ms - RETENTION_MS
     for gone in [k for k, v in tasks.items()
-                 if int(v.get("updated_at") or 0) < cutoff]:
+                 if k not in alive and int(v.get("updated_at") or 0) < cutoff]:
         tasks.pop(gone, None)
         dirty = True
 

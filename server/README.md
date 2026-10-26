@@ -58,10 +58,10 @@ GET /api/v1/health       数据源自检
 | 字段 | 定义 | SQL / 逻辑 |
 |---|---|---|
 | `working` | 近 30 分钟活跃的交互式会话 | `sessions` 表，排除软删除与后台自动化会话 |
-| `today_done` | 今日转 completed 的任务 | 扫 `tasks/*/*.json`，`updatedAt >= 今日0点` |
+| `today_done` | 今日完成的任务 | 本地账本 `state/task_ledger.json`，按 `completed_at >= 今日0点` |
 | `automations` | 已启用自动化数 | `automations` 表 `status='ACTIVE'` |
 
-## 四个必须知道的坑
+## 五个必须知道的坑
 
 改代码前先读这几条，都是实测踩出来的：
 
@@ -73,6 +73,9 @@ GET /api/v1/health       数据源自检
    查询一律 `LOWER()` 归一，且白名单外的状态不计数。
 4. **毫秒时间戳可能是浮点**（实测 `1783644600000.0027`）。Pydantic 对 `int` 字段
    遇到浮点直接抛校验错 → 接口 500。统一走 `models._to_ms` 兜住。
+5. **删任务就是删文件**。`tasks/*/*.json` 没有墓碑，AI 收尾清空任务清单后历史
+   直接消失。所以完成数不能再从盘上现算，必须走 `sources/ledger.py` 账本
+   （2026-10-26 踩过：当天做完 4 个任务，清单一清，屏上 `done` 归零）。
 
 ## 架构
 
@@ -85,6 +88,7 @@ server/
 └── sources/
     ├── db.py         workbuddy.db 只读访问
     ├── files.py      tasks / changes / artifacts 的 JSON 扫描
+    ├── ledger.py     任务账本（历史不随文件删除消失）
     └── system.py     psutil 指标
 ```
 
@@ -96,7 +100,8 @@ server/
 任何数据源故障都不会返回 5xx，也不会让屏幕闪：
 
 - 数据库不可用 → 该部分返回上次缓存，`/status` 的 `ok` 变 `false`，`error` 写原因
-- `tasks/` 缺失 → `today_done` 取 0，不算故障
+- `tasks/` 缺失 → 盘上任务读不到，但账本里的历史仍生效，不算故障
+- 账本损坏 → 从空账本重建，任务统计退回"只看盘上"
 - `psutil` 缺失 → 系统指标全 0，服务正常
 - 单个 JSON 损坏 → 跳过该文件
 
