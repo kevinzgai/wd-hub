@@ -105,7 +105,9 @@ __pycache__/
 *.pyo
 .venv/
 venv/
-.envtools/tone_preview.wav
+.env
+
+# 提示音调音的中间 wav，全部可由 tools/gen_tone_from_mp3.py 等脚本重生成
 tools/*_preview.wav
 tools/tone_compare.wav
 tools/done_tone.wav

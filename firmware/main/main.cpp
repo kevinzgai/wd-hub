@@ -627,15 +627,21 @@ static void pet_update_state(void)
     if (s_prev_today_done < 0) {
         s_prev_today_done = s_data.today_done;
         s_prev_working    = s_data.working;
+        ESP_LOGI(TAG, "pet 基线: done=%d working=%d",
+                 s_prev_today_done, s_prev_working);
     } else if (s_data.today_done > s_prev_today_done) {
         // todo 勾完一项或多项。
         // 一次完成多项（0 -> 3）也只响一次：连响三次纯属噪音，
         // "刚才有进展"这一条信息响一声就够了。
+        ESP_LOGI(TAG, "pet 完成: done %d -> %d，播放完成音",
+                 s_prev_today_done, s_data.today_done);
         s_done_until_ms = now + PET_DONE_HOLD_MS;
         s_prev_today_done = s_data.today_done;
         audio_play(AUDIO_EV_DONE);
         played_done = true;
     } else if (s_data.today_done < s_prev_today_done) {
+        ESP_LOGI(TAG, "pet 基线回退: done %d -> %d",
+                 s_prev_today_done, s_data.today_done);
         s_prev_today_done = s_data.today_done;   // 跨天归零，跟一下基线
     }
 
