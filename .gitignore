@@ -55,6 +55,18 @@ hints.yml
 .DS_Store
 Thumbs.db
 
+# ==========================================
+# 临时诊断项目 / 素材生成物
+# ==========================================
+# adc-probe：排查电池引脚时另立的最小验证工程，
+# 只为确认 ADC2_CH6=GPIO17 与 GPIO38 充电检测，
+# 结论已固化进 board_config.h 注释，工程本身不必留。
+adc-probe/
+
+# 宠物像素画的预览图，由 tools/gen_pet.py 的思路临时渲染，
+# 素材真身是 pet_frames.c，这张 png 只是给人看的，随时可重生成。
+tools/pet_preview.png
+
 # ================
 # Logs & Archives
 # ================

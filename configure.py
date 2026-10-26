@@ -10,7 +10,7 @@
 用法：
   python configure.py                      # 交互式填写
   python configure.py -s MyWiFi -p 12345678
-  python configure.py -s MyWiFi -p 12345678 -b 192.168.1.100:8080
+  python configure.py -s MyWiFi -p 12345678 -b 192.168.1.100:27777
 """
 
 from __future__ import annotations
@@ -50,11 +50,15 @@ def check_bridge(ip: str, port: int) -> tuple[bool, str]:
         return False, str(e)
 
 
+# 与服务端 server/api_server.py 的 DEFAULT_PORT、固件 BRIDGE_BASE 保持一致
+DEFAULT_PORT = 27777
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="配置 WorkBuddy 看板固件")
     ap.add_argument("-s", "--ssid", help="WiFi 名称")
     ap.add_argument("-p", "--password", help="WiFi 密码")
-    ap.add_argument("-b", "--bridge", help="bridge 地址，如 192.168.1.100:8080")
+    ap.add_argument("-b", "--bridge", help="bridge 地址，如 192.168.1.100:27777")
     args = ap.parse_args()
 
     ssid = args.ssid or input("WiFi 名称 (SSID): ").strip()
@@ -73,12 +77,12 @@ def main() -> int:
         ip = detect_lan_ip()
         if ip:
             print(f"[i] 检测到本机局域网 IP: {ip}")
-            bridge = f"{ip}:8080"
+            bridge = f"{ip}:{DEFAULT_PORT}"
         else:
             bridge = input("bridge 地址 (IP:端口): ").strip()
 
     host, _, port_s = bridge.partition(":")
-    port = int(port_s or 8080)
+    port = int(port_s or DEFAULT_PORT)
 
     # 校验 bridge 是否真的在跑，避免刷完固件才发现连不上
     ok, detail = check_bridge(host, port)

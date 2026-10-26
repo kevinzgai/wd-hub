@@ -11,7 +11,7 @@
 
 启动：
     py -m server.api_server
-    py -m server.api_server --port 8080 --refresh 2
+    py -m server.api_server --port 27777 --refresh 2
 """
 
 from __future__ import annotations
@@ -58,6 +58,13 @@ else:
 
 VERSION = "1.0.0"
 log = logging.getLogger("board.api")
+
+# 默认端口。刻意不用 8080（开发机上太容易撞车）。
+# 改这个值必须同步改三处：
+#   firmware/main/main.cpp 的 BRIDGE_BASE
+#   start-board.bat         里的 netstat 检查与 --port
+#   configure.py            里的默认端口
+DEFAULT_PORT = 27777
 
 # 固件 HTTP_BUF_SIZE = 4096，超了会被静默截断 → JSON 不完整 → 解析出脏数据
 FIRMWARE_MAX_BYTES = 4096
@@ -558,7 +565,9 @@ def lan_ips() -> list[str]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="WorkBuddy 看板数据服务")
-    ap.add_argument("--port", type=int, default=8080)
+    # 27777 是刻意挑的：8080 太常见，容易和别的开发服务撞车。
+    # 改这里必须同步改固件 BRIDGE_BASE、start-board.bat、configure.py。
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--refresh", type=float, default=2.0, help="采集周期（秒）")
     args = ap.parse_args()
