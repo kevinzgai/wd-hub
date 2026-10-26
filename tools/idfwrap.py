@@ -112,7 +112,11 @@ def main():
     if script_dir not in sys.path:
         sys.path.insert(0, script_dir)
 
-    os.chdir(IDF_PATH)
+    # ⚠️ 不要 chdir 到 IDF_PATH。
+    # idf.py 把**当前工作目录**当作项目根，切到 IDF_PATH 后会报
+    # "Current directory is not buildable"。保持调用者的 cwd，
+    # 也就是在 firmware/ 下运行即可正确找到 CMakeLists.txt。
+    # （旧版本这里 chdir 过，导致 build/flash 全部失败。）
     runpy.run_path(script, run_name="__main__")
 
 
