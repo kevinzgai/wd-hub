@@ -1496,7 +1496,7 @@ static void fetch_task(void *arg)
     accum_t acc = { s_http_buf, 0, HTTP_BUF_SIZE };
 
     esp_http_client_config_t cfg = {};
-    cfg.url        = BRIDGE_BASE BRIDGE_PATH_MAIN;
+    cfg.url        = wifi_mgr_svr_base();   /* 初值；每轮循环都会按当前地址重设 */
     cfg.method     = HTTP_METHOD_GET;
     cfg.event_handler = http_event_cb;
     cfg.user_data  = &acc;
@@ -1510,16 +1510,26 @@ static void fetch_task(void *arg)
     }
 
     int fails = 0;
+    uint32_t base_ver = wifi_mgr_svr_version();
 
     while (1) {
-        // 每轮都重新读屏号：按钮随时可能切屏，URL 必须跟着换。
-        // 第 0 屏是概览（/status），其余屏按需拉 /screen/<i>。
+        // WiFi 不通就别拉了。这时 HTTP 只会超时（一次 5 秒）并且把失败计数
+        // 算到服务端头上 —— 屏幕会误弹"改服务地址"。等连上再说。
+        if (wifi_mgr_state() != WIFI_ST_CONNECTED) {
+            wifi_mgr_svr_reset();
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
+            continue;
+        }
+
+        // 每轮都重新读屏号和**服务地址**：按钮随时可能切屏，配置页也随时
+        // 可能改地址 —— 两者都不需要重启固件，下一轮就生效。
         int req_page = s_page;
+        const char *base = wifi_mgr_svr_base();
         char url[96];
         if (req_page == 0) {
-            snprintf(url, sizeof(url), "%s%s", BRIDGE_BASE, BRIDGE_PATH_MAIN);
+            snprintf(url, sizeof(url), "%s%s", base, BRIDGE_PATH_MAIN);
         } else {
-            snprintf(url, sizeof(url), "%s/screen/%d", BRIDGE_BASE, req_page);
+            snprintf(url, sizeof(url), "%s/screen/%d", base, req_page);
         }
         esp_http_client_set_url(client, url);
 
@@ -1535,6 +1545,10 @@ static void fetch_task(void *arg)
         board_data_t parsed = {};
         parsed.page = req_page;                 // 标记这批数据属于哪一屏
         bool got = (err == ESP_OK && status == 200 && acc.len > 0);
+
+        // 服务地址对不对是 wifi_mgr 管的账：连续拉不到就会开放配置页 +
+        // 让屏幕弹提示；拉通一次就把提示收回去、页面关掉。
+        wifi_mgr_svr_report(got);
 
         if (got) {
             parse_into(&parsed, s_http_buf);
@@ -1590,7 +1604,15 @@ static void fetch_task(void *arg)
         }
 
         // 用通知代替死等：切屏时 xTaskNotifyGive 会让它立刻醒来换 URL
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(fails > 3 ? 15000 : POLL_INTERVAL_MS));
+        uint32_t wait = (fails > 3) ? 15000 : POLL_INTERVAL_MS;
+        // 服务地址刚被改过：别等这一轮走完，300ms 后立刻按新地址重试，
+        // 否则用户改完地址要干等十几秒才看到屏幕提示消失。
+        uint32_t ver = wifi_mgr_svr_version();
+        if (ver != base_ver) {
+            base_ver = ver;
+            wait = 300;
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait));
     }
 }
 
@@ -1974,6 +1996,10 @@ extern "C" void app_main(void)
     // "任务完成"事件就能响，不会因为还在连 WiFi 而静音。
     // 失败不影响主流程（内部只打日志、不 abort）。
     audio_init();
+
+    /* 编译期 BRIDGE_BASE 只当"一次都没配过"时的初值。
+     * NVS 里配过就以 NVS 为准 —— 电脑换 IP 在配置页改一下就行，不用重烧。 */
+    wifi_mgr_set_default_base(BRIDGE_BASE);
 
     wifi_mgr_begin();
     time_init();
