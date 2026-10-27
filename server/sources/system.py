@@ -16,6 +16,21 @@ except ImportError:
 START_TS = time.time()
 
 
+def _system_drive() -> str:
+    """系统盘根目录（Windows 上是 "C:\\"）。
+
+    ⚠ 原来用 os.path.abspath(os.sep) —— 那是"**当前工作目录**所在盘的根"，
+    不是系统盘。从 D 盘启动服务时会显示 D 盘的占用，而用户想看的是 C 盘。
+
+    Windows：用 SystemDrive 环境变量（几乎总是 "C:"）。
+    其它平台：根目录 "/" 就是系统盘。
+    """
+    if os.name == "nt":
+        drive = os.environ.get("SystemDrive") or "C:"
+        return drive + "\\" if not drive.endswith("\\") else drive
+    return "/"
+
+
 def system_stat() -> dict[str, Any]:
     if not _HAS_PSUTIL:
         return {"cpu": 0.0, "mem": 0.0, "disk": 0.0, "temp": 0, "proc": 0,
@@ -25,8 +40,7 @@ def system_stat() -> dict[str, Any]:
     mem = float(psutil.virtual_memory().percent)
 
     try:
-        root = os.path.abspath(os.sep)
-        disk = float(psutil.disk_usage(root).percent)
+        disk = float(psutil.disk_usage(_system_drive()).percent)
     except Exception:
         disk = 0.0
 

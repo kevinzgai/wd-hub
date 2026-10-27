@@ -90,13 +90,35 @@ def _to_ms(v):
 
     毫秒精度已足够，取整即可。Pydantic 对 int 字段遇到浮点会直接抛校验错，
     这里统一兜住，避免接口 500。
+
+    用在**非 Optional** 的 int 字段上：取不到就兜 0，保证接口不 500。
     """
-    if v is None or isinstance(v, int):
-        return v or 0
+    if v is None:
+        return 0
+    if isinstance(v, int):
+        return v
     try:
         return int(float(v))
     except (TypeError, ValueError):
         return 0
+
+
+def _to_ms_opt(v):
+    """Optional 时间戳的版本：None 原样保留。
+
+    ⚠ 不能复用 _to_ms —— 它把 None 兜成 0。
+    AutomationItem.next_run_at / last_run_at 是 Optional[int]，
+    "还没排期"和"1970-01-01"是两回事：兜成 0 会让前端把没排期的
+    自动化显示成 1970 年，用户以为排错了。
+    """
+    if v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
 
 
 class SessionItem(BaseModel):
@@ -213,7 +235,7 @@ class AutomationItem(BaseModel):
     running: bool = False
     recent_runs: list[AutomationRun] = Field(default_factory=list)
 
-    _round_ts = field_validator("next_run_at", "last_run_at", mode="before")(_to_ms)
+    _round_ts = field_validator("next_run_at", "last_run_at", mode="before")(_to_ms_opt)
 
 
 class AutomationListResponse(BaseModel):

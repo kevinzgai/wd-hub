@@ -12,9 +12,16 @@ import os
 import re
 import time
 from typing import Any, Optional
+from urllib.parse import unquote
 
 from . import ledger
 from .db import ARTIFACT_DIR, CHANGES_DIR, TASKS_DIR, SourceError, local_midnight_ms
+
+# ⚠ 顶层导入，不要放函数内。
+# models.py 只依赖 re/typing/pydantic，不 import sources —— 没有循环依赖。
+# 原来放在 _project_of() 和 activity_stat() 的函数体里（前者每个文件调用一次，
+# 后者在 for 循环体内 —— 每个文件都执行一次 import），纯属白扔性能。
+from ..models import is_sandbox_dir, project_name
 
 log = logging.getLogger("board.files")
 
@@ -241,8 +248,6 @@ def _project_of(path: str) -> Optional[str]:
       · 路径落在某个已知工作区根目录下 → 取它的下一级目录名（真实项目名）；
       · 路径落在 ~/WorkBuddy/<时间戳>/ 下 → 返回 None（沙箱没有项目名）。
     """
-    from ..models import is_sandbox_dir, project_name
-
     parts = [p for p in re.split(r"[\\/]+", path) if p]
     if not parts:
         return None
@@ -274,14 +279,31 @@ def activity_stat(date_str: Optional[str] = None) -> dict[str, Any]:
 
     项目名口径见上方说明：**按会话 id 关联 session.cwd** 优先，
     路径回退只在会话缺失时兜底。
+
+    ⚠ date_str 以前是摆设：过滤条件恒用 local_midnight_ms()（今天午夜），
+    传"昨天"进去返回的还是今天的数。现在按传入日期算窗口，
+    不传才用今天。
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     if not os.path.isdir(CHANGES_DIR):
         return {"date": date_str or datetime.now().strftime("%Y-%m-%d"),
                 "files": 0, "additions": 0, "deletions": 0, "projects": []}
 
-    midnight = local_midnight_ms()
+    if date_str:
+        try:
+            day = datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            log.warning("activity_stat: 日期格式不对 %r，按今天算", date_str)
+            day = datetime.now()
+        midnight = int(day.replace(hour=0, minute=0, second=0,
+                                   microsecond=0).timestamp() * 1000)
+        # 上界也要算，否则今天的改动会被算进"昨天"（只要过了午夜）
+        end = midnight + 24 * 3600 * 1000
+    else:
+        midnight = local_midnight_ms()
+        end = None
+
     files_set: set[str] = set()
     additions = deletions = 0
     projects: set[str] = set()
@@ -300,7 +322,6 @@ def activity_stat(date_str: Optional[str] = None) -> dict[str, Any]:
         cwd = cwds.get(conv_id)
         conv_project: Optional[str] = None
         if cwd:
-            from ..models import is_sandbox_dir, project_name
             # cwd 末级是时间戳 → 沙箱，没有真实项目名，交给路径回退
             last = [p for p in re.split(r"[\\/]+", cwd) if p]
             if last and not is_sandbox_dir(last[-1]):
@@ -311,6 +332,8 @@ def activity_stat(date_str: Optional[str] = None) -> dict[str, Any]:
                 continue
             ts = ch.get("createdAt") or 0
             if not isinstance(ts, (int, float)) or ts < midnight:
+                continue
+            if end is not None and ts >= end:
                 continue
             for f in ch.get("files") or []:
                 if not isinstance(f, dict):
@@ -335,6 +358,28 @@ def activity_stat(date_str: Optional[str] = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- 产物
+
+def _artifact_path(uri: str) -> str:
+    """把 artifact 的 uri 还原成本地路径。
+
+    ⚠ 不能只 replace("%3A", ":") / replace("%5C", "\\")。
+    那样只能还原盘符和反斜杠，剩下这些全还原不出来：
+        %20  空格          → "my report.html" 变成 "my%20report.html"
+        %E4%B8%AD  中文    → 一串百分号
+        %23  #             → 变成片段标识符
+    路径还原不出来 = 用户点了打不开 = 功能等于没有。
+
+    用 urllib.parse.unquote 一次性解全部转义，再去掉 file:/// 前缀。"""
+    if not uri:
+        return ""
+    p = uri
+    if p.startswith("file:///"):
+        p = p[len("file:///"):]
+    elif p.startswith("file://"):
+        p = p[len("file://"):]
+    # unquote 只解 %XX，不解 '+'（那是表单编码，不是路径编码）
+    return unquote(p)
+
 
 # 文件名 → (mtime_ns, 解析结果)。只重读变动的文件。
 _ARTIFACT_CACHE: dict[str, tuple[int, list[dict[str, Any]]]] = {}
@@ -377,7 +422,7 @@ def artifacts_list(limit: int = 20) -> tuple[int, list[dict[str, Any]]]:
                 uri = a.get("uri") or ""
                 rows.append({
                     "name": str(a.get("name") or ""),
-                    "path": uri.replace("file:///", "").replace("%3A", ":").replace("%5C", "\\"),
+                    "path": _artifact_path(uri),
                     "title": str(a.get("title") or a.get("name") or ""),
                     "mime": a.get("mimeType"),
                     "size": int(a.get("size") or 0),

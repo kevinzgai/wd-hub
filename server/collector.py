@@ -106,8 +106,22 @@ class Collector:
         """所有阻塞 IO 丢进线程池，别卡事件循环。"""
         new = await asyncio.to_thread(_collect_sync)
         async with self._lock:
-            # 采集整体失败时保留旧数据，只更新错误信息
-            if new.errors and not new.generated_at_ms:
+            # 采集整体失败时保留旧数据，只更新错误信息。
+            #
+            # ⚠ 判据必须是"有没有任何**业务**数据源成功"，不能用
+            # "generated_at_ms 是不是 0"。_collect_sync() 末尾无条件给
+            # generated_at_ms 赋值，那个条件恒为假，于是数据源全挂时反而会
+            # 走到下面这行，把屏上三格数字全刷成 0
+            # （注释说的"保留旧数据、屏幕不闪"从来没发生过）。
+            #
+            # "system" 不计入：它兜在 except Exception 里，几乎不会失败，
+            # 把它算进去会让判据在真正的故障时依然为真。
+            ok_count = sum(
+                1 for name, h in new.health.items()
+                if name != "system" and h.get("ok")
+            )
+            if new.errors and ok_count == 0:
+                # 业务源全军覆没：保留旧快照，只更新错误信息
                 self._snap.errors = new.errors
                 self._snap.health = new.health
                 return

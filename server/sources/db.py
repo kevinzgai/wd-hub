@@ -16,6 +16,10 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 
+# ⚠ 顶层导入，不要放函数内。
+# models.py 不 import sources —— 没有循环依赖。
+from ..models import project_name
+
 # ---------------------------------------------------------------- 路径
 
 WB_HOME = os.path.expanduser("~/.workbuddy")
@@ -72,8 +76,19 @@ def local_midnight_ms() -> int:
 
 # 状态是大小写混用的（实测同时有 completed/Completed、working/active），
 # 一律 LOWER() 归一；白名单外的状态一律不计数。
+#
+# ⚠ 这个常量以前定义了却没人用，查询里全写的是字面量 'working','active'。
+# 两处各写一遍，改了一处忘了另一处 = 静默统计错误。
+# 现在统一用它生成 SQL 片段。
 WORKING_STATES = ("working", "active")
 ACTIVE_WINDOW_MS = 30 * 60 * 1000
+
+# 拼成 "LOWER(status) IN ('working','active')"
+_WORKING_IN = "LOWER(status) IN (%s)" % ",".join("'%s'" % s for s in WORKING_STATES)
+
+# 会话扫描上限。sessions_recent() 要在内存里按项目名筛，SQL 做不了，
+# 所以得把候选行拉回来 —— 但不能无限拉。
+SCAN_CAP = 2000
 
 
 def sessions_working() -> int:
@@ -86,8 +101,8 @@ def sessions_working() -> int:
     """
     now = int(time.time() * 1000)
     rows = _query(
-        """SELECT COUNT(*) FROM sessions
-           WHERE LOWER(status) IN ('working','active')
+        f"""SELECT COUNT(*) FROM sessions
+           WHERE {_WORKING_IN}
              AND deleted_at IS NULL
              AND (is_background_automation IS NULL OR is_background_automation = 0)
              AND last_activity_at >= ?""",
@@ -105,7 +120,7 @@ def sessions_active(limit: int = 20, include_background: bool = False) -> list[d
         f"""SELECT id, title, custom_title, cwd, status, model,
                    last_activity_at, is_background_automation
             FROM sessions
-            WHERE LOWER(status) IN ('working','active')
+            WHERE {_WORKING_IN}
               AND deleted_at IS NULL
               AND last_activity_at >= ?
               {cond_bg}
@@ -116,15 +131,39 @@ def sessions_active(limit: int = 20, include_background: bool = False) -> list[d
     return [dict(r) for r in rows]
 
 
+def sessions_active_total(include_background: bool = False) -> int:
+    """活跃会话**总条数**（不受 limit 影响）。
+
+    ⚠ sessions_active() 带 LIMIT，返回条数最多等于 limit。
+    直接拿 len(rows) 当 total 的话，前端算分页会永远只看到一页
+    —— 翻页翻到底还是那些数据。这里单独查一次总数。
+    """
+    now = int(time.time() * 1000)
+    cond_bg = "" if include_background else \
+        "AND (is_background_automation IS NULL OR is_background_automation = 0)"
+    rows = _query(
+        f"""SELECT COUNT(*) FROM sessions
+            WHERE {_WORKING_IN}
+              AND deleted_at IS NULL
+              AND last_activity_at >= ?
+              {cond_bg}""",
+        (now - ACTIVE_WINDOW_MS,),
+    )
+    return int(rows[0][0]) if rows else 0
+
+
 def sessions_recent(limit: int = 20, state: Optional[str] = None,
                     project: Optional[str] = None) -> tuple[int, list[dict[str, Any]]]:
     """会话分页（不限于活跃窗口），用于 /api/v1/sessions。
 
     project 过滤只能在内存里做：cwd 末级目录要同时处理 `\\` 和 `/` 两种分隔符，
     SQL 里没有可移植的做法。项目数量是几十级，全量取回再筛没有性能问题。
-    """
-    from ..models import project_name       # 放函数内避免包初始化时的循环导入
 
+    ⚠ 但"全量"要有上界。原实现没有 LIMIT，会把整张 sessions 表拉回内存
+    （实测 100+ 条，将来上千条就是几 MB 的字典列表，每次请求都重来一遍）。
+    这里加 SCAN_CAP 兜住 —— 超过上限时 total 只能反映扫过的部分，
+    这是有意的取舍：宁可 total 略偏，也不要让一次请求吃光内存。
+    """
     where = ["deleted_at IS NULL"]
     params: list[Any] = []
     if state:
@@ -136,8 +175,9 @@ def sessions_recent(limit: int = 20, state: Optional[str] = None,
         f"""SELECT id, title, custom_title, cwd, status, model,
                    last_activity_at, is_background_automation
             FROM sessions WHERE {clause}
-            ORDER BY last_activity_at DESC""",
-        tuple(params),
+            ORDER BY last_activity_at DESC
+            LIMIT ?""",
+        tuple(params) + (SCAN_CAP,),
     )
     items = [dict(r) for r in rows]
     if project:
@@ -199,14 +239,29 @@ def automations_list() -> list[dict[str, Any]]:
     )
     running = {r["automation_id"] for r in
                _query("SELECT automation_id FROM automation_runtime_state WHERE running = 1")}
+
+    # ⚠ 不要在循环里逐个查最近运行 —— 那是 N+1 查询：
+    # 5 个自动化 = 5 次建连 + 5 次查询，而连接每次都要开关（见文件头说明）。
+    # 改成一次 IN 查询全部，再在内存里分组。
+    runs_by_auto: dict[str, list[Any]] = {}
+    if autos:
+        ids = [a["id"] for a in autos if a["id"]]
+        if ids:
+            # 参数占位符按数量生成，避免拼字符串注入
+            marks = ",".join("?" * len(ids))
+            all_runs = _query(
+                f"""SELECT automation_id, thread_id, status, result_success, created_at
+                    FROM automation_runs
+                    WHERE automation_id IN ({marks})
+                    ORDER BY automation_id, created_at DESC""",
+                tuple(ids),
+            )
+            for r in all_runs:
+                runs_by_auto.setdefault(r["automation_id"], []).append(r)
+
     out = []
     for a in autos:
-        runs = _query(
-            """SELECT thread_id, status, result_success, created_at
-               FROM automation_runs WHERE automation_id = ?
-               ORDER BY created_at DESC LIMIT 5""",
-            (a["id"],),
-        )
+        runs = runs_by_auto.get(a["id"], [])[:5]
         item = dict(a)
         item["running"] = a["id"] in running
         item["recent_runs"] = [
