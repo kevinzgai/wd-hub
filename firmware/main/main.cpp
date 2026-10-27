@@ -180,11 +180,45 @@ static void utf8_sanitize(const lv_font_t *font, const char *in, char *out, size
 #define TEXT_ROW     40        // 行主文本，16px 字体约 13 个中文
 #define TEXT_ROWVAL  16        // 右侧数值，12px 字体
 
+// 图表屏：服务端下发 kind="chart" + charts 数组，固件画成环形仪表。
+// 3 个是屏幕宽度决定的 —— 62px 环 × 3 + 间距 11 × 2 = 208，刚好落在 224 的
+// 内容区里。想加第四个环只能缩到 46px，内径装不下 "100%"。
+#define MAX_CHARTS   3
+// 屏号上限，只为 s_page_is_chart[] 定长。服务端 nscr 目前 5，
+// 留一倍余量，真加到 8 屏也不用改这里。
+#define MAX_PAGES    8
+
+// 图表屏几何。三个环横排：16 + 62×3 + 73×2 的间距算法实际是
+// x = 16 / 89 / 162，最右到 224，左右各留 16 边距，视觉居中。
+// 环心 y = 87 + 31 = 118，和设计稿一致。
+#define CHART_ARC_SIZE   62
+#define CHART_ARC_WIDTH   7
+#define CHART_ARC_X0     16
+#define CHART_ARC_STEP   73
+#define CHART_ARC_Y      87
+#define CHART_LABEL_Y   156     // 环下名称
+#define CHART_FOOT_Y    185     // 底部进程/运行
+
+// 环内百分比的视觉居中补偿（详见控件创建处的推导）。
+// 量的来源是 font_cn_16.c 的字形度量，不是目测。
+// 垂直 -1：墨迹中心比行框中心低 0.5px（line_height=20, base_line=4, box_h=12），
+//          往回补 0.5px，LVGL 取整为 -1。
+// 水平  0：数字与 '%' 的 ofs_x 抵消，整串墨迹重心与行框中心重合（偏差 ≤0.5px）。
+#define CHART_VALUE_DX   0
+#define CHART_VALUE_DY  (-1)
+
 typedef struct {
     char    t[TEXT_ROW];
     char    v[TEXT_ROWVAL];
     uint8_t color;             // 0 普通 / 1 强调蓝 / 2 成功绿 / 3 警告黄 / 4 暗灰
 } row_t;
+
+typedef struct {
+    char    k[8];              // 指标键 cpu/mem/disk，仅用于日志和调试
+    char    n[12];             // 环下名称（服务端给中文，固件不认语义）
+    int     v;                 // 0..100
+    uint8_t color;             // 1 蓝 / 2 绿 / 3 黄 / 5 红
+} chart_t;
 
 typedef struct {
     char    title[TEXT_TITLE];
@@ -212,6 +246,14 @@ typedef struct {
     char      page_title[24];
     row_t     rows[MAX_ROWS];
     int       row_count;
+    // ---- 图表屏（服务端 kind="chart" 时才非空）----
+    // rows 与 charts 并存：旧服务端只发 rows，新服务端两者都发。
+    // 固件优先 charts，charts 为空就退回文本行，两边都能显示。
+    chart_t   charts[MAX_CHARTS];
+    int       chart_count;
+    bool      is_chart;
+    char      foot[2][24];  // 图表屏底部两行成品文本（进程 / 运行时长）
+    int       foot_count;
     int       nscr;         // 服务端下发的屏数（含概览屏）
     int       page;         // 这批数据属于第几屏，用于丢弃"切页前发出的请求"的回包
     // 本地单调时钟在这批数据被解析时的读数（ms）。会话计时靠它做锚点：
@@ -260,6 +302,21 @@ static lv_obj_t *s_pg_list;        // 第 1..N-1 屏：标题 + 6 行
 static lv_obj_t *s_lbl_page;       // 详情屏标题
 static lv_obj_t *s_lbl_row_t[MAX_ROWS];
 static lv_obj_t *s_lbl_row_v[MAX_ROWS];
+
+// 图表屏（系统资源）：三个环形仪表 + 名称 + 底部进程/运行
+static lv_obj_t *s_pg_chart;
+static lv_obj_t *s_lbl_chart_title;           // 页标题，和列表屏同位置
+static lv_obj_t *s_arc_chart[MAX_CHARTS];
+static lv_obj_t *s_lbl_chart_v[MAX_CHARTS];   // 环内百分比
+static lv_obj_t *s_lbl_chart_k[MAX_CHARTS];   // 环下名称
+static lv_obj_t *s_lbl_chart_l;               // 底部左：进程
+static lv_obj_t *s_lbl_chart_r;               // 底部右：运行时长
+
+// 哪几屏是图表屏。服务端只告诉固件"这一屏 kind=chart"，
+// 切屏时还不知道类型 —— 首次切过去先按文本渲染，收到数据后记住，
+// 以后切回来直接画图表，不会闪。开机第一次切系统屏能看到约一次
+// HTTP 往返（<1s）的文本版，可以接受。
+static bool s_page_is_chart[MAX_PAGES];
 
 static volatile int s_page    = 0; // 当前屏号，按键切换
 static volatile int s_page_req = -1; // 按键写入的切屏请求，由 LVGL 任务消费
@@ -589,6 +646,9 @@ static const struct {
 static void pet_apply_frame(void)
 {
     if (!s_pet_img) return;
+    // 隐藏时不换帧：lv_image_set_src 会触发重绘，图表屏上宠物不可见，
+    // 白刷一次 SPI 没有任何意义。
+    if (lv_obj_has_flag(s_pet_img, LV_OBJ_FLAG_HIDDEN)) return;
     // 帧表排布 pet_frames[state * PET_FRAMES_EACH + frame]
     const lv_image_dsc_t *dsc =
         &pet_frames[s_pet_state * PET_FRAMES_EACH + s_pet_frame];
@@ -913,6 +973,91 @@ static void ui_build(void)
         lv_obj_add_flag(s_lbl_row_v[i], LV_OBJ_FLAG_HIDDEN);
     }
 
+    // ---- 图表屏：三个环形仪表 ----
+    // 只在服务端给 kind="chart" 时显示。控件常驻、切页只改可见性，
+    // 和列表屏同一套路 —— 每次切屏重建控件会闪白。
+    s_pg_chart = mk_page(scr);
+    lv_obj_add_flag(s_pg_chart, LV_OBJ_FLAG_HIDDEN);
+
+    s_lbl_chart_title = mk_label(s_pg_chart, &font_cn_16, COL_ACCENT,
+                                 LV_ALIGN_TOP_LEFT, 8, 42);
+    lv_label_set_text(s_lbl_chart_title, "");
+    lv_obj_set_width(s_lbl_chart_title, 200);
+    lv_label_set_long_mode(s_lbl_chart_title, LV_LABEL_LONG_DOT);
+    mk_hline(s_pg_chart, 66);
+
+    for (int i = 0; i < MAX_CHARTS; i++) {
+        lv_obj_t *arc = lv_arc_create(s_pg_chart);
+        lv_obj_set_size(arc, CHART_ARC_SIZE, CHART_ARC_SIZE);
+        lv_obj_set_pos(arc, CHART_ARC_X0 + i * CHART_ARC_STEP, CHART_ARC_Y);
+        // 和电量弧踩过的是同一组坑：整圈只能 (0,360)，起点靠 rotation 转到 12 点
+        lv_arc_set_bg_angles(arc, 0, 360);
+        lv_arc_set_rotation(arc, 270);
+        lv_arc_set_range(arc, 0, 100);
+        lv_arc_set_value(arc, 0);
+        lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
+        lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_arc_width(arc, CHART_ARC_WIDTH, LV_PART_MAIN);
+        lv_obj_set_style_arc_width(arc, CHART_ARC_WIDTH, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(arc, COL_DIM, LV_PART_MAIN);
+        // 底色是纯黑，OPA_50 的灰轨刚好能看出"未填满的半圈"
+        lv_obj_set_style_arc_opa(arc, LV_OPA_50, LV_PART_MAIN);
+        // 方头，不能用圆头（rounded=true）。
+        //
+        // LVGL 的 rounded 不是"把端点切圆"，而是把指示弧的**两端各延长
+        // 线宽的一半**（7px/2 = 3.5px）再切圆 —— 用来做圆头针脚。
+        // 副作用是弧的起点从 12 点前移到 11 点方向，终点也多出一截。
+        // 实测 86% 的磁盘环上，12 点处出现黄蓝交错的锯齿带，很难看。
+        // 方头则严格从 12 点画起，起点位置和百分比严格对应。
+        lv_obj_set_style_arc_rounded(arc, false, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(arc, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(arc, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(arc, 0, LV_PART_MAIN);
+        s_arc_chart[i] = arc;
+
+        // 环内百分比。16px 字体下 "100%" 行框 38px，内径 48px 装得下。
+        //
+        // 居中补偿量是**算出来的**，不是试出来的。LVGL 的
+        // lv_obj_align_to(CENTER) 对齐的是**行框**，而人眼判断的是**墨迹**，
+        // 两者差多少取决于字体字形度量。解析 font_cn_16.c 的 glyph_dsc 得到：
+        //
+        //   数字 0-9: adv=8, box_w=9, ofs_x=0, ofs_y=0
+        //   '%'    : adv=14, box_w=13, ofs_x=1, ofs_y=0
+        //
+        // 水平：数字 ofs_x=0、'%' ofs_x=0，"86%" 整串墨迹重心与行框中心重合
+        //       （解析 glyph_dsc 算出的偏差是 0.00px）→ 不补偿。
+        //
+        // 垂直：line_height=20, base_line=4，数字 box_h=12, ofs_y=0
+        //       墨迹顶 = (20-4) - 12 - 0 = 4，墨迹底 = 16
+        //       墨迹中心 10，行框中心 (20-1)/2 = 9.5 → 墨迹偏**下** 0.5px
+        //       → 往回补 0.5px，LVGL 取整为 -1。
+        //
+        // 之前这里写的是 dy=+1（照抄电量的 BAT_LABEL_DY），方向正好反了，
+        // 数字整体下沉 1.5px，看着就"不在环中间"。
+        s_lbl_chart_v[i] = lv_label_create(s_pg_chart);
+        lv_obj_set_style_text_font(s_lbl_chart_v[i], &font_cn_16, 0);
+        lv_obj_set_style_text_color(s_lbl_chart_v[i], COL_TEXT, 0);
+        lv_label_set_text(s_lbl_chart_v[i], "--");
+        lv_obj_align_to(s_lbl_chart_v[i], arc, LV_ALIGN_CENTER,
+                        CHART_VALUE_DX, CHART_VALUE_DY);
+
+        // 环下名称，宽度跟环一致 + 居中，否则"内存"两个字会偏左
+        s_lbl_chart_k[i] = mk_label(s_pg_chart, &font_cn_12, COL_DIM,
+                                    LV_ALIGN_TOP_LEFT,
+                                    CHART_ARC_X0 + i * CHART_ARC_STEP,
+                                    CHART_LABEL_Y);
+        lv_label_set_text(s_lbl_chart_k[i], "");
+        lv_obj_set_width(s_lbl_chart_k[i], CHART_ARC_SIZE);
+        lv_obj_set_style_text_align(s_lbl_chart_k[i], LV_TEXT_ALIGN_CENTER, 0);
+    }
+
+    s_lbl_chart_l = mk_label(s_pg_chart, &font_cn_12, COL_DIM,
+                             LV_ALIGN_TOP_LEFT, 8, CHART_FOOT_Y);
+    lv_label_set_text(s_lbl_chart_l, "");
+    s_lbl_chart_r = mk_label(s_pg_chart, &font_cn_12, COL_DIM,
+                             LV_ALIGN_TOP_RIGHT, -8, CHART_FOOT_Y);
+    lv_label_set_text(s_lbl_chart_r, "");
+
     // 黄灯闪烁：500ms 一个相位，只动透明度不动颜色（颜色变化会触发重排）
     lv_timer_create(blink_timer_cb, 500, NULL);
 
@@ -1012,6 +1157,20 @@ static lv_color_t row_color(uint8_t c)
         case 3:  return COL_WARN;
         case 4:  return COL_DIM;
         default: return COL_TEXT;
+    }
+}
+
+// 图表色板。和 row_color 的区别只有一个：扩了 5 = 红。
+// 文本行的 4 是灰（"无数据"），图表要的是"正常色 → 危险色"两档，
+// 灰色放进度条上等于没填，所以单独开一个码，不去动 row_color 的既有含义。
+static lv_color_t chart_color(uint8_t c)
+{
+    switch (c) {
+        case 1:  return COL_ACCENT;
+        case 2:  return COL_OK;
+        case 3:  return COL_WARN;
+        case 5:  return COL_ERR;
+        default: return COL_DIM;
     }
 }
 
@@ -1179,6 +1338,83 @@ static void ui_render_list(const board_data_t *d)
     }
 }
 
+// 图表屏的判等缓存。
+//
+// 和列表屏同一个理由：ui_render 每帧都跑，每次都 set_value/set_text 会一直
+// 触发重绘把 SPI 占满，而这三个数 5 秒才变一次。分开存 value / color /
+// 名称，是为了让"只有颜色变了"这种更新也能命中，不用连带重设数字。
+static int     s_chart_v_cache[MAX_CHARTS]       = { -1, -1, -1 };
+static uint8_t s_chart_c_cache[MAX_CHARTS]       = { 0xFF, 0xFF, 0xFF };
+static char    s_chart_n_cache[MAX_CHARTS][12];
+static char    s_chart_title_cache[24];
+static char    s_chart_f1_cache[24];
+static char    s_chart_f2_cache[24];
+
+// 图表屏主体：三个环形仪表 + 环下名称 + 底部进程/运行。
+//
+// 名称由服务端下发（"CPU"/"内存"/"磁盘"），固件不认识指标语义 ——
+// 想换指标、换叫法、换顺序，只改服务端。
+static void ui_render_chart(const board_data_t *d)
+{
+    char tb[24];
+    utf8_sanitize(&font_cn_16, d->page_title, tb, sizeof(tb));
+    if (strcmp(tb, s_chart_title_cache) != 0) {
+        strncpy(s_chart_title_cache, tb, sizeof(s_chart_title_cache) - 1);
+        s_chart_title_cache[sizeof(s_chart_title_cache) - 1] = '\0';
+        lv_label_set_text(s_lbl_chart_title, tb);
+    }
+
+    for (int i = 0; i < MAX_CHARTS; i++) {
+        if (i >= d->chart_count) {
+            lv_obj_add_flag(s_arc_chart[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_lbl_chart_v[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_lbl_chart_k[i], LV_OBJ_FLAG_HIDDEN);
+            s_chart_v_cache[i]   = -1;
+            s_chart_c_cache[i]   = 0xFF;
+            s_chart_n_cache[i][0] = '\0';
+            continue;
+        }
+        lv_obj_clear_flag(s_arc_chart[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_lbl_chart_v[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_lbl_chart_k[i], LV_OBJ_FLAG_HIDDEN);
+
+        if (s_chart_v_cache[i] != d->charts[i].v) {
+            s_chart_v_cache[i] = d->charts[i].v;
+            lv_arc_set_value(s_arc_chart[i], d->charts[i].v);
+            lv_label_set_text_fmt(s_lbl_chart_v[i], "%d%%", d->charts[i].v);
+        }
+        if (s_chart_c_cache[i] != d->charts[i].color) {
+            s_chart_c_cache[i] = d->charts[i].color;
+            lv_color_t cc = chart_color(s_chart_c_cache[i]);
+            lv_obj_set_style_arc_color(s_arc_chart[i], cc, LV_PART_INDICATOR);
+            // 环内数字跟着变色：88% 是白的，91% 直接变红，扫一眼就知道
+            lv_obj_set_style_text_color(s_lbl_chart_v[i], cc, 0);
+        }
+
+        char nb[12];
+        utf8_sanitize(&font_cn_12, d->charts[i].n, nb, sizeof(nb));
+        if (strcmp(nb, s_chart_n_cache[i]) != 0) {
+            strncpy(s_chart_n_cache[i], nb, sizeof(s_chart_n_cache[i]) - 1);
+            s_chart_n_cache[i][sizeof(s_chart_n_cache[i]) - 1] = '\0';
+            lv_label_set_text(s_lbl_chart_k[i], nb);
+        }
+    }
+
+    char f1[24], f2[24];
+    utf8_sanitize(&font_cn_12, d->foot[0], f1, sizeof(f1));
+    utf8_sanitize(&font_cn_12, d->foot[1], f2, sizeof(f2));
+    if (strcmp(f1, s_chart_f1_cache) != 0) {
+        strncpy(s_chart_f1_cache, f1, sizeof(s_chart_f1_cache) - 1);
+        s_chart_f1_cache[sizeof(s_chart_f1_cache) - 1] = '\0';
+        lv_label_set_text(s_lbl_chart_l, f1);
+    }
+    if (strcmp(f2, s_chart_f2_cache) != 0) {
+        strncpy(s_chart_f2_cache, f2, sizeof(s_chart_f2_cache) - 1);
+        s_chart_f2_cache[sizeof(s_chart_f2_cache) - 1] = '\0';
+        lv_label_set_text(s_lbl_chart_r, f2);
+    }
+}
+
 // 切页瞬间清空详情屏：否则会闪一下上一屏的内容。缓存也要一起清，
 // 不然新数据和旧缓存"相等"，label 就永远停在空白状态。
 static void ui_list_reset(void)
@@ -1197,6 +1433,21 @@ static void ui_list_reset(void)
 }
 
 // 切换屏幕：只切容器可见性，不销毁控件
+// 宠物精灵要不要显示。
+//
+// 宠物是浮在全屏底层的 120x96 元素，占 x=124..243 / y=148..243 ——
+// 也就是屏幕的右下四分之一。图表屏的第三个环（磁盘，x=162..223）和
+// 底部两行（"进程/运行"，y=185）全都落在这个范围里，宠物会压住它们：
+// 实测"磁盘"标签和"运行 77m03s"被猫身糊掉，页脚时间也被压得看不清。
+//
+// 图表屏是纯数据面板，宠物（表情=工作状态）在这一屏没有语义价值，
+// 藏掉它换文字可读性是划算的。概览屏/列表屏保持原样。
+static bool pet_should_show(void)
+{
+    if (s_page <= 0 || s_page >= MAX_PAGES) return true;
+    return !s_page_is_chart[s_page];
+}
+
 static void page_apply(int page)
 {
     if (s_nscr < 1) s_nscr = 1;
@@ -1205,13 +1456,34 @@ static void page_apply(int page)
 
     s_page = page;
 
+    // 三个容器先全部隐藏再点亮一个。只显示不隐藏的话，从图表屏切回列表屏
+    // 会两层叠着画 —— 图表是透明底的，底下的字会透上来。
+    lv_obj_add_flag(s_pg_main,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_pg_list,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_pg_chart, LV_OBJ_FLAG_HIDDEN);
+
     if (page == 0) {
         lv_obj_clear_flag(s_pg_main, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_pg_list, LV_OBJ_FLAG_HIDDEN);
+    } else if (page < MAX_PAGES && s_page_is_chart[page]) {
+        lv_obj_clear_flag(s_pg_chart, LV_OBJ_FLAG_HIDDEN);
     } else {
+        // 类型还不知道（首次切到该屏）或本来就是文本屏，都先按列表渲染。
+        // 数据一到，ui_render 发现 kind=chart 会立刻切到图表容器。
         ui_list_reset();
-        lv_obj_add_flag(s_pg_main, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_pg_list, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // 切屏后立刻同步宠物的可见性。图表屏藏宠物，避免它压住环下标签。
+    if (s_pet_img) {
+        if (pet_should_show()) {
+            lv_obj_clear_flag(s_pet_img, LV_OBJ_FLAG_HIDDEN);
+            // 图表屏期间 pet_apply_frame 是跳过的（省 SPI），切回来时
+            // 图像源可能停在隐藏前的那一帧。补一次刷新，让表情立刻对上
+            // 当前状态，而不是等下一个换帧周期。
+            pet_apply_frame();
+        } else {
+            lv_obj_add_flag(s_pet_img, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
     // 叫醒拉取任务立刻换 URL 重拉，不等下一个 5 秒周期
@@ -1309,23 +1581,31 @@ static void ui_render(const board_data_t *d)
     lv_label_set_text(s_lbl_clock, d->clock);
     lv_label_set_text(s_lbl_date, d->date);
 
-    // ---- 页脚（两屏共用）----
+    // ---- 页脚（所有屏共用）----
     // 左：本机 CPU / 内存 / 磁盘占用。超阈值时整条变黄，
     // 12px 字号做不到逐段着色，整条变色足够提醒。
-    char sbuf[56];
-    if (d->cpu < 0) {
-        // 旧版服务端没下发这些字段，明确显示 -- 而不是假的 0%
-        snprintf(sbuf, sizeof(sbuf), "CPU --  MEM --");
+    //
+    // 图表屏例外：屏上已经有三个环，页脚再来一串
+    // "CPU 42%  MEM 68%  DSK 88%" 是同一份数据说两遍，还压在底部字上。
+    bool chart_page = (s_page > 0 && s_page < MAX_PAGES && s_page_is_chart[s_page]);
+    if (chart_page) {
+        lv_label_set_text(s_lbl_sys, "");
     } else {
-        int n = snprintf(sbuf, sizeof(sbuf), "CPU %d%%  MEM %d%%",
-                         d->cpu, d->mem);
-        if (d->disk >= 0 && n > 0 && n < (int)sizeof(sbuf) - 12) {
-            snprintf(sbuf + n, sizeof(sbuf) - n, "  DSK %d%%", d->disk);
+        char sbuf[56];
+        if (d->cpu < 0) {
+            // 旧版服务端没下发这些字段，明确显示 -- 而不是假的 0%
+            snprintf(sbuf, sizeof(sbuf), "CPU --  MEM --");
+        } else {
+            int n = snprintf(sbuf, sizeof(sbuf), "CPU %d%%  MEM %d%%",
+                             d->cpu, d->mem);
+            if (d->disk >= 0 && n > 0 && n < (int)sizeof(sbuf) - 12) {
+                snprintf(sbuf + n, sizeof(sbuf) - n, "  DSK %d%%", d->disk);
+            }
         }
+        lv_label_set_text(s_lbl_sys, sbuf);
+        bool hot = (d->cpu >= 85) || (d->mem >= 90);
+        lv_obj_set_style_text_color(s_lbl_sys, hot ? COL_WARN : COL_DIM, 0);
     }
-    lv_label_set_text(s_lbl_sys, sbuf);
-    bool hot = (d->cpu >= 85) || (d->mem >= 90);
-    lv_obj_set_style_text_color(s_lbl_sys, hot ? COL_WARN : COL_DIM, 0);
 
     char footer[24];
     snprintf(footer, sizeof(footer), "★ %s", d->clock);
@@ -1339,8 +1619,37 @@ static void ui_render(const board_data_t *d)
     // 这时只更新页头页脚，主体等下一轮，别把上一屏的字画到新屏上
     if (d->page != s_page) return;
 
-    if (s_page == 0) ui_render_overview(d);
-    else             ui_render_list(d);
+    // 服务端说这一屏是图表 → 记住类型并立刻换容器。
+    // 首次切到某屏时固件还不知道类型（page_apply 只能按文本渲染），
+    // 数据一到这里就切成图表；之后切回来直接走图表，不会闪。
+    if (s_page > 0 && s_page < MAX_PAGES && d->is_chart != s_page_is_chart[s_page]) {
+        s_page_is_chart[s_page] = d->is_chart;
+        if (d->is_chart) {
+            lv_obj_add_flag(s_pg_list, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(s_pg_chart, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_pg_chart, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(s_pg_list, LV_OBJ_FLAG_HIDDEN);
+        }
+        ESP_LOGI(TAG, ">>> 屏 %d 类型 -> %s", s_page, d->is_chart ? "图表" : "文本");
+
+        // 类型变了，宠物的可见性也得跟着变。
+        // 首次切到系统屏时固件还不知道它是图表屏（page_apply 先按文本渲染），
+        // 宠物这时是显示的；数据到、切成图表后必须补一次隐藏，
+        // 否则猫会一直压在"磁盘"标签和"运行 xx"上面。
+        if (s_pet_img) {
+            if (pet_should_show()) {
+                lv_obj_clear_flag(s_pet_img, LV_OBJ_FLAG_HIDDEN);
+                pet_apply_frame();
+            } else {
+                lv_obj_add_flag(s_pet_img, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
+
+    if (s_page == 0)                                        ui_render_overview(d);
+    else if (s_page < MAX_PAGES && s_page_is_chart[s_page]) ui_render_chart(d);
+    else                                                    ui_render_list(d);
 }
 
 // ===========================================================================
@@ -1479,6 +1788,36 @@ static void parse_into(board_data_t *d, const char *json)
         int c = json_int(sub, "c", 0);
         d->rows[i].color = (uint8_t)(c < 0 ? 0 : (c > 4 ? 4 : c));
         d->row_count++;
+    }
+
+    // ---- 图表屏：kind + charts 数组 + 底部两行 ----
+    // kind 缺失 = 老服务端，is_chart 保持 false，走文本渲染，不会白屏。
+    char kind[8];
+    d->is_chart = json_str(json, "kind", kind, sizeof(kind))
+                  && strcmp(kind, "chart") == 0;
+    if (d->is_chart) {
+        for (int i = 0; i < MAX_CHARTS; i++) {
+            const char *start = NULL, *end = NULL;
+            if (!json_nth_object(json, "charts", i, &start, &end)) break;
+
+            // charts 对象比 rows 小得多（约 40 字节），128 足够。
+            // 故意不用 512：这个数组每屏最多 3 个，省栈。
+            char sub[128];
+            size_t len = (size_t)(end - start) + 1;
+            if (len >= sizeof(sub)) len = sizeof(sub) - 1;
+            memcpy(sub, start, len);
+            sub[len] = '\0';
+
+            json_str(sub, "k", d->charts[i].k, sizeof(d->charts[i].k));
+            json_str(sub, "n", d->charts[i].n, sizeof(d->charts[i].n));
+            int v = json_int(sub, "v", 0);
+            d->charts[i].v = (v < 0) ? 0 : (v > 100 ? 100 : v);
+            int c = json_int(sub, "c", 0);
+            d->charts[i].color = (uint8_t)(c < 0 ? 0 : (c > 5 ? 5 : c));
+            d->chart_count++;
+        }
+        json_str(json, "f1", d->foot[0], sizeof(d->foot[0]));
+        json_str(json, "f2", d->foot[1], sizeof(d->foot[1]));
     }
 
     for (int i = 0; i < MAX_SESSIONS; i++) {
