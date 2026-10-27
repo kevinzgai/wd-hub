@@ -1759,14 +1759,19 @@ static void ui_render(const board_data_t *d)
         // d->chip_temp 的意义是"服务端也拿到了这份数据"，供别的端看。
         int t = (s_chip_temp >= 0) ? s_chip_temp : d->chip_temp;
         if (t < 0) {
-            lv_label_set_text(s_lbl_sys, "SoC --");
+            lv_label_set_text(s_lbl_sys, "板 --");
             lv_obj_set_style_text_color(s_lbl_sys, COL_DIM, 0);
         } else {
             char tbuf[24];
+            // 标签用 "板" 而不是 "SoC"：
+            //   这一屏上三个环讲的是 PC 的 CPU/内存/磁盘，页脚冒出 "SoC" 时
+            //   读者会自然理解成"服务器那颗 SoC" —— 实际是这块板子自己的
+            //   芯片结温。一个字的差别，但语义完全不同。
+            //
             // 不用 "°C"：字库里没有 ° (U+00B0) 和 ℃ (U+2103)，
             // 渲染出来是方框。用 "度" —— 汉字有字形，且比裸 "C"
-            // 更不容易被误读成型号（"SoC 48C" 看着像个芯片名）。
-            snprintf(tbuf, sizeof(tbuf), "SoC %d度", t);
+            // 更不容易被误读成型号（"板 48C" 看着像个编号）。
+            snprintf(tbuf, sizeof(tbuf), "板 %d度", t);
             lv_label_set_text(s_lbl_sys, tbuf);
             // 结温超过 70°C 变黄：S3 的过热保护在 105°C 左右，
             // 70 是个"已经开始发烫但还正常"的提示线，不是告警
