@@ -15,12 +15,39 @@ HOST="0.0.0.0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --port)    PORT="$2"; shift 2 ;;
-    --refresh) REFRESH="$2"; shift 2 ;;
-    --host)    HOST="$2"; shift 2 ;;
-    *) echo "未知参数: $1"; exit 1 ;;
+    --port|--refresh|--host)
+      # ⚠ 缺值检查：原来 `$2` 为空时 shift 2 会报 "shift: count out of range"，
+      # 而且 --port 后面不跟值时 PORT 被赋成空串，后面 lsof -iTCP: 出错，
+      # 报错信息完全指不到是哪个参数缺值。
+      opt="$1"
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "[ERROR] $opt 缺少参数值"
+        echo "       用法: $0 [--port 端口] [--refresh 秒] [--host 地址]"
+        exit 1
+      fi
+      case "$opt" in
+        --port)    PORT="$2" ;;
+        --refresh) REFRESH="$2" ;;
+        --host)    HOST="$2" ;;
+      esac
+      shift 2
+      ;;
+    -h|--help)
+      echo "用法: $0 [--port 端口] [--refresh 秒] [--host 地址]"
+      echo "  --port     监听端口，默认 27777"
+      echo "  --refresh  采集刷新间隔（秒），默认 2.0"
+      echo "  --host     监听地址，默认 0.0.0.0"
+      exit 0
+      ;;
+    *) echo "[ERROR] 未知参数: $1"; echo "       用 $0 --help 看用法"; exit 1 ;;
   esac
 done
+
+# ---- 参数合法性 ----
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
+  echo "[ERROR] 端口必须是 1~65535 的整数，当前是: $PORT"
+  exit 1
+fi
 
 # ---- 端口占用检查 ----
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then

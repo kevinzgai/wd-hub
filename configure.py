@@ -28,6 +28,41 @@ FW = ROOT / "firmware"
 LOCAL_H = FW / "main" / "config.local.h"
 
 
+def parse_bridge(raw: str) -> tuple[str | None, int]:
+    """把用户输入的 bridge 地址解析成 (host, port)。
+
+    ⚠ 必须容错 —— 这是用户手打的第一个参数，几乎所有人第一次都会写成
+    "http://192.168.1.5:27777"。原来的写法 partition(":") 拿到
+    port_s = "//192.168.1.5"，int() 直接抛 ValueError 崩掉，
+    而且崩在 argparse 之后、配置写入之前，错误信息还是个天书。
+
+    接受这些写法：
+        192.168.1.5:27777
+        192.168.1.5
+        http://192.168.1.5:27777
+        https://192.168.1.5/
+    """
+    s = (raw or "").strip()
+    s = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", s)   # 去协议前缀
+    s = s.rstrip("/")                                     # 去尾部斜杠
+    if not s:
+        return None, DEFAULT_PORT
+
+    if ":" in s:
+        host, _, port_s = s.rpartition(":")
+        try:
+            port = int(port_s)
+        except ValueError:
+            return None, DEFAULT_PORT
+    else:
+        host, port = s, DEFAULT_PORT
+
+    host = host.strip()
+    if not host:
+        return None, DEFAULT_PORT
+    return host, port
+
+
 def detect_lan_ip() -> str | None:
     """取本机对外网卡 IP，优先返回能连 bridge 的那个。"""
     try:
@@ -92,8 +127,11 @@ def main() -> int:
         print("[!] 必须提供 bridge 地址", file=sys.stderr)
         return 1
 
-    host, _, port_s = bridge.partition(":")
-    port = int(port_s or DEFAULT_PORT)
+    host, port = parse_bridge(bridge)
+    if host is None:
+        print(f"[!] 无法解析 bridge 地址: {bridge}", file=sys.stderr)
+        print("    正确格式: 192.168.1.100:27777", file=sys.stderr)
+        return 1
 
     # 校验 bridge 是否真的在跑，避免刷完固件才发现连不上
     ok, detail = check_bridge(host, port)
@@ -112,6 +150,9 @@ def main() -> int:
 // ⚠ 这里**不再**包含 WiFi 凭据。2026-10-27 起固件只从 NVS 读 WiFi，
 //   没有就开机进配网模式（长按 BOOT 3 秒，手机连热点配置）。
 //   固件里不留默认 WiFi，换环境不用重烧，也不会把密码带进版本库。
+//
+// ⚠ BRIDGE_BASE 只是**出厂兜底值**：服务地址也存进 NVS 了，板子配过一次
+//   就以 NVS 为准。电脑换 IP 在配置页改一下即可，不用改这里、不用重烧。
 #pragma once
 
 // 固件读的是 BRIDGE_BASE（只给 base，第 0 屏走 /status，其余屏走 /screen/<i>），
@@ -120,8 +161,11 @@ def main() -> int:
 """
     LOCAL_H.write_text(content, encoding="utf-8")
     print(f"[+] 已写入 {LOCAL_H}")
-    print(f"    Bridge : http://{host}:{port}/status")
+    print(f"    Bridge : http://{host}:{port}/status（出厂兜底值）")
     print(f"    WiFi   : 设备端配网（长按 BOOT 3 秒）")
+    print()
+    print("[i] 以后电脑换 IP 不用再跑本脚本、也不用重烧：")
+    print("    板子连不上服务时会在屏幕上给出配置页地址，打开改服务地址即可。")
     return 0
 
 

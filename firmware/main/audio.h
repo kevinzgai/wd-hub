@@ -18,7 +18,7 @@
 //
 // 所以改成离线渲染好的 PCM 表，固件只负责展开成立体声后写 I2S。
 // 四段共 36KB Flash（16MB 里可忽略），换来的是真人录制的音色。
-// 代价是改音高/节奏要重跑 tools/gen_tones.py，不能运行时调 —— 可接受，
+// 代价是改音高/节奏要重跑 tools/gen_tones_from_wav.py，不能运行时调 —— 可接受，
 // 因为提示音定稿后基本不动。
 //
 // 线程模型
@@ -55,6 +55,7 @@ void audio_init(void);
 // 也不要在这里阻塞调用方）。
 void audio_play(audio_event_t ev);
 
-// 音量百分比 0..100，默认 AUDIO_VOLUME_DEFAULT。
-// 提示音固定音量，不占用按键（VOL_UP/DOWN 目前是调亮度的）。
-void audio_set_volume(int percent);
+// 提示音音量固定为 AUDIO_VOL_DEF（audio.cpp 里的 20%）。
+// 这里没有 audio_set_volume()：按键（VOL_UP/VOL_DOWN）已被背光占用，
+// 提示音音量目前不可调。曾有一个没人调用的 audio_set_volume()，
+// 已被删除 —— 留个空接口比没有更容易误导。

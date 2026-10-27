@@ -95,6 +95,7 @@ static void bat_sample_once(void)
     long raw_sum = 0;
     long mv_sum  = 0;
     int  n = 0;
+    int  n_mv = 0;      // ⚠ 校准成功的次数，和 n 不一定相等
 
     for (int i = 0; i < BAT_OVERSAMPLE; i++) {
         int raw = 0;
@@ -103,6 +104,7 @@ static void bat_sample_once(void)
             int mv = 0;
             if (s_cali && adc_cali_raw_to_voltage(s_cali, raw, &mv) == ESP_OK) {
                 mv_sum += mv;
+                n_mv++;
             }
             n++;
         }
@@ -111,7 +113,11 @@ static void bat_sample_once(void)
     if (!n) return;   // 全失败就不更新，保留上次值
 
     int raw_avg = (int)(raw_sum / n);
-    int mv_avg  = s_cali ? (int)(mv_sum / n) : -1;
+    /* ⚠ 除数必须用 n_mv，不能用 n。
+     * n 数的是「ADC 读成功」次数，mv_sum 只在「校准转换成功」时累加。
+     * 两者不等时（校准表缺项、某些 raw 超出校准范围），
+     * 用 n 当除数会把平均值算低 —— 电压读数偏低会直接影响充电判断。 */
+    int mv_avg  = (s_cali && n_mv) ? (int)(mv_sum / n_mv) : -1;
 
     // 得出明显不可能的 raw（0 或满量程）视为异常，不更新百分比。
     if (raw_avg <= 0 || raw_avg >= 4095) {
@@ -270,7 +276,12 @@ void battery_init(void)
     chrg.intr_type    = GPIO_INTR_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&chrg));
 
-    xTaskCreate(bat_task, "bat", 3072, NULL, 3, NULL);
+    /* ⚠ 检查 xTaskCreate 返回值。
+     * 失败（内存不足）时任务不会跑，电量永远停在 "--"，
+     * 而这里静默返回、开机日志一切正常 —— 这种"静默失效"最难查。 */
+    if (xTaskCreate(bat_task, "bat", 3072, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "电量采样任务创建失败 —— 电量不会更新");
+    }
     ESP_LOGI(TAG, "初始化完成: %s_CH%d (=GPIO%d), 充电检测 GPIO%d",
              "ADC2", BOARD_BAT_ADC_CH, BOARD_BAT_GPIO, BOARD_CHRG_GPIO);
 }
