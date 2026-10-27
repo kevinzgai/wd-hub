@@ -297,6 +297,20 @@ def _pct(v) -> int:
         return 0
 
 
+def _snap_age_sec(snap) -> int:
+    """快照距现在多少秒（数据有多新），取不到给 -1。
+
+    页脚要显示"更新 3s前"而不是"更新 09:44"：
+    后者是**服务端当前时刻**，每轮轮询都会变，跟"数据是否新鲜"没关系；
+    真正的信息来源是 generated_at_ms（collector 每 2s 采一次写一次）。
+    """
+    gen = int(getattr(snap, "generated_at_ms", 0) or 0)
+    if gen <= 0:
+        return -1
+    age = int(time.time() - gen / 1000.0)
+    return age if age >= 0 else 0
+
+
 def _firmware_payload(snap) -> dict:
     now = datetime.now()
     sysd = getattr(snap, "sys", None) or {}
@@ -311,6 +325,9 @@ def _firmware_payload(snap) -> dict:
         "error": ("; ".join(snap.errors))[:63] if snap.degraded else "",
         "clock": now.strftime("%H:%M"),
         "date": now.strftime("%m-%d"),          # 必须纯 ASCII：固件 buffer 只有 8 字节
+        # 数据有多新（秒）。固件页脚显示"更新 3s前"，本地每秒递增刷新。
+        # -1 = 拿不到采集时间，固件显示 "--"。
+        "age": _snap_age_sec(snap),
         "working": snap.working,
         "today_done": snap.today_done,
         "automations": snap.automations,
@@ -534,6 +551,8 @@ async def screen_endpoint(idx: int):
         "error": ("; ".join(snap.errors))[:63] if snap.degraded else "",
         "clock": now.strftime("%H:%M"),
         "date":  now.strftime("%m-%d"),
+        # 与 /status 同口径：数据有多新（秒），供页脚"更新 Ns前"用
+        "age":   _snap_age_sec(snap),
         "i":     idx,
         "t":     title,
         "rows":  rows[:MAX_SCREEN_ROWS],
