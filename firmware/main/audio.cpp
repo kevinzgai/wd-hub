@@ -1,5 +1,4 @@
-// 提示音实现。设计说明见 audio.h 头部注释。
-//
+// 提示音实现。设计说明见 audio.h 头部注释。//
 // 本文件只做一件事：把预渲染好的 PCM 采样表 + 音量复制成立体声，写进 I2S。
 // 没有任何振荡器、包络、泛音计算 —— 那些全部在离线端做完
 // （tools/gen_tones_from_wav.py），固件里只剩 memcpy 级别的开销。
@@ -19,7 +18,7 @@
 // 一起衰减的，所以音色永远不变 —— 这是合成器的定义性特征，不是参数问题，
 // 因此不修了，直接换成真实采样。
 //
-// 四段提示音的采样来源见 tone_pcm.h（同一段铃声拆成单音后变调重组，
+// 五段提示音的采样来源见 tone_pcm.h（同一段铃声拆成单音后变调重组，
 // 音色天然统一，靠音高/音数/节奏区分语义）。
 #include "audio.h"
 
@@ -34,7 +33,7 @@
 #include "esp_log.h"
 
 #include "board_config.h"
-#include "tone_pcm.h"     // 四段 PCM 采样表（由 tools/gen_tones_from_wav.py 生成）
+#include "tone_pcm.h"     // 五段 PCM 采样表（由 tools/gen_tones_from_wav.py 生成）
 
 static const char *TAG = "audio";
 
@@ -59,8 +58,9 @@ static_assert(TONE_RATE == AUDIO_RATE,
               "否则提示音会变速变调。改一个就要改另一个。");
 
 // 默认音量百分比。用户实测 35% 偏大，降到 20%。
-// 四段采样的响度已在离线端拉齐（极差 6%），所以这里用统一比例就够，
-// 不需要再按段补偿。
+// 四段通知音的响度已在离线端按 RMS 拉齐（极差 6%），所以这里用统一比例就够，
+// 不需要再按段补偿。按键音（KEY）在离线端又单独压了 6dB，那是刻意的设计，
+// 不要在这里把它"补"回来 —— 原因见 audio.h 的枚举注释。
 #define AUDIO_VOL_DEF   20
 #define AUDIO_QUEUE_LEN 4         // 事件队列深度。4 足够，多出来的丢弃
 #define AUDIO_TASK_PRIO 3         // 与按键任务同级，低于 fetch(5) 和 lvgl(4)
@@ -166,6 +166,13 @@ static void audio_task(void *arg)
             // 单声低音。收工是"告一段落"，轻一些、暗一些，不需要双音的圆满感。
             ESP_LOGI(TAG, "提示音: 会话收工");
             play_pcm(k_tone_end, TONE_END_LEN);
+            break;
+        case AUDIO_EV_KEY:
+            // 按键反馈：110ms，音高 -2 半音（1247Hz），且离线端已单独压低 6dB。
+            //
+            // 不用 ESP_LOGI 记这一行 —— 它会被连按刷满串口，把真正有用的
+            // 上行日志挤走。按键本来就有 button_action 的日志，这里不重复。
+            play_pcm(k_tone_key, TONE_KEY_LEN);
             break;
         default:
             break;
