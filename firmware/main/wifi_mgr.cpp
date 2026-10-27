@@ -93,8 +93,8 @@ static const char *TAG = "wifi";
  *   2. "已连 WiFi"模式跑在用户的真实局域网里，任何人都能访问 —— 这个
  *      模式**必须**校验验证码。
  *
- * 验证码每 30 秒换一次；页面打开时由 /info 下发当前验证码，
- * 用户照着屏上数字填进表单即可。 */
+ * 验证码每 30 秒换一次。**唯一的获取渠道是设备屏幕** —— 用户看着屏上的
+ * 4 位数字手抄进表单。/info 绝不下发它（那等于把钥匙和锁挂在一扇门上）。 */
 #define CFG_TOKEN_LEN   4
 #define CFG_TOKEN_TTL_MS 30000
 
@@ -150,7 +150,6 @@ static httpd_handle_t     s_httpd;
  * 结果是"用户明明填了自己的 WiFi，设备连上了别人的"。
  * 改成 handler 内的局部变量：栈上各有一份，天然隔离。
  * 98 字节 @ stack 6144，完全放得下。 */
-
 
 /* 配置页验证码。当前值 + 生成时刻。 */
 static char          s_cfg_token[CFG_TOKEN_LEN + 1];
@@ -401,9 +400,12 @@ static void url_decode(char *s)
     *w = '\0';
 }
 
-/* 从 a=1&b=2 里取 key 的值，解到 out。找到返回 true。 */
 /* ---------------------------------------------------------------- 配置页验证码 */
 
+/* form_get 的定义在下面（本段之后），这里先声明。
+ * 不把它挪到一块是因为验证码这几个函数和 form_get 都只服务 HTTP 层，
+ * 按"验证码 → 表单解析 → 页面"的顺序排更顺；但 form_get 用到的
+ * url_decode 在上面，所以只能这样前后各放一半。 */
 static bool form_get(const char *body, const char *key, char *out, size_t out_len);
 
 /* 生成/返回当前验证码。TTL 到了就换一个。
@@ -466,6 +468,7 @@ static bool cfg_token_ok(httpd_req_t *req)
     return true;
 }
 
+/* 从 a=1&b=2 里取 key 的值，解到 out。找到返回 true。 */
 static bool form_get(const char *body, const char *key, char *out, size_t out_len)
 {
     size_t klen = strlen(key);
