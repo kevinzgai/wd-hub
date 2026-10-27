@@ -39,22 +39,26 @@ if __package__ in (None, ""):
         ActivityStat, ArtifactListResponse, AutomationItem, AutomationListResponse,
         BoardResponse, HealthResponse, SessionItem, SessionListResponse,
         SourceHealth, Summary, SystemStat, TaskItem, TaskListResponse, TaskStat,
+        TokenDay, TokenHour, TokenModel, TokenSession, TokenSummary,
         human_ago, project_name, session_title, utf8_trunc,
     )
     from server.sources import db as db_src
     from server.sources import files as files_src
     from server.sources import system as sys_src
+    from server.sources import tokens as tokens_src
 else:
     from .collector import STALE_MS, Collector, iso_now
     from .models import (
         ActivityStat, ArtifactListResponse, AutomationItem, AutomationListResponse,
         BoardResponse, HealthResponse, SessionItem, SessionListResponse,
         SourceHealth, Summary, SystemStat, TaskItem, TaskListResponse, TaskStat,
+        TokenDay, TokenHour, TokenModel, TokenSession, TokenSummary,
         human_ago, project_name, session_title, utf8_trunc,
     )
     from .sources import db as db_src
     from .sources import files as files_src
     from .sources import system as sys_src
+    from .sources import tokens as tokens_src
 
 VERSION = "1.0.0"
 log = logging.getLogger("board.api")
@@ -123,7 +127,13 @@ MAX_SESSION_ROWS = 3
 
 # 屏幕页数：0 = 概览（/status），1..N-1 = 详情屏（/screen/<i>）。
 # 改这里就改了设备上能按出几屏，**不用重烧固件** —— 固件从 /status 的 nscr 读。
-SCREEN_COUNT = 5
+#
+# 现有分配：1 任务 / 2 自动化 / 3 今日活动 / 4 系统（图表）/ 5 Token 用量
+SCREEN_COUNT = 6
+
+# 哪一屏用图表渲染（服务端只发数据，具体画法在固件）。
+# 改这个数字 = 换一屏图表化，固件不用动 —— 它按 kind 字段判断，不认屏号。
+CHART_SCREEN = 4
 
 TICKER_TEXT = "WorkBuddy 看板 · 数据每 2 秒采集 · 屏幕每 5 秒刷新"
 
@@ -220,6 +230,9 @@ def _board_payload(snap) -> dict:
         "automations": {"active": snap.automations, **snap.automation_runs},
         "system": snap.sys,
         "activity": snap.activity,
+        # Token 总览。数据源不可用时给 None 而不是空对象 ——
+        # 0 和"没数据"是两回事，前端要能区分"真的没用过"和"读不到"。
+        "tokens": snap.tokens or None,
     }
 
 
@@ -349,6 +362,66 @@ def _row(label, value=None, color: int = 0) -> dict:
     return r
 
 
+def _fmt_tok(n) -> str:
+    """token 数 → 1.2M / 345K / 987。
+
+    屏幕上右值只有约 60px（12px 字体），10 位数的原始 token
+    （累计 29 亿）根本放不下，必须缩写。
+    """
+    try:
+        v = float(n or 0)
+    except (TypeError, ValueError):
+        return "-"
+    if v >= 1e9:
+        return f"{v / 1e9:.2f}B"
+    if v >= 1e6:
+        return f"{v / 1e6:.1f}M"
+    if v >= 1e3:
+        return f"{v / 1e3:.0f}K"
+    return str(int(v))
+
+
+def _fmt_money(v) -> str:
+    """金额 → ¥1,234 / ¥12.3 / ¥0.87。
+
+    累计到千元级时小数位没意义，屏幕上"¥2,137"比"¥2136.93"好读。
+    """
+    try:
+        x = float(v or 0)
+    except (TypeError, ValueError):
+        return "-"
+    if x >= 1000:
+        return f"¥{x:,.0f}"
+    if x >= 10:
+        return f"¥{x:.1f}"
+    return f"¥{x:.2f}"
+
+
+def _charts_for(snap, idx: int) -> Optional[list[dict]]:
+    """系统屏的图表数据。None 表示这一屏不是图表屏。
+
+    **与 rows 并存下发**，不替换：旧固件认不出 `charts` 键会直接忽略，
+    继续渲染 rows 文本，不会白屏。新固件优先画图表。
+
+    字段含义（三字节量级，固件用 atoi 解析）：
+      k  指标键，固件据此选默认色，也给未来加图标留位置
+      v  0..100 的整数
+      c  颜色码 1 蓝 / 2 绿 / 3 黄 / 5 红（超阈值）。与 rows 的 c 同一套映射，
+         额外扩了 5=红，因为图表需要"正常色 + 危险色"两档，而 4 是灰。
+    """
+    if idx != CHART_SCREEN:
+        return None
+    sy = getattr(snap, "sys", None) or {}
+    cpu  = _pct(sy.get("cpu"))
+    mem  = _pct(sy.get("mem"))
+    disk = _pct(sy.get("disk"))
+    return [
+        {"k": "cpu",  "n": "CPU",  "v": cpu,  "c": 5 if cpu  >= 85 else 1},
+        {"k": "mem",  "n": "内存", "v": mem,  "c": 5 if mem  >= 90 else 2},
+        {"k": "disk", "n": "磁盘", "v": disk, "c": 5 if disk >= 90 else 3},
+    ]
+
+
 def _screen_rows(snap, idx: int) -> tuple[str, list[dict]]:
     """详情屏内容。**全部基于内存快照**，不在请求路径查库（见 README 架构说明）。
 
@@ -413,6 +486,25 @@ def _screen_rows(snap, idx: int) -> tuple[str, list[dict]]:
             _row("运行", _fmt_uptime(sy.get("uptime")), 4),
         ]
 
+    if idx == 5:                                    # Token 用量
+        t  = getattr(snap, "tokens", None) or {}
+        td = t.get("today") or {}
+        if not t or not t.get("requests"):
+            # 数据源没起来（刚启动还没扫完，或日志目录不可读）
+            return "Token", [
+                _row("状态", "扫描中" if not t.get("ready") else "无数据", 4),
+            ]
+        rate = float(t.get("cache_rate") or 0.0)
+        # 缓存命中率是省钱的关键指标，低了对成本影响很大，给黄灯提示
+        return "Token", [
+            _row("今日",  _fmt_tok(td.get("total")),  1),
+            _row("今日费", _fmt_money(td.get("cost_est")), 1),
+            _row("累计",  _fmt_tok(t.get("total")),   2),
+            _row("累计费", _fmt_money(t.get("cost_est")), 2),
+            _row("缓存率", f"{rate:.0f}%", 3 if rate < 50 else 4),
+            _row("请求",  f"{int(t.get('requests') or 0):,}", 4),
+        ]
+
     return "", []
 
 
@@ -435,6 +527,7 @@ async def screen_endpoint(idx: int):
 
     sysd = getattr(snap, "sys", None) or {}
     title, rows = _screen_rows(snap, idx)
+    charts = _charts_for(snap, idx)
     now = datetime.now()
     payload = {
         "ok":    not snap.degraded,
@@ -450,6 +543,16 @@ async def screen_endpoint(idx: int):
         "disk":  _pct(sysd.get("disk")),
         "nscr":  SCREEN_COUNT,
     }
+    if charts:
+        # kind 是固件选渲染器的唯一开关：没有这个键 = 老式文本屏
+        payload["kind"] = "chart"
+        payload["charts"] = charts
+        # 图表屏底部两行。不复用 rows 的后两行，是因为那要求固件知道
+        # "第 4 行是进程、第 5 行是运行时长" —— 服务端一调顺序固件就错位。
+        # 用两个平铺字符串而不是数组：固件的 json_nth_object 只认对象数组，
+        # 给它加字符串数组解析不值当。
+        payload["f1"] = f"进程 {int(sysd.get('proc') or 0)}"
+        payload["f2"] = f"运行 {_fmt_uptime(sysd.get('uptime'))}"
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return Response(content=body.encode("utf-8"),
                     media_type="application/json; charset=utf-8",
@@ -470,11 +573,31 @@ async def status_endpoint():
     # 直接产出 bytes，绕开框架的序列化 —— 保证字段顺序和紧凑格式完全可控
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-    if len(body.encode("utf-8")) > FIRMWARE_MAX_BYTES:
+    if len(body.encode("utf-8")) >= FIRMWARE_MAX_BYTES:
         # 真超限时优先裁会话列表，保住三格数字（那才是屏幕主体）
         log.warning("响应体超限，裁剪会话列表")
         payload["sessions"] = payload["sessions"][:1]
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+        # ⚠ 裁完必须**再判一次**。固件 s_http_buf[4096] 只能装 4095 字节 + NUL，
+        # 4096 整会被截掉最后一个字节。原来只判一次且用 ">"，
+        # 恰好 4096 字节时照发（固件丢掉末字节），裁成 1 条后也没复检 ——
+        # 一次裁剪没解决就放弃了。
+        if len(body.encode("utf-8")) >= FIRMWARE_MAX_BYTES:
+            # 还是超：丢掉 sessions 和 activity.projects 这种长尾字段，
+            # 只保三格数字 + 页头页脚。
+            payload.pop("sessions", None)
+            payload.pop("projects", None)
+            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            if len(body.encode("utf-8")) >= FIRMWARE_MAX_BYTES:
+                # 兜底：连上面的都保不住，就只留最核心的几个键
+                payload = {k: payload[k] for k in
+                           ("ok", "clock", "date", "working", "today_done",
+                            "automations", "cpu", "mem", "disk", "temp", "nscr")
+                           if k in payload}
+                body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                if len(body.encode("utf-8")) >= FIRMWARE_MAX_BYTES:
+                    log.error("响应体裁到最小仍超限，固件将拿到残缺 JSON")
 
     return Response(
         content=body.encode("utf-8"),
@@ -579,6 +702,83 @@ async def v1_artifacts(limit: int = Query(20, ge=1, le=200)) -> ArtifactListResp
 async def v1_system() -> SystemStat:
     snap = await collector.snapshot()
     return SystemStat(**snap.sys)
+
+
+# ---------------------------------------------------------------- Token 用量
+#
+# 数据源：~/.workbuddy/projects/**/*.jsonl 里的 providerData.rawUsage。
+# 与 token-dashboard skill 同源，口径一致（字段兜底顺序、模型价表都对齐）。
+#
+# ⚠ 这几个端点查的是 sources/tokens.py 的内存聚合，**不读盘**。
+# 盘上的扫描由 collector 每 2s 增量推进，请求路径只做取数。
+# 但注意 tokens 模块内部有锁，且 by_day/by_model 会遍历全表 ——
+# 所以仍走 to_thread，别让快照区间被持锁卡住。
+
+# tokens.summary() 拿不到时的兜底（服务刚起、首轮还没跑完）。
+# 字段必须与 TokenSummary 对齐，漏一个就是 500。
+_EMPTY_TOKEN_SUMMARY = {
+    "requests": 0, "in": 0, "out": 0, "total": 0,
+    "cache_hit": 0, "cache_write": 0, "cache_rate": 0.0,
+    "cost_est": 0.0, "days": 0, "avg_per_day": 0,
+    "today": {"requests": 0, "in": 0, "out": 0, "total": 0,
+              "cache_rate": 0.0, "cost_est": 0.0},
+    "ready": False, "scanned_at": 0,
+}
+
+
+@app.get("/api/v1/tokens", response_model=TokenSummary, tags=["v1"],
+         summary="Token 用量总览")
+async def v1_tokens() -> TokenSummary:
+    # 快照里的 tokens 就是 tokens.summary() 的原样转发，字段名一一对应，
+    # 不用重新加工 —— 加工会让"接口值"和"屏幕值"有机会跑偏。
+    snap = await collector.snapshot()
+    return TokenSummary(**(snap.tokens or _EMPTY_TOKEN_SUMMARY))
+
+
+@app.get("/api/v1/tokens/daily", response_model=list[TokenDay], tags=["v1"],
+         summary="逐日 Token 用量")
+async def v1_tokens_daily(
+    days: int = Query(30, ge=1, le=365, description="回溯天数"),
+) -> list[TokenDay]:
+    rows = await asyncio.to_thread(tokens_src.by_day, days)
+    return [TokenDay(**r) for r in rows]
+
+
+@app.get("/api/v1/tokens/models", response_model=list[TokenModel], tags=["v1"],
+         summary="按模型汇总 Token 用量")
+async def v1_tokens_models(
+    days: int = Query(30, ge=1, le=365, description="回溯天数"),
+) -> list[TokenModel]:
+    rows = await asyncio.to_thread(tokens_src.by_model, days)
+    return [TokenModel(**r) for r in rows]
+
+
+@app.get("/api/v1/tokens/sessions", response_model=list[TokenSession], tags=["v1"],
+         summary="消耗最多的会话")
+async def v1_tokens_sessions(
+    limit: int = Query(10, ge=1, le=100),
+    days: int = Query(30, ge=1, le=365),
+) -> list[TokenSession]:
+    rows = await asyncio.to_thread(tokens_src.top_sessions, limit, days)
+    return [TokenSession(**r) for r in rows]
+
+
+@app.get("/api/v1/tokens/hours", response_model=list[TokenHour], tags=["v1"],
+         summary="0-23 时用量分布")
+async def v1_tokens_hours(
+    days: int = Query(7, ge=1, le=40, description="回溯天数，上限 40 天（内存窗口）"),
+) -> list[TokenHour]:
+    rows = await asyncio.to_thread(tokens_src.by_hour, days)
+    return [TokenHour(**r) for r in rows]
+
+
+@app.post("/api/v1/tokens/rescan", tags=["v1"],
+          summary="强制全量重扫 Token 日志",
+          description="清空增量偏移与聚合，从头重读全部日志（约 1.5s）。"
+                      "日志目录被清理、或数字明显对不上时用它。")
+async def v1_tokens_rescan() -> dict:
+    r = await asyncio.to_thread(tokens_src.scan, True)
+    return {"ok": True, **r}
 
 
 @app.get("/api/v1/health", response_model=HealthResponse, tags=["v1"],

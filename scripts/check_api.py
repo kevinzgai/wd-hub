@@ -35,6 +35,14 @@ V1_ENDPOINTS = [
     "/api/v1/system", "/api/v1/health", "/api/ticker",
 ]
 
+# Token 端点单独测：它们除了返回 200，还要校验**数字自洽**
+# （分项加总 == 总量），这是最容易在聚合逻辑里写错的地方。
+TOKEN_ENDPOINTS = [
+    "/api/v1/tokens", "/api/v1/tokens/daily?days=7",
+    "/api/v1/tokens/models?days=30", "/api/v1/tokens/sessions?limit=5",
+    "/api/v1/tokens/hours?days=7",
+]
+
 fails: list[str] = []
 
 
@@ -124,6 +132,59 @@ def main() -> int:
             rejected = False
         check(f"/screen/{bad} 被拒绝", code == 200 and rejected,
               f"{code} {body[:40].decode(errors='ignore')}")
+
+    # ---- 6. Token 接口 ----
+    print("\nToken 接口")
+    for ep in TOKEN_ENDPOINTS:
+        code, body = get(ep)
+        ok = code == 200
+        detail = f"{code}"
+        if ok:
+            try:
+                d = json.loads(body)
+                n = len(d) if isinstance(d, list) else d.get("requests", 0)
+                detail = f"{n} 项"
+            except Exception as e:
+                ok = False
+                detail = str(e)
+        check(ep, ok, detail)
+
+    # ---- 7. Token 数字自洽 ----
+    #
+    # 聚合逻辑最容易出的错：分项加起来不等于总量。三种口径各查一遍。
+    print("\nToken 数字自洽")
+    code, body = get("/api/v1/tokens")
+    if code == 200:
+        t = json.loads(body)
+        check("total == in + out",
+              t.get("total") == t.get("in", 0) + t.get("out", 0),
+              f"{t.get('total')} vs {t.get('in')}+{t.get('out')}")
+        check("cache_hit <= in", t.get("cache_hit", 0) <= t.get("in", 0),
+              f"{t.get('cache_hit')} <= {t.get('in')}")
+        check("today.total <= total",
+              (t.get("today") or {}).get("total", 0) <= t.get("total", 0))
+    else:
+        check("/api/v1/tokens 可读", False, f"{code}")
+
+    # 逐日累加应等于对应窗口的总量。用 7 天窗口比对：
+    # 全量接口是 40 天口径，所以只能断言"逐日之和 <= 全量"。
+    code, body = get("/api/v1/tokens/daily?days=7")
+    if code == 200:
+        rows = json.loads(body)
+        check("daily 返回 7 天", len(rows) == 7, f"{len(rows)} 天")
+        bad = [r["date"] for r in rows if r.get("total") != r.get("in", 0) + r.get("out", 0)]
+        check("daily 每行 total == in + out", not bad, f"异常: {bad[:3]}")
+        # 日期必须升序且无重复，前端画柱状图依赖这个
+        dates = [r["date"] for r in rows]
+        check("daily 日期升序无重复",
+              dates == sorted(set(dates)), f"{dates[0]} .. {dates[-1]}")
+
+    code, body = get("/api/v1/tokens/hours?days=7")
+    if code == 200:
+        rows = json.loads(body)
+        check("hours 返回 24 个点", len(rows) == 24, f"{len(rows)}")
+        check("hours 覆盖 0-23",
+              [r["hour"] for r in rows] == list(range(24)))
 
     # ---- 汇总 ----
     print("\n" + "=" * 52)

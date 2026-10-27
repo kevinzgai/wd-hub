@@ -193,6 +193,8 @@ class BoardResponse(BaseModel):
     automations: AutomationStat
     system: SystemStat
     activity: ActivityStat
+    tokens: Optional[TokenSummary] = Field(
+        default=None, description="Token 用量总览。数据源不可用时为 null")
 
 
 class SessionListResponse(BaseModel):
@@ -246,6 +248,89 @@ class AutomationListResponse(BaseModel):
 class ArtifactListResponse(BaseModel):
     total: int
     items: list[ArtifactItem]
+
+
+class TokenToday(BaseModel):
+    """今日 token 用量。与总体 KPI 分开，是因为屏幕上只有一个位置，
+    要显示"今天花了多少"而不是"历史一共多少"。
+
+    ⚠ 字段不能叫 `in` / `out` —— `in` 是 Python 关键字，直接做字段名是
+    SyntaxError。但对外 JSON 仍用 `in` / `out`（与 tokens.py 的
+    summary() 一致，不用二次映射），所以用 alias 桥接。
+    """
+
+    requests: int = Field(description="今日请求数")
+    in_token: int = Field(alias="in", description="今日输入 token")
+    out_token: int = Field(alias="out", description="今日输出 token")
+    total: int = Field(description="今日合计")
+    cache_rate: float = Field(description="今日缓存命中率 %")
+    cost_est: float = Field(description="今日预估金额（元，按牌价）")
+
+    model_config = {"populate_by_name": True}
+
+
+class TokenSummary(BaseModel):
+    """Token 总览 KPI。
+
+    ⚠ `cost_est` 是**按牌价估算**，不含套餐折扣、赠送额度、阶梯价，
+    不能当账单用。字段名带 est 就是为了提醒这一点。
+    """
+
+    requests: int = Field(description="累计请求数")
+    in_token: int = Field(alias="in", description="累计输入 token（含缓存命中）")
+    out_token: int = Field(alias="out", description="累计输出 token")
+    total: int = Field(description="累计合计 token")
+    cache_hit: int = Field(description="累计缓存命中 token")
+    cache_write: int = Field(description="累计缓存写入 token（Claude 系）")
+    cache_rate: float = Field(description="缓存命中率 %，= 命中 / 输入")
+    cost_est: float = Field(description="预估金额（元，按牌价粗略估算）")
+    days: int = Field(description="有数据的天数")
+    avg_per_day: int = Field(description="日均 token")
+    today: TokenToday
+    ready: bool = Field(description="首轮扫描是否完成，false 时数字可能偏小")
+    scanned_at: int = Field(description="上次扫描完成时刻（毫秒）")
+
+    model_config = {"populate_by_name": True}
+
+
+class TokenDay(BaseModel):
+    date: str = Field(description="日期 YYYY-MM-DD（本地时区）")
+    requests: int
+    in_token: int = Field(alias="in", description="输入 token")
+    out_token: int = Field(alias="out", description="输出 token")
+    total: int
+    cache_rate: float
+    cost_est: float
+
+    model_config = {"populate_by_name": True}
+
+
+class TokenModel(BaseModel):
+    model: str = Field(description="模型名")
+    requests: int
+    in_token: int = Field(alias="in")
+    out_token: int = Field(alias="out")
+    total: int
+    cache_rate: float
+    cost_est: float
+
+    model_config = {"populate_by_name": True}
+
+
+class TokenSession(BaseModel):
+    session: str = Field(description="会话 ID 前 8 位")
+    workspace: str = Field(description="工作空间短名")
+    title: str = Field(description="会话标题（取自 workbuddy.db）")
+    model: str = Field(description="主模型（最近一天的）")
+    date: str = Field(description="首次出现日期")
+    requests: int
+    total: int
+    cost_est: float
+
+
+class TokenHour(BaseModel):
+    hour: int = Field(description="0-23 时（本地时区）")
+    total: int = Field(description="该时段 token 合计")
 
 
 class SourceHealth(BaseModel):

@@ -199,6 +199,31 @@ def session_cwd_map() -> dict[str, str]:
     return {r["id"]: r["cwd"] for r in rows if r["id"] and r["cwd"]}
 
 
+def session_title_map() -> dict[str, dict[str, Any]]:
+    """会话 id → {title, custom_title, cwd}。
+
+    给 token 用量按会话下钻时取标题用。**不要从 jsonl 里猜标题**：
+    主会话的 user 消息几乎全是 system-reminder，真实输入被夹在中间，
+    而且会话压缩后早期输入会被摘要替换。实测从日志提取有 59% 拿不到标题。
+    这张表里的就是侧边栏显示的名字，准确率 100%。
+
+    ⚠ 不过滤 deleted_at：已删除的会话历史上确实消耗过 token，
+    账单要算它。标题为空的行也一并返回，让调用方自己决定怎么显示。
+    """
+    rows = _query(
+        "SELECT id, title, custom_title, cwd FROM sessions "
+        "WHERE title IS NOT NULL OR custom_title IS NOT NULL"
+    )
+    return {
+        str(r["id"]): {
+            "title": r["title"],
+            "custom_title": r["custom_title"],
+            "cwd": r["cwd"],
+        }
+        for r in rows if r["id"]
+    }
+
+
 def automations_active() -> int:
     """已启用的自动化数。
 

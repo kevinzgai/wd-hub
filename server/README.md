@@ -58,6 +58,45 @@ GET /api/v1/system       系统指标
 GET /api/v1/health       数据源自检
 ```
 
+Token 用量（数据源见下文「Token 统计口径」）：
+
+```
+GET  /api/v1/tokens           累计汇总 + 今日
+GET  /api/v1/tokens/daily     ?days=30   按天
+GET  /api/v1/tokens/models    ?days=30   按模型
+GET  /api/v1/tokens/sessions  ?days=30&limit=10  按会话
+GET  /api/v1/tokens/hours     ?days=7    24 小时分布
+POST /api/v1/tokens/rescan               强制全量重扫
+```
+
+## 详情屏协议（`/screen/<i>`）
+
+老格式只有 `t`（页标题）+ `rows`（最多 6 行 `{t,v,c}`），固件画成"标签 + 右值"。
+图表屏（默认第 4 屏）**额外**下发三个键，与 `rows` 并存 —— 旧固件认不出新键
+会直接忽略，继续渲染文本，不会白屏：
+
+| 键 | 说明 |
+|---|---|
+| `kind` | 固定 `"chart"`。固件只认这个，不认屏号；没有此键就是文本屏 |
+| `charts` | 最多 3 个 `{k,n,v,c}`：`k` 指标键 / `n` 环下名称 / `v` 0..100 / `c` 颜色码 |
+| `f1` `f2` | 图表屏底部两行成品文本（进程 / 运行时长） |
+
+图表色板比 `rows` 多一个 `5 = 红`（超阈值）。`rows` 里的 `4` 是灰，表示"无数据"，
+放在进度条上等于没填，所以图表单独开一个码，不动 `rows` 的既有含义。
+
+哪一屏图表化由 `CHART_SCREEN` 决定，改它不用重烧固件。实测 `/screen/4`
+整包 433 字节，离 4096 的固件缓冲还有大量余量。
+
+屏分配（`SCREEN_COUNT = 6`，固件靠 `/status` 的 `nscr` 自动跟随，改屏数不用重烧）：
+
+| 屏 | 内容 |
+|---|---|
+| 1 | 任务 |
+| 2 | 自动化 |
+| 3 | 今日 |
+| 4 | 系统（图表屏） |
+| 5 | Token 用量 |
+
 ## 三格统计口径
 
 | 字段 | 定义 | SQL / 逻辑 |
@@ -66,7 +105,65 @@ GET /api/v1/health       数据源自检
 | `today_done` | 今日完成的任务 | 本地账本 `state/task_ledger.json`，按 `completed_at >= 今日0点` |
 | `automations` | 已启用自动化数 | `automations` 表 `status='ACTIVE'` |
 
-## 五个必须知道的坑
+## Token 统计口径
+
+数据源是 `~/.workbuddy/projects/**/*.jsonl` 里每条 assistant 消息的
+`providerData.rawUsage`，与内置 `token-dashboard` skill 同源。
+
+| 字段 | 来源 | 说明 |
+|---|---|---|
+| `in` | `rawUsage.prompt_tokens` / `usage.inputTokens` | **含**缓存命中部分 |
+| `out` | `rawUsage.completion_tokens` / `usage.outputTokens` | |
+| `cache_hit` | `prompt_tokens_details.cached_tokens` | 命中按折扣价 |
+| `cache_write` | `cache_creation_input_tokens` | 按 1.25x 输入价 |
+| `total` | `in + out` | |
+| `cost_est` | 按 `PRICE` 牌价估算，元 | **不是账单** |
+
+`cost_est` 只按公开牌价算（元/百万 token），不含套餐折扣、赠送额度、阶梯价，
+所以只能看趋势和量级，对不上实际账单是正常的。价格表在 `sources/tokens.py`
+的 `PRICE`，按模型名前缀匹配，未命中走 `_PRICE_FALLBACK`。
+
+`cache_rate` = `cache_hit / in`，分母是 `in`（缓存命中本来就计入 `in`）。
+
+### 为什么要增量扫描
+
+本机实测 287 个 jsonl、380.4MB：
+
+| 场景 | 耗时 |
+|---|---|
+| 裸全量解析 | 2.10s |
+| 字节预筛后冷扫 | 1.15~1.5s |
+| **增量扫描（无新内容）** | **0.048s** |
+| 全量重扫（force） | 1.47s |
+
+采集周期是 2s，380MB 的解析会直接把周期打穿。所以 `_OFFSETS` 记住每个文件
+已消费的**字节偏移**，下轮二进制 seek 续读；只做聚合（日期×模型→桶），
+不在内存里留原始记录。
+
+三个配套细节：
+
+- **半行保护**：最后一行没有 `\n` 结尾说明还在写，回退偏移到行首，
+  下轮再读。否则会解析到半截 JSON 并丢掉这条记录。
+- **字节预筛**：行里既没有 `rawUsage`/`"usage"` 也没有 `"role":"user"` 就跳过
+  （后者是为会话标题保留的，见下）。
+- **文件截断**：偏移大于当前文件大小时视为重建，从 0 重读该文件。
+
+### 会话标题从哪来
+
+**不从 jsonl 猜，走 `workbuddy.db` 的 `sessions.title` / `custom_title`。**
+
+实测从 jsonl 猜有 59% 失败率：system-reminder 会把首条用户消息淹掉，
+上下文压缩后早期输入还会被摘要替换。而 DB 里 241 个会话都有像样的标题。
+`sources/db.py::session_title_map()` 是这条路的公开入口，30s TTL 缓存。
+
+会话归属规则：`工作空间/<父会话 id>/subagents/agent-x.jsonl` 是 4 段路径，
+子代理消耗的 token 归**父会话**。
+
+`top_sessions` 里的 `session` 是截断 id（默认 8 位）。不同完整 id 前 8 位可能
+相同（实测 `01a143cb-530e-...` 与 `01a143cb-52f9-...`），所以截断前先查重：
+冲突的升到 12 位，仍冲突就用全 id。否则前端下钻会认错会话。
+
+## 九个必须知道的坑
 
 改代码前先读这几条，都是实测踩出来的：
 
@@ -89,6 +186,11 @@ GET /api/v1/health       数据源自检
 7. **越界屏号返回 HTTP 200 + `{"ok":false}`**，不是 4xx。这是故意的：固件按
    `strstr(json, "\"ok\":true")` 判断成败（`firmware/main/main.cpp`），
    不看 HTTP 状态码。写自检脚本时别断言状态码。
+8. **`in` 是 Python 关键字**。`TokenSummary` 里输入 token 的字段对外叫 `in`，
+   但声明必须写成 `in_token: int = Field(alias="in")` + `model_config =
+   {"populate_by_name": True}`，直接写 `in: int` 是 `SyntaxError`。
+9. **会话 id 截断会"造"出重复会话**。见上文 `top_sessions` 的查重逻辑。
+   直接 `sid[:8]` 会让两个不同会话在榜上看起来一模一样。
 
 ## 与固件的契约
 
@@ -116,7 +218,8 @@ server/
     ├── db.py         workbuddy.db 只读访问
     ├── files.py      tasks / changes / artifacts 的 JSON 扫描
     ├── ledger.py     任务账本（历史不随文件删除消失）
-    └── system.py     psutil 指标
+    ├── system.py     psutil 指标
+    └── tokens.py     token 用量（jsonl 增量扫描 + 牌价估算）
 ```
 
 **所有接口只读内存快照，不在请求路径上查库。** 采集协程每 2s 刷新一次。
@@ -131,6 +234,10 @@ server/
 - 账本损坏 → 从空账本重建，任务统计退回"只看盘上"
 - `psutil` 缺失 → 系统指标全 0，服务正常
 - 单个 JSON 损坏 → 跳过该文件
+- `~/.workbuddy/projects` 不存在 → `tokens` 段返回 0 且 `ready=true`，不报错
+- token 扫描抛异常 → `health.tokens.ok=false` 写原因，**其余指标照常**。
+  这一项故意不计入 `ok_count`：它是附加指标，为它保留旧快照反而会让人
+  对着过期数字做决定。
 
 ## 验证
 
@@ -144,6 +251,9 @@ python scripts/shot_board.py
 # 单项手测
 curl -s http://127.0.0.1:27777/status | wc -c          # 应 < 4096
 curl -s http://127.0.0.1:27777/status | grep -c '"ok":true'
+# token（增量扫描，应在几十毫秒内返回）
+curl -s http://127.0.0.1:27777/api/v1/tokens
+curl -s -X POST http://127.0.0.1:27777/api/v1/tokens/rescan
 ```
 
 `scripts/shot_board.py` 跨平台：浏览器用 playwright 自带的 chromium，

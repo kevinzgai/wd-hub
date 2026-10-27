@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from . import sources
-from .sources import db, files, system
+from .sources import db, files, system, tokens
 from .sources.db import SourceError
 
 log = logging.getLogger("board.collector")
@@ -45,6 +45,11 @@ class Snapshot:
         "runs_today": 0, "failed_today": 0, "pending_review": 0, "last_run_at": None})
     activity: dict[str, Any] = field(default_factory=lambda: {
         "date": "", "files": 0, "additions": 0, "deletions": 0, "projects": []})
+    # token 总量。只放 summary（KPI 那几个数），日/模型/会话明细走按需查询 ——
+    # 那些要按窗口参数算，塞进 2s 快照里纯属浪费。
+    tokens: dict[str, Any] = field(default_factory=lambda: {
+        "requests": 0, "in": 0, "out": 0, "total": 0, "cache_rate": 0.0,
+        "cost_est": 0.0, "today": {"requests": 0, "total": 0, "cost_est": 0.0}})
     sys: dict[str, Any] = field(default_factory=lambda: {
         "cpu": 0.0, "mem": 0.0, "disk": 0.0, "temp": 0, "proc": 0, "uptime": 0})
     health: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -171,6 +176,24 @@ def _collect_sync() -> Snapshot:
         s.errors.append(f"changes:{e}")
         s.health["changes"] = {"ok": False, "count": 0, "detail": str(e)}
         log.warning("变更采集失败: %s", e)
+
+    # ---- Token 用量 ----
+    #
+    # 增量扫：冷启动读全部日志（实测 1.5s），之后每轮只读新增字节（0.05s）。
+    # 冷启动那一轮会拖慢首次采集，但只发生一次 —— 服务起来后第一份快照
+    # 稍慢可接受，不该为了 0.5s 的启动时间去做复杂的后台预热。
+    #
+    # 这里**不算**它的 ok_count 参与"业务源是否全挂"的判定：token 是
+    # 附加指标，它挂了不该导致整屏数据被判为失效而保留旧快照。
+    try:
+        tokens.scan()
+        s.tokens = tokens.summary()
+        s.health["tokens"] = {"ok": True, "count": s.tokens.get("requests", 0),
+                              "detail": ""}
+    except Exception as e:                          # noqa: BLE001
+        # 日志目录可能读不了，或某条记录结构怪异 —— 都不该影响主看板
+        s.health["tokens"] = {"ok": False, "count": 0, "detail": str(e)[:80]}
+        log.warning("Token 采集失败: %s", e)
 
     # ---- 系统（永不失败）----
     try:
