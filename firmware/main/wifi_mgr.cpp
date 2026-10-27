@@ -93,10 +93,11 @@ static const char *TAG = "wifi";
  *   2. "已连 WiFi"模式跑在用户的真实局域网里，任何人都能访问 —— 这个
  *      模式**必须**校验验证码。
  *
- * 验证码每 30 秒换一次。**唯一的获取渠道是设备屏幕** —— 用户看着屏上的
+ * 验证码每 5 分钟换一次，**屏上带剩余有效期倒计时**（用户能看清还有多久，
+ * 不会填到一半突然失效）。**唯一的获取渠道是设备屏幕** —— 用户看着屏上的
  * 4 位数字手抄进表单。/info 绝不下发它（那等于把钥匙和锁挂在一扇门上）。 */
 #define CFG_TOKEN_LEN   4
-#define CFG_TOKEN_TTL_MS 30000
+#define CFG_TOKEN_TTL_MS (5 * 60 * 1000)
 
 /* 配网模式无人搭理就自动重启回正常。
  *
@@ -125,6 +126,13 @@ static char            s_svr_base[SVR_BASE_MAX];     /* 当前生效 */
 static char            s_svr_default[SVR_BASE_MAX];  /* 编译期 BRIDGE_BASE 兜底 */
 static volatile int    s_svr_fails;                  /* 连续失败次数 */
 static volatile bool   s_svr_down;                   /* 已达阈值：屏幕提示 + 开配置页 */
+/* 本次上电后是否成功拉通过一次服务。
+ *
+ * 屏幕用它区分两种"未连接"：
+ *   false → 还没连上过（开机首连 / 换地址后），显示"正在连接服务 + 地址"
+ *   true  → 连上过又断了（服务重启、电脑休眠），只在连续失败几次后才提示
+ * 不能只看 fails：fails 在首次连接失败时也会从 0 涨起来。 */
+static volatile bool   s_svr_ever_ok;
 static volatile uint32_t s_svr_ver;                  /* 每次改动 +1，fetch 据此立刻重试 */
 /* 配置页是在"已连着 WiFi"的状态下开的（区别于配网热点的那个）。
  * 决定了服务恢复时要不要 httpd_stop —— 配网模式的页面是等重启来关的。 */
@@ -439,6 +447,23 @@ const char *wifi_mgr_cfg_token(void)
     return cfg_token();
 }
 
+/* 当前验证码还剩几秒有效（屏上倒计时用）。
+ *
+ * ⚠ 内部先调一次 cfg_token()：它顺手处理"已经过期"，过期就换新的，
+ *   返回的倒计时也是新码的满额有效期。否则刚好卡在过期那一刻，屏幕会
+ *   先显示 0 秒、下一秒才跳到新码，看起来像卡死。
+ * ⚠ 向上取整：还剩 0.3 秒也显示 1 秒，不提前显示 0。 */
+int wifi_mgr_cfg_token_left(void)
+{
+    if (s_state == WIFI_ST_PROVISION) return 0;
+    cfg_token();
+
+    uint32_t now  = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t used = (uint32_t)(now - s_cfg_token_ms);
+    if (used >= CFG_TOKEN_TTL_MS) return 0;          /* 理论上到不了，兜底 */
+    return (int)((CFG_TOKEN_TTL_MS - used + 999) / 1000);
+}
+
 /* 校验请求带上的验证码。
  *
  * 配网模式（热点网段）**不校验**：那台手机本来就站在设备面前，
@@ -532,6 +557,10 @@ padding:11px 12px;border-radius:8px;cursor:pointer;font-size:14px}
 .msg.ok{display:block;background:#0f2a17;color:#4fd463;border:1px solid #1e5c2e}
 .msg.err{display:block;background:#2d1214;color:#ff7b72;border:1px solid #5c1e22}
 .tip{font-size:12px;color:#6e7681;margin-top:10px;line-height:1.5}
+.row{display:flex;align-items:center;gap:8px}
+.row .sep{color:#8b949e;flex:none}
+.row #ip{flex:1;min-width:0}
+.row #port{width:92px;flex:none}
 </style></head><body>
 <h1 id="head">WorkBuddy 看板</h1>
 <p class="sub" id="sub">加载中…</p>
@@ -554,14 +583,19 @@ padding:11px 12px;border-radius:8px;cursor:pointer;font-size:14px}
 </div>
 
 <div class="card">
-  <label>服务地址（电脑 IP:端口）</label>
-  <input id="base" placeholder="192.168.0.89:27777" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label>服务地址（电脑 IP 与端口分开填）</label>
+  <div class="row">
+    <input id="ip" placeholder="192.168.0.89" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <span class="sep">:</span>
+    <input id="port" placeholder="27777" inputmode="numeric" maxlength="5"
+           autocapitalize="off" autocorrect="off" spellcheck="false">
+  </div>
   <label id="tokLabel" style="margin-top:14px;display:none">设备屏幕上的 4 位验证码</label>
   <input id="token" placeholder="屏幕上那 4 位数字" inputmode="numeric" maxlength="4" style="display:none">
   <button class="primary" id="saveBase">保存并立即生效</button>
   <div class="msg" id="msg2"></div>
   <p class="tip">电脑换 IP 不用重烧固件：改这里，看板几秒内自己连上新地址。<br>
-  端口固定 27777，通常只改 IP。不写 http:// 也认。</p>
+  端口留空就用默认 27777，通常只改 IP。不写 http:// 也认。</p>
 </div>
 
 <script>
@@ -608,10 +642,24 @@ $('save').onclick=async()=>{
  * ⚠ 已连 WiFi 模式（svr）要带验证码：这个页面跑在用户的真实局域网上，
  * 同网段任何设备都能访问，不校验的话别人能把看板的服务地址改成
  * 自己的机器，屏上的"工作状态"就全是假的。 */
+/* 服务地址拆成 IP / 端口两个框：端口留空就用默认 27777。
+ * 容错：用户把 "192.168.1.5:27777" 或带 http:// 的整串粘进 IP 框也认
+ * （手输地址的人第一反应常常是整串粘，不该因此报错）。 */
+const DEF_PORT='27777';
+function splitBase(v){
+  v=(v||'').trim().replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//,'').replace(/\/+$/,'');
+  let ip=v,port='';
+  const i=v.lastIndexOf(':');
+  if(i>0){ip=v.slice(0,i);port=v.slice(i+1);}
+  return {ip:ip.trim(),port:port.trim()};
+}
 $('saveBase').onclick=async()=>{
-  const base=$('base').value.trim();
   const b=$('saveBase');
-  if(!base){showMsg('msg2','请填服务地址',false);return;}
+  const s=splitBase($('ip').value);
+  const port=parseInt($('port').value.trim()||s.port||DEF_PORT,10);
+  if(!s.ip){showMsg('msg2','请填电脑 IP',false);return;}
+  if(!(port>0&&port<65536)){showMsg('msg2','端口不对，留空则用默认 27777',false);return;}
+  const base=s.ip+':'+port;
   const tok=$('token').value.trim();
   if(needToken&&!tok){showMsg('msg2','请填屏幕上那 4 位验证码',false);return;}
   b.disabled=true;b.textContent='保存中…';
@@ -646,7 +694,11 @@ $('saveBase').onclick=async()=>{
 (async()=>{
   try{
     const d=await info();
-    $('base').value=d.base||'';
+    const sb=splitBase(d.base);
+    $('ip').value=sb.ip;
+    /* 默认端口不回填成字面值：留空 + placeholder 27777 更直观，
+     * 也顺手告诉用户"这个可以不填"。 */
+    $('port').value=(sb.port&&sb.port!==DEF_PORT)?sb.port:'';
     if(d.mode==='svr'){
       $('wifiCard').style.display='none';
       $('head').textContent='改服务地址';
@@ -654,7 +706,7 @@ $('saveBase').onclick=async()=>{
       needToken=true;
       $('tokLabel').style.display='block';
       $('token').style.display='block';
-      showMsg('msg2','看板连不上电脑上的服务。改下面的地址，保存即可生效。\n需要屏幕上那 4 位验证码。',false);
+      showMsg('msg2','看板连不上电脑上的服务。改下面的地址，保存即可生效。\n需要屏幕上那 4 位验证码（5 分钟内有效）。',false);
     }else{
       $('sub').textContent='给设备配置 WiFi 与服务地址';
       scan();
@@ -1178,10 +1230,11 @@ void wifi_mgr_set_default_base(const char *base)
     }
 }
 
-const char   *wifi_mgr_svr_base(void)    { return s_svr_base; }
-uint32_t      wifi_mgr_svr_version(void) { return s_svr_ver; }
-bool          wifi_mgr_svr_down(void)    { return s_svr_down; }
-int           wifi_mgr_svr_fails(void)   { return s_svr_fails; }
+const char   *wifi_mgr_svr_base(void)     { return s_svr_base; }
+uint32_t      wifi_mgr_svr_version(void)   { return s_svr_ver; }
+bool          wifi_mgr_svr_down(void)     { return s_svr_down; }
+bool          wifi_mgr_svr_ever_ok(void)  { return s_svr_ever_ok; }
+int           wifi_mgr_svr_fails(void)    { return s_svr_fails; }
 
 void wifi_mgr_svr_reset(void)
 {
@@ -1196,6 +1249,7 @@ void wifi_mgr_svr_report(bool ok)
 
     if (ok) {
         s_svr_fails = 0;
+        s_svr_ever_ok = true;
         if (s_svr_down) {
             s_svr_down = false;
             ESP_LOGW(TAG, "服务已恢复，关闭配置页");

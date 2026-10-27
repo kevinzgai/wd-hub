@@ -112,17 +112,28 @@ void wifi_mgr_svr_reset(void);
 bool wifi_mgr_svr_down(void);
 int  wifi_mgr_svr_fails(void);
 
+/* 本次上电后是否成功拉通过一次服务。
+ * 屏幕用它区分"还在连"和"连上过又断了"：
+ *   false + WiFi 已连 → "正在连接服务 + 服务器地址"
+ *   true  + 连续失败   → 先维持旧数据，失败几次后才提示"服务连不上" */
+bool wifi_mgr_svr_ever_ok(void);
+
 /* 在**当前已连上的 WiFi** 上开配置页：不动 WiFi、不重启。
  * 返回配置页地址（设备自身 IP，如 "192.168.1.23"）；没连上 WiFi 返回空串。
  * 幂等：页面已经在跑就直接返回地址。 */
 const char *wifi_mgr_start_svr_config(void);
 
-/* 配置页验证码（4 位数字）。
+/* 配置页验证码（4 位数字，有效期 5 分钟）。
  *
  * 配置页在"已连上 WiFi"时也是无鉴权的（跑在用户真实局域网上），
  * 所以改服务地址必须带上这个码：屏幕显示它，用户填进网页表单。
  * 配网模式（热点隔离网段）不需要，返回空串。 */
 const char *wifi_mgr_cfg_token(void);
+
+/* 当前验证码还剩几秒有效（1..300）。屏上倒计时用。
+ * 到点会自动换新码，所以这里返回的总是"当前这枚码"的剩余时间。
+ * 配网模式返回 0（那种模式不校验验证码）。 */
+int wifi_mgr_cfg_token_left(void);
 
 #ifdef __cplusplus
 }

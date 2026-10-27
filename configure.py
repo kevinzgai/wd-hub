@@ -9,8 +9,9 @@
 
 用法：
   python configure.py                      # 交互式填写
-  python configure.py -s MyWiFi -p 12345678
-  python configure.py -s MyWiFi -p 12345678 -b 192.168.1.100:27777
+  python configure.py -i 192.168.1.100     # 端口留空 → 默认 27777
+  python configure.py -i 192.168.1.100 --port 8080
+  python configure.py -b 192.168.1.100:27777   # 老写法，仍然支持
 """
 
 from __future__ import annotations
@@ -104,7 +105,10 @@ def main() -> int:
     # 改成手机配网（长按 BOOT 3 秒）。留着是为了不打断老脚本，传了只提示。
     ap.add_argument("-s", "--ssid", help="[已废弃] WiFi 名称，现在用手机配网")
     ap.add_argument("-p", "--password", help="[已废弃] WiFi 密码，现在用手机配网")
-    ap.add_argument("-b", "--bridge", help="bridge 地址，如 192.168.1.100:27777")
+    ap.add_argument("-b", "--bridge", help="bridge 地址（老写法），如 192.168.1.100:27777")
+    ap.add_argument("-i", "--ip", help="bridge IP，如 192.168.1.100（与 --port 分开填）")
+    ap.add_argument("--port", type=int, default=None,
+                    help=f"bridge 端口，留空默认 {DEFAULT_PORT}")
     args = ap.parse_args()
 
     if args.ssid or args.password:
@@ -113,15 +117,37 @@ def main() -> int:
         print("    （固件里不再保留任何默认 WiFi，避免换环境重烧和密码泄漏。）")
         print()
 
-    # bridge 地址：没给就自动探测
+    # 服务地址：支持 IP / 端口分开给（-i + --port），也兼容老的 -b 整串。
+    # 端口不填就用默认 27777 —— 绝大部分场景只换 IP，端口不用管。
+    if args.port is not None and not (0 < args.port < 65536):
+        print("[!] 端口必须在 1..65535", file=sys.stderr)
+        return 1
+
     bridge = args.bridge
+    if args.ip:
+        # 走 parse_bridge 而不是直接拼：用户把端口也粘进 -i 时（"-i 1.2.3.4:8080"）
+        # 直接拼会得到 "1.2.3.4:8080:27777"，静默写进一个错地址。
+        host, port = parse_bridge(args.ip)
+        if host is None:
+            print(f"[!] 无法解析 IP: {args.ip}", file=sys.stderr)
+            return 1
+        if args.port is not None:
+            port = args.port          # 显式 --port 优先
+        bridge = f"{host}:{port}"
+    elif args.port is not None:
+        print("[!] --port 要配合 -i 一起用（或用 -b IP:端口）", file=sys.stderr)
+        return 1
+
+    # 都没给就自动探测
     if not bridge:
         ip = detect_lan_ip()
         if ip:
             print(f"[i] 检测到本机局域网 IP: {ip}")
             bridge = f"{ip}:{DEFAULT_PORT}"
         else:
-            bridge = input("bridge 地址 (IP:端口): ").strip()
+            ip_in = input("服务地址 IP（电脑局域网 IP）: ").strip()
+            port_in = input(f"端口（留空默认 {DEFAULT_PORT}）: ").strip()
+            bridge = f"{ip_in}:{port_in or DEFAULT_PORT}" if ip_in else ""
 
     if not bridge:
         print("[!] 必须提供 bridge 地址", file=sys.stderr)
