@@ -22,11 +22,14 @@ import json
 import logging
 import socket
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel, Field
 
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
@@ -88,7 +91,8 @@ API_TOKEN: Optional[str] = None
 # 所以分成两类：精确匹配的路径，和前缀匹配的路径。
 TOKEN_EXEMPT_EXACT = ("/", "/docs", "/redoc", "/openapi.json",
                        "/ticker", "/api/ticker")
-TOKEN_EXEMPT_PREFIX = ("/status", "/screen/")
+# /device/report 也必须豁免：设备的 URL 是编译期写死的，带不了 ?t=xxx
+TOKEN_EXEMPT_PREFIX = ("/status", "/screen/", "/device/report")
 
 
 def _token_ok(request) -> bool:
@@ -311,6 +315,21 @@ def _snap_age_sec(snap) -> int:
     return age if age >= 0 else 0
 
 
+def _chip_temp() -> int:
+    """设备芯片结温（°C 取整），-1 = 设备没上报过或上报已过期。
+
+    注意这是**结温**不是环境温度：芯片自发热让读数比室温高 5~15°C，
+    满载时更高。看趋势可以，别拿它当室温用。
+    """
+    t = _device_snapshot().get("chip_temp")
+    if t is None:
+        return -1
+    try:
+        return int(round(float(t)))
+    except (TypeError, ValueError):
+        return -1
+
+
 def _firmware_payload(snap) -> dict:
     now = datetime.now()
     sysd = getattr(snap, "sys", None) or {}
@@ -341,6 +360,10 @@ def _firmware_payload(snap) -> dict:
         "mem":  _pct(sysd.get("mem")),
         "disk": _pct(sysd.get("disk")),
         "temp": int(sysd.get("temp") or 0),   # °C，取不到为 0，固件据此隐藏
+        # 芯片结温（°C），来自设备自己上报的 /device/report，不是 PC 的传感器。
+        # 取一位小数没必要 —— 12px 屏上显示整数，且传感器本身 ±1°C 精度。
+        # 没有上报过就是 -1，固件显示 "--"，不显示假温度。
+        "chip_temp": _chip_temp(),
         # 设备上能按出几屏。固件据此循环，改屏数不用重烧固件
         "nscr": SCREEN_COUNT,
     }
@@ -560,6 +583,8 @@ async def screen_endpoint(idx: int):
         "cpu":   _pct(sysd.get("cpu")),
         "mem":   _pct(sysd.get("mem")),
         "disk":  _pct(sysd.get("disk")),
+        # 图表屏页脚要显示芯片结温；和 /status 同源同口径
+        "chip_temp": _chip_temp(),
         "nscr":  SCREEN_COUNT,
     }
     if charts:
@@ -576,6 +601,56 @@ async def screen_endpoint(idx: int):
     return Response(content=body.encode("utf-8"),
                     media_type="application/json; charset=utf-8",
                     headers={"Cache-Control": "no-store"})
+
+
+# ===========================================================================
+# 设备上报：芯片温度等板载指标
+# ===========================================================================
+# 为什么是内存字典而不是落盘：
+#   这是"设备现在有多热"的实时读数，过期就没有意义。重启服务后 30 秒内
+#   设备会再报一次，不需要持久化。
+#
+# 为什么单独开一个上行端点而不是塞进 /status 的 query：
+#   /status 是冻结契约且被设备高频轮询（5s），把上报混进去会让"读"和"写"
+#   耦合 —— 设备哪天只读不写，服务端就永远拿不到温度。分开更干净。
+_device_report: Dict[str, dict] = {}
+_device_report_lock = threading.Lock()
+DEVICE_REPORT_TTL_SEC = 180   # 超过 3 分钟没上报就当离线，不再透传
+
+
+class DeviceReport(BaseModel):
+    """设备主动上报的板载指标。全部可选，缺字段就不覆盖旧值。"""
+    chip_temp: Optional[float] = Field(None, description="片上温度传感器读数，°C")
+    battery:   Optional[int]   = Field(None, description="电量 %，-1 = 未知")
+    charging:  Optional[bool]  = Field(None, description="是否在充电")
+    uptime_s:  Optional[int]   = Field(None, description="设备运行秒数")
+
+
+def _device_snapshot() -> dict:
+    """取设备最近一次上报，过期则返回空。线程安全。"""
+    with _device_report_lock:
+        rep = dict(_device_report)
+    if not rep:
+        return {}
+    ts = rep.pop("_ts", 0.0)
+    if time.time() - ts > DEVICE_REPORT_TTL_SEC:
+        return {}
+    rep.pop("_dev", None)
+    return rep
+
+
+@app.post(
+    "/device/report",
+    summary="设备上报板载指标（温度/电量）",
+    description="ESP32 主动上行。数据存内存，供 /status 的 `chip_temp` 等字段透传。",
+    tags=["firmware"],
+)
+async def device_report(req: DeviceReport):
+    dev = (req.model_dump(exclude_none=True))
+    with _device_report_lock:
+        _device_report.update(dev)
+        _device_report["_ts"] = time.time()
+    return {"ok": True}
 
 
 @app.get(
