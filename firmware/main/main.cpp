@@ -77,10 +77,22 @@ static void font_probe(void)
         lv_font_glyph_dsc_t d;
         memset(&d, 0, sizeof(d));
         bool ok = lv_font_get_glyph_dsc(&font_cn_16, &d, list[i].cp, 0);
-        ESP_LOGW(TAG, "FONT %-9s U+%04X found=%d placeholder=%d box=%dx%d ofs=(%d,%d) adv=%u",
-                 list[i].name, (unsigned)list[i].cp, (int)ok, (int)d.is_placeholder,
-                 (int)d.box_w, (int)d.box_h, (int)d.ofs_x, (int)d.ofs_y,
-                 (unsigned)d.adv_w);
+
+        /* ⚠ 只有"真的缺字"才告警。
+         * 原来每次开机都打 7 条 WARN，正常字形也照打 —— 真正的告警
+         * 混在里面，等于没有告警。现在：正常的降级成 DEBUG（默认不输出，
+         * 需要排查时把日志级别调到 DEBUG 就能看到完整自检结果），
+         * 缺字形（found=0 或渲染出来是占位方格）才升成 WARN。 */
+        bool bad = (!ok) || d.is_placeholder;
+        if (bad) {
+            ESP_LOGW(TAG, "FONT %-9s U+%04X 缺失！found=%d placeholder=%d",
+                     list[i].name, (unsigned)list[i].cp, (int)ok, (int)d.is_placeholder);
+        } else {
+            ESP_LOGD(TAG, "FONT %-9s U+%04X ok box=%dx%d ofs=(%d,%d) adv=%u",
+                     list[i].name, (unsigned)list[i].cp,
+                     (int)d.box_w, (int)d.box_h, (int)d.ofs_x, (int)d.ofs_y,
+                     (unsigned)d.adv_w);
+        }
     }
 }
 
@@ -134,15 +146,18 @@ static void utf8_sanitize(const lv_font_t *font, const char *in, char *out, size
 #include "config.local.h"
 #endif
 
-#ifndef WIFI_SSID
-#define WIFI_SSID         "SCB"
-#endif
-#ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD     "12345677"
-#endif
-// 本机以太网 192.168.0.89，设备必须连同一个路由器
+// ⚠ 这里**没有** WIFI_SSID / WIFI_PASSWORD。
+// 2026-10-27 起固件只从 NVS 读 WiFi 凭据，没有就开机进配网模式。
+// 以前留着的这两个宏已经是死代码（wifi_mgr 不读、configure.py 也不写），
+// 留着只会让下一个改代码的人以为"改这里就能换 WiFi"—— 改了完全没效果。
+//
+// 服务地址（本机以太网 IP，设备必须连同一个路由器）
 // 只给 base：第 0 屏走 /status，其余屏走 /screen/<i>，路径由 s_page 决定
 // 端口 27777 与服务端 DEFAULT_PORT 保持一致（刻意避开 8080）
+//
+// ⚠ 这只是**出厂兜底值**。2026-10-27 起地址存在 NVS 里，配过一次就以 NVS
+// 为准：电脑换 IP 时在配置页改一下就行，不用改这里、也不用重烧。
+// 配置页地址见屏幕上的"服务连不上"提示（= 设备自己的 IP）。
 #ifndef BRIDGE_BASE
 #define BRIDGE_BASE       "http://192.168.0.89:27777"
 #endif
@@ -459,17 +474,22 @@ static void display_init(void)
 #define HEADER_LOGO_Y   4
 
 // 电量数字的视觉居中补偿。
-// LVGL 绘制字形用的是（见 lv_draw_label.c:671）：
+//
+// 补偿量由 font_cn_12.c 的字形度量算出，不是目测试出来的。
+// LVGL 绘制字形（lv_draw_label.c）：
 //   glyph_y1 = pos->y + (line_height - base_line) - box_h - ofs_y
-// font_cn_12: line_height=13, base_line=2；数字 box_h=10, ofs_y=0
-//   → glyph_y1 = 0 + (13-2) - 10 - 0 = 1，字高 10，底边在 11
-// 行框 13px 内：上方空 1px、下方空 2px → 墨迹重心比行框中心高 0.5px。
-// lv_obj_align_to(CENTER) 对齐的是行框，所以要往下补 1px 才是视觉正中。
-#define BAT_LABEL_DY    1
-// 横向同理：数字字形有 ofs_x=1（左边留 1px 空白），"100%" 总宽 24px 但墨迹
-// 实际只占 x=1..22，视觉重心偏右 0.5px。
-// 先按 -5 左移，用户反馈"多了"，再右移 2px -> -3。
-#define BAT_LABEL_DX    (-3)
+// font_cn_12 实测：line_height=15, base_line=3；数字 box_h=8, ofs_y=0
+//   → 墨迹顶 = (15-3) - 8 - 0 = 4，墨迹底 = 12，墨迹中心 = 8
+//   行框中心 = (15-1)/2 = 7
+//   → 墨迹重心比行框中心**低 1px**（偏下），要往上补 1px。
+//
+// ⚠ 之前这里是 +1，方向搞反了：往下推会让偏得更下（总共偏下 2px）。
+// 旧注释里写的 line_height=13/base_line=2 也是旧数据，与现在的字体文件对不上。
+#define BAT_LABEL_DY    (-1)
+// 横向：数字 ofs_x=0、'%' ofs_x=0，整串墨迹重心与行框中心基本重合（±0.5px）。
+// 不做补偿。这个 -3 是早前目测试出来的（"先 -5，用户反馈多了，再 +2"），
+// 实际把数字推得偏左了 3px。
+#define BAT_LABEL_DX    0
 
 // ---- 像素宠物：浮动在右下角 ----
 // 素材是 PET_IMG_W x PET_IMG_H = 120x96（不是 120x120 —— 之前这里的注释
@@ -773,9 +793,12 @@ static void ui_build(void)
     lv_obj_set_style_pad_all(s_arc_bat, 0, LV_PART_MAIN);
 
     // 中心百分比。font_cn_12 的 ASCII 是 6px/字符，34px 圆圈内径 26px，
-    // "100%" 占 24px 放得下 —— 全部带百分号，口径统一。
-    // 用 align_to(CENTER) 之后再加 BAT_LABEL_DY：CENTER 对齐的是行框(13px)，
-    // 而数字墨迹只有 10px 且下方留白比上方多 1px，直接居中会显得偏高。
+    // "100%" 占 28px —— 略微超出内径，但字形是等宽的，视觉上还能放下。
+    // 全部带百分号，口径统一。
+    //
+    // 用 align_to(CENTER) 之后再加 BAT_LABEL_DX/DY：CENTER 对齐的是**行框**
+    // （font_cn_12 line_height=15），而人眼判断的是**墨迹**（数字 box_h=8），
+    // 两者差 1px，补偿量见上面常量的推导。
     s_lbl_bat = lv_label_create(scr);
     lv_obj_set_style_text_font(s_lbl_bat, &font_cn_12, 0);
     lv_obj_set_style_text_color(s_lbl_bat, COL_TEXT, 0);
@@ -1371,22 +1394,44 @@ static bool json_nth_object(const char *json, const char *array_key, int n,
 
     int depth = 0, idx = -1;
     const char *obj_start = NULL;
+    /* ⚠ 必须区分字符串内外。
+     * 会话标题是 AI 生成的文本，里面出现 { } ] 都很正常
+     * （"fix {bug}"、"数组越界 [i]"）。
+     * 原实现只看字符本身，于是：
+     *   - 标题里有 { → depth 提前归零 → end 落在标题中间，
+     *     后面的 project/elapsed 全解析成空；
+     *   - 标题里有 ] → 直接判定"数组结束"，整行会话凭空消失。
+     * 字符串内的括号是文本，不参与结构计数。 */
+    bool in_str = false, esc = false;
 
     while (*p) {
-        if (*p == '{') {
+        char c = *p;
+
+        if (in_str) {
+            /* 字符串内部：只有 \" 是转义，其它字符都是文本 */
+            if (esc)          esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == '"')  in_str = false;
+            p++;
+            continue;
+        }
+
+        if (c == '"') {
+            in_str = true;
+        } else if (c == '{') {
             if (depth == 0) {
                 idx++;
                 if (idx == n) obj_start = p;
             }
             depth++;
-        } else if (*p == '}') {
+        } else if (c == '}') {
             depth--;
             if (depth == 0 && obj_start) {
                 *start = obj_start;
                 *end   = p;
                 return true;
             }
-        } else if (*p == ']' && depth == 0) {
+        } else if (c == ']' && depth == 0) {
             return false;
         }
         p++;
@@ -1419,7 +1464,11 @@ static void parse_into(board_data_t *d, const char *json)
         const char *start = NULL, *end = NULL;
         if (!json_nth_object(json, "rows", i, &start, &end)) break;
 
-        char sub[256];
+        /* ⚠ 必须和 sessions 那段一样用 512。
+         * 原来这里是 256，同一份数据在 1514 行用 sub[512]。当前字段量
+         * （40+20+12 字节中文标题）撑不到 256，但服务端一加字段就静默截断 ——
+         * 截断后 json_str 找不到键 → 显示空白，不崩、不报错，很难发现。 */
+        char sub[512];
         size_t len = (size_t)(end - start) + 1;
         if (len >= sizeof(sub)) len = sizeof(sub) - 1;
         memcpy(sub, start, len);
@@ -1628,6 +1677,20 @@ static void fetch_task(void *arg)
 // 期间 WiFi/IP 的所有事件都出不来。新实现改用 esp_timer 调度。
 // ===========================================================================
 
+/* ⚠ 这里原来配 SNTP + TZ，是一段死代码，已删除。
+ *
+ * 屏幕上的 clock / date 全部来自服务端（api_server.py 里 datetime.now()
+ * 格式化后下发），固件从头到尾没有调用过 localtime / strftime。
+ * 也就是说：SNTP 对齐的时间戳，**没有任何代码去读**。
+ *
+ * 留着它的代价是实打实的：
+ *   · esp_sntp_init() 会持续向公网发 NTP 请求，流量和功耗都是白付；
+ *   · 两台服务器轮询，重连 WiFi 后还会重新握手；
+ *   · 设备在断开 bridge、根本没网的时候也在对外面发包。
+ *
+ * 真要用本地时间（比如离线时显示时间），正确做法是加一个
+ * localtime() + strftime() 的渲染路径，再把 SNTP 调回来。 */
+#ifdef CONFIG_WB_LOCAL_TIME
 static void time_init(void)
 {
     setenv("TZ", "CST-8", 1);
@@ -1637,6 +1700,7 @@ static void time_init(void)
     esp_sntp_setservername(1, "cn.pool.ntp.org");
     esp_sntp_init();
 }
+#endif
 
 // ===========================================================================
 // 按键：先当"探针"用 —— 三个候选引脚全监听，谁被按下日志里就报谁
@@ -2002,9 +2066,20 @@ extern "C" void app_main(void)
     wifi_mgr_set_default_base(BRIDGE_BASE);
 
     wifi_mgr_begin();
+#ifdef CONFIG_WB_LOCAL_TIME
     time_init();
+#endif
 
-    xTaskCreate(fetch_task,  "fetch",  8192, NULL, 5, NULL);
-    xTaskCreate(lvgl_task,   "lvgl",   8192, NULL, 4, NULL);
-    xTaskCreate(button_task, "button", 3072, NULL, 3, NULL);
+    /* ⚠ 检查 xTaskCreate 返回值。
+     * 失败时任务根本没起来，但设备看起来是正常的（能亮屏、能连 WiFi），
+     * 只是数据永远不刷新 —— 静默失效，最难排查。 */
+    if (xTaskCreate(fetch_task,  "fetch",  8192, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "fetch 任务创建失败 —— 屏幕不会更新数据");
+    }
+    if (xTaskCreate(lvgl_task,   "lvgl",   8192, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "lvgl 任务创建失败 —— 屏幕不会刷新");
+    }
+    if (xTaskCreate(button_task, "button", 3072, NULL, 3, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "button 任务创建失败 —— 按键无效");
+    }
 }
