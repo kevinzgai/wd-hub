@@ -1346,6 +1346,16 @@ static void ui_build(void)
 
     // 服务地址浮层：建在最后，子对象顺序最靠上
     svr_ui_build();
+
+    // 亮度提示挪到最上层。它是"系统级"的瞬时反馈，任何界面都该能看见：
+    //   - 建屏时它排在第 1295 行，而休眠屏容器在第 1305 行才建 ——
+    //     后建的在子对象顺序里更靠上，休眠时按 VOL 调亮度会发现
+    //     屏幕确实变亮了，但"☀ 70%"这几个字被休眠屏的纯黑底盖掉了。
+    //   - 同理也不能被 WiFi / 服务地址浮层压住：那两层在连不上网时
+    //     会长期占屏，而用户这时恰恰更需要看到亮度反馈。
+    // 把 toast 移到最后一个子对象即可（LVGL 没有 z-index，顺序即层级）。
+    // 这个操作放在 ui_build 末尾，此时所有控件都已创建完毕。
+    if (s_lbl_toast) lv_obj_move_foreground(s_lbl_toast);
 }
 
 // ===========================================================================
@@ -1746,11 +1756,7 @@ static void sleep_apply(bool on)
         backlight_set(SLEEP_BRIGHT_PCT);
         ESP_LOGI(TAG, ">>> 进入休眠屏（无任务，背光 %d%%）", SLEEP_BRIGHT_PCT);
     } else {
-        // ---- 唤醒：把可见性交还给 page_apply ----
-        //
-        // 不在这里逐个 clear 页头控件，而是调用 page_apply 的逻辑：
-        // 它会根据 s_page 决定该亮哪个容器。页头那几个控件反正一直可见，
-        // 这里直接全部 clear 即可（page_apply 不碰页头）。
+        // ---- 唤醒：把可见性还给"正常界面" ----
         lv_obj_add_flag(s_pg_sleep, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_lbl_clock,  LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_lbl_date,   LV_OBJ_FLAG_HIDDEN);
@@ -1760,7 +1766,17 @@ static void sleep_apply(bool on)
         lv_obj_clear_flag(s_lbl_sys,    LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_lbl_footer, LV_OBJ_FLAG_HIDDEN);
 
-        // 页面容器按 s_page 恢复，和 page_apply 的规则保持一致
+        // 三个容器必须"先全藏再点亮一个"，和 page_apply 里的顺序一致。
+        // 少这一步的话：休眠前在图表屏 → 休眠时按键切到列表屏 →
+        // 唤醒时点亮 s_pg_list，但 s_pg_chart 仍留在可见状态
+        // （休眠时它被 sleep_apply 藏了、可 page_apply 的休眠分支
+        //   并没有再次藏它 —— 虽然实际已被藏，但依赖别处的副作用太脆）。
+        // 显式全藏一遍是幂等的，代价可忽略，换来的是"点心原则"：
+        // 谁点亮谁负责，不推测别人已经藏好。
+        lv_obj_add_flag(s_pg_main,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_pg_list,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_pg_chart, LV_OBJ_FLAG_HIDDEN);
+
         if (s_page == 0) {
             lv_obj_clear_flag(s_pg_main, LV_OBJ_FLAG_HIDDEN);
         } else if (s_page < MAX_PAGES && s_page_is_chart[s_page]) {
@@ -1777,8 +1793,9 @@ static void sleep_apply(bool on)
 
         // 背光恢复成用户调的档位
         backlight_set(k_bright_steps[s_bright_idx]);
-        ESP_LOGI(TAG, ">>> 退出休眠屏（有任务，背光 %u%%）",
-                 k_bright_steps[s_bright_idx]);
+        // 文案不写"有任务"：唤醒有两个来源（来了任务 / 用户按键），
+        // 写死成前者会让人排查时误以为数据在变。
+        ESP_LOGI(TAG, ">>> 退出休眠屏（背光 %u%%）", k_bright_steps[s_bright_idx]);
     }
 }
 
