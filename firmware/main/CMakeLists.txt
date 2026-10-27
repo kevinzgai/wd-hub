@@ -7,6 +7,7 @@ idf_component_register(
         "font_cn_12.c"
         "font_cn_16.c"
         "font_cn_28.c"
+        "font_cn_72.c"
         "logo_wb.c"
         "pet_frames.c"
     INCLUDE_DIRS "."

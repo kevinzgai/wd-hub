@@ -69,10 +69,14 @@ SYM_CANDIDATES = [
 #
 # 28px 只给 UI 文案：它只渲染时钟、数字、"WiFi 未连接"、"配网模式"。
 # 复用全量字符集会让它从 ~40KB 涨到 214KB，纯浪费 Flash。
+# 第 4 项是"只生这些字"（None = 用字符集文件）。给休眠屏的大时钟用 ——
+# 它只显示 0-9 和冒号，没必要背整套 UI 文案：72px 全字符集要 553KB，
+# 只留数字+冒号是 49KB，差 11 倍。
 SIZES = [
-    (12, "font_cn_12", "charset.txt",    "列表/元信息，含 GB2312 一级常用字"),
-    (16, "font_cn_16", "charset.txt",    "会话标题/行标题，含 GB2312 一级常用字"),
-    (28, "font_cn_28", "charset_ui.txt", "时钟/大标题，只需 UI 文案"),
+    (12, "font_cn_12", "charset.txt",    "列表/元信息，含 GB2312 一级常用字", None),
+    (16, "font_cn_16", "charset.txt",    "会话标题/行标题，含 GB2312 一级常用字", None),
+    (28, "font_cn_28", "charset_ui.txt", "时钟/大标题，只需 UI 文案", None),
+    (72, "font_cn_72", None,             "休眠屏大时钟，只要数字和冒号", "0123456789:"),
 ]
 
 
@@ -202,6 +206,17 @@ def verify(path: str, charset: str, label: str) -> int:
 
 
 def main():
+    # 可选参数：只生成指定字号，例如 `py tools/gen_fonts.py 72`。
+    # 12/16/28px 的源文件有 2~3MB，加一档新字号时没必要全量重写 5MB，
+    # 也不该让 git 出现三份"内容没变但整文件重写"的 diff。
+    want = set()
+    for a in sys.argv[1:]:
+        if a.isdigit():
+            want.add(int(a))
+        else:
+            sys.exit(f"用法: py tools/gen_fonts.py [字号...]\n"
+                     f"  例: py tools/gen_fonts.py 72   # 只重生成 72px")
+
     cjk = pick(CJK_CANDIDATES, "中文")
     sym = pick(SYM_CANDIDATES, "符号")
     print(f"中文字体: {cjk}")
@@ -223,26 +238,38 @@ def main():
 
     total = 0
     bad = 0
-    for size, name, charset_file, note in SIZES:
-        path = os.path.join(TOOLS_DIR, charset_file)
-        if not os.path.exists(path):
-            sys.exit(f"找不到字符集 {path}，先跑 tools/gen_charset.py")
+    for size, name, charset_file, note, only in SIZES:
+        if want and size not in want:
+            continue
+        if only is not None:
+            # 显式指定字符集：不读文件，也不补分隔符（会引入无用字形）
+            charset = only
+        else:
+            path = os.path.join(TOOLS_DIR, charset_file)
+            if not os.path.exists(path):
+                sys.exit(f"找不到字符集 {path}，先跑 tools/gen_charset.py")
 
-        with open(path, encoding="utf-8") as f:
-            charset = f.read().strip()
-        # 界面里用作分隔符的标点，源码里不一定出现，单独补
-        charset += "·—…「」"
+            with open(path, encoding="utf-8") as f:
+                charset = f.read().strip()
+            # 界面里用作分隔符的标点，源码里不一定出现，单独补
+            charset += "·—…「」"
 
         out = os.path.join(MAIN_DIR, f"{name}.c")
-        cmd = [
-            "node", entry,
-            "--font", cjk, "--symbols", charset,
-            # 关键：--symbols 走字符串参数，空格会被命令行吞掉，结果字库
+        cmd = ["node", entry, "--font", cjk, "--symbols", charset]
+
+        if only is None:
+            # 只有走字符集文件的档位才需要补 ASCII：
+            # --symbols 走字符串参数，空格会被命令行吞掉，结果字库
             # ASCII 从 33(!) 开始，U+0020 缺失。界面里 "● 连接中" 这种带空格
             # 的串，空格就会渲染成占位方框。用 --range 显式包进 0x20~0x7E。
-            "--range", "0x20-0x7E",
+            #
+            # 显式字符集的档位（72px 大时钟）绝不能加：95 个 ASCII 字在
+            # 72px/4bpp 下约 250KB，而它只显示 "14:43"。
+            cmd += ["--range", "0x20-0x7E"]
             # 只声明"主字体画不了"的那部分，避免同字符重复声明导致丢失
-            "--font", sym, "--symbols", need_syms,
+            cmd += ["--font", sym, "--symbols", need_syms]
+
+        cmd += [
             "--size", str(size),
             "--bpp", "4",
             "--format", "lvgl",
@@ -266,7 +293,10 @@ def main():
         total += kb
         print(f" OK {kb:.0f}KB")
 
-        bad += verify(out, charset + own_syms + need_syms, f"{name}")
+        # 校验范围也按档位给：显式字符集档位没声明那些符号，拿它们去比
+        # 必然全报缺失（假警报）。
+        check = charset + (own_syms + need_syms if only is None else "")
+        bad += verify(out, check, f"{name}")
 
     print(f"\n源文件合计 {total:.0f}KB（编译后约为其 1/6）。")
     if bad:

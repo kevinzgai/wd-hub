@@ -56,6 +56,10 @@
 LV_FONT_DECLARE(font_cn_12);
 LV_FONT_DECLARE(font_cn_16);
 LV_FONT_DECLARE(font_cn_28);
+// 72px 只含 "0123456789:"。空转休眠屏的大时钟专用 ——
+// 只为了这一处显示时间就背一整套 72px 中文字库要多花 500KB Flash，
+// 而它这辈子只会显示 HH:MM 五个字符。
+LV_FONT_DECLARE(font_cn_72);
 
 static const char *TAG = "wb-board";
 
@@ -416,6 +420,51 @@ static volatile uint8_t  s_bright_apply = 0;   // 有新的亮度待应用
 static volatile int16_t  s_toast_val    = -1;  // 待显示的亮度值，-1 = 不显示
 static volatile uint32_t s_toast_until  = 0;   // 提示到期时刻（毫秒）
 static volatile const char *s_last_btn  = "none";  // 最后按下的键，随轮询日志打出来
+
+// ---- 空转休眠（Screen Off / 只显示时间）----
+//
+// 设计出发点：这块板子 7x24 挂在墙上，绝大部分时间是没活干的。
+// 满屏的"0 工作 / 0 完成 / 无会话"配上 100% 背光，既费电又刺眼。
+//
+// 进入条件（三条同时成立）：
+//   1. 连得上服务端（d->ok）—— 离线是故障，不该用休眠把它藏起来
+//   2. 没有任务在跑（working == 0 && session_count == 0）
+//   3. 人在第 0 屏（d->page == 0 && s_page == 0）
+//
+// 第 3 条不是可选的：/screen/<i> 只下发 rows，working/done/sessions 在
+// parse_into 里 fallback 成 0。不加这个守卫，用户按键切到任何详情屏
+// 都会被立刻判成"空闲"，画面直接跳回时钟屏 —— 按键等于失效。
+// pet_update_state() 里有一模一样的守卫，原因相同。
+//
+// 退出：下一轮 /status 拿到 working>0 或有会话，自动恢复。
+// 用户明确要"自动唤醒"，所以不绑按键 —— 按键在休眠时仍然可以切屏，
+// 但切屏不会退出休眠（空闲状态下没有可看的内容）。
+static bool     s_asleep      = false;  // 当前是否处于休眠屏
+static lv_obj_t *s_pg_sleep;            // 休眠屏容器（全屏不透明）
+static lv_obj_t *s_lbl_bigclock;        // 休眠屏：72px 大时钟
+static lv_obj_t *s_lbl_sleep_dot;       // 休眠屏：在线状态点
+// 休眠时背光降到这个值。30% 是"看得见但不刺眼"的下限 ——
+// 再低（20%）在白天室内就快读不出时间了。
+// 注意这不进 k_bright_steps：那是用户按键调节的档位，
+// 休眠亮度是系统行为，不该出现在"☀ 40%"的提示里，也不该被按键改掉。
+#define SLEEP_BRIGHT_PCT   30
+
+// 按键唤醒后的保活时长。
+//
+// 为什么需要它：休眠是"无任务"驱动的，而用户按键去看屏的时候
+// 机器多半还是无任务的 —— 没有保活的话，按下键刚亮一帧，
+// 下一轮 ui_render 又判成空闲、立刻睡回去，看着像按键坏了。
+// 给 60 秒：够翻完几屏、看清数字，之后自动回休眠，不用记得关。
+//
+// 单独一个时间戳而不是改成状态机：状态机的"醒着但空闲"和"醒着有任务"
+// 在渲染上完全一样，多一个状态只会多一处要维护的分支。
+#define SLEEP_GRACE_MS     (60 * 1000)
+static volatile uint32_t s_awake_until_ms = 0;
+// 按键任务写入的"请唤醒"请求，由 LVGL 任务消费（不能跨任务碰 LVGL）。
+// 用独立标志而不是直接写 s_awake_until_ms：后者是纯数据，
+// 让按键任务直接改时间戳虽然也无害，但所有 UI 相关动作集中在
+// LVGL 任务里落实更好排查。
+static volatile bool s_wake_req = false;
 
 // 深色底 + 高对比，小屏远看更清楚。
 //
@@ -894,6 +943,48 @@ static void svr_ui_build(void)
     lv_label_set_text(s_lbl_svr_tok, "");
 }
 
+// ---- 休眠屏 ----
+// 空转时屏幕上只剩"几点 + 还在线"，其余全藏掉。
+//
+// 布局（240x240）：
+//        ┌──────────────────┐
+//        │                  │
+//        │      14:43       │  ← 72px 大时钟，180x52，居中后占 y=70..122
+//        │                  │
+//        │      ● 在线      │  ← 12px，y=150
+//        └──────────────────┘
+//
+// 为什么时钟不放正中：正中心 y=120 时，下面 28px 处才是状态点，
+// 两点挤在一起像图标的副标题。把整组当成一个整体、视觉重心上移一点
+// （时钟中心落在 y=96，约屏幕 40% 处）更接近"时钟 App"的观感。
+static void sleep_ui_build(void)
+{
+    lv_obj_t *scr = lv_screen_active();
+
+    // 容器全屏不透明：底下那些控件虽然被 HIDDEN 了，但休眠屏是叠在
+    // scr 上的，用透明底会漏出屏幕底色之外的东西（比如残影）。
+    // 铺一层纯黑最稳，也和正常界面同色，切换时不闪。
+    s_pg_sleep = mk_page(scr);
+    lv_obj_set_style_bg_color(s_pg_sleep, COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_pg_sleep, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_pg_sleep, LV_OBJ_FLAG_HIDDEN);
+
+    // 大时钟。用 TOP_MID + 固定 y 定位而不是 CENTER：
+    // 字体 line_height=52，CENTER 时"盒中心"对屏幕中心，看着偏高
+    // （因为数字的墨迹集中在盒子上部，base_line=0）。y=70 让墨迹
+    // 落在视觉中心附近。
+    s_lbl_bigclock = mk_label(s_pg_sleep, &font_cn_72, COL_TEXT,
+                              LV_ALIGN_TOP_MID, 0, 70);
+    lv_label_set_text(s_lbl_bigclock, "--:--");
+
+    // 在线状态点。只在休眠屏出现，和页头那个"● 在线"是两份独立控件 ——
+    // 复用同一个标签就得在休眠/唤醒时改名、改字体、改坐标，反而更容易错。
+    // 一个 12px 标签的 RAM 代价可以忽略。
+    s_lbl_sleep_dot = mk_label(s_pg_sleep, &font_cn_12, COL_OK,
+                               LV_ALIGN_TOP_MID, 0, 150);
+    lv_label_set_text(s_lbl_sleep_dot, "● 在线");
+}
+
 static void ui_build(void)
 {
     lv_obj_t *scr = lv_screen_active();
@@ -1204,6 +1295,14 @@ static void ui_build(void)
     s_lbl_toast = mk_label(scr, &font_cn_16, COL_ACCENT,
                            LV_ALIGN_BOTTOM_MID, 0, -26);
     lv_obj_add_flag(s_lbl_toast, LV_OBJ_FLAG_HIDDEN);
+
+    // ---- 休眠屏（空转时只显示时间和在线状态）----
+    // 建在 WiFi/服务浮层之前、宠物之后，这样两层浮层仍然压在它上面
+    // （连不上网的时候该报警报，不该被一块时钟挡住）。
+    //
+    // 整屏只有一个容器，休眠时把其余的页头/页脚/宠物/页面容器全部藏掉，
+    // 只留这一个 —— 比逐个控件改可见性可靠，退出时也只需要反向操作一次。
+    sleep_ui_build();
 
     // 宠物压到最底层：作为屏幕的第 0 个子对象，先于所有内容绘制。
     //
@@ -1600,6 +1699,123 @@ static bool pet_should_show(void)
     return !s_page_is_chart[s_page];
 }
 
+// ===========================================================================
+// 空转休眠
+// ===========================================================================
+
+// 进入/退出休眠屏。
+//
+// 这里**只动可见性和背光**，不改 s_page、不销毁控件：
+//   - s_page 保持原值，唤醒后立刻回到用户之前看的那一屏
+//   - 控件全部复用，来回切换没有内存抖动
+//
+// 背光直接调 backlight_set()，**不碰 s_bright_idx**：
+// 那是用户按键调的档位（40/70/100），休眠亮度是系统行为。
+// 如果这里改 s_bright_idx，用户休眠前是 70%，醒来就变成 30% 了，
+// 下次按键还会从这个被污染的值继续调 —— 属于看不见的状态污染。
+static void sleep_apply(bool on)
+{
+    if (!s_pg_sleep) return;             // UI 还没建好（开机早期）
+    if (on == s_asleep) return;          // 状态没变，不重复改控件
+
+    s_asleep = on;
+
+    if (on) {
+        // ---- 藏：页头、页脚、两处页面容器、宠物、浮层都不动 ----
+        //
+        // 页头那几个控件（logo/时钟/日期/状态点/电量圈/充电标记/分隔线）
+        // 是直接建在 scr 上的，没有统一容器，只能逐个藏。
+        // 两个 mk_hline 建在 scr 上但没留句柄 —— 它们只是 1px 的线，
+        // 被 s_pg_sleep 的不透明底整块盖住了，不用管。
+        lv_obj_add_flag(s_lbl_clock,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_lbl_date,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_lbl_status, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_arc_bat,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_lbl_chrg,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_lbl_sys,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_lbl_footer, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_pet_img,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_pg_main,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_pg_list,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_pg_chart,   LV_OBJ_FLAG_HIDDEN);
+
+        // logo 是个局部变量，没存句柄。它被 s_pg_sleep 的纯黑底盖住，
+        // 不需要单独藏 —— 这也是给容器铺不透明底的主要原因之一。
+
+        lv_obj_clear_flag(s_pg_sleep, LV_OBJ_FLAG_HIDDEN);
+        backlight_set(SLEEP_BRIGHT_PCT);
+        ESP_LOGI(TAG, ">>> 进入休眠屏（无任务，背光 %d%%）", SLEEP_BRIGHT_PCT);
+    } else {
+        // ---- 唤醒：把可见性交还给 page_apply ----
+        //
+        // 不在这里逐个 clear 页头控件，而是调用 page_apply 的逻辑：
+        // 它会根据 s_page 决定该亮哪个容器。页头那几个控件反正一直可见，
+        // 这里直接全部 clear 即可（page_apply 不碰页头）。
+        lv_obj_add_flag(s_pg_sleep, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_lbl_clock,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_lbl_date,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_lbl_status, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_arc_bat,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_lbl_chrg,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_lbl_sys,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_lbl_footer, LV_OBJ_FLAG_HIDDEN);
+
+        // 页面容器按 s_page 恢复，和 page_apply 的规则保持一致
+        if (s_page == 0) {
+            lv_obj_clear_flag(s_pg_main, LV_OBJ_FLAG_HIDDEN);
+        } else if (s_page < MAX_PAGES && s_page_is_chart[s_page]) {
+            lv_obj_clear_flag(s_pg_chart, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(s_pg_list, LV_OBJ_FLAG_HIDDEN);
+        }
+
+        // 宠物：图表屏仍然要藏（pet_should_show 的规则）
+        if (s_pet_img && pet_should_show()) {
+            lv_obj_clear_flag(s_pet_img, LV_OBJ_FLAG_HIDDEN);
+            pet_apply_frame();
+        }
+
+        // 背光恢复成用户调的档位
+        backlight_set(k_bright_steps[s_bright_idx]);
+        ESP_LOGI(TAG, ">>> 退出休眠屏（有任务，背光 %u%%）",
+                 k_bright_steps[s_bright_idx]);
+    }
+}
+
+// 根据最新数据决定该不该休眠。每轮 ui_render 都调用，内部有状态判等，
+// 稳态下只是一次比较。
+//
+// ⚠ d->page == 0 这个守卫不能省，理由见 s_asleep 的注释。
+// 注意同时要求 s_page == 0：数据属于第 0 屏、但用户已经按键切走了的话，
+// 屏幕上是详情屏，这时候休眠会把人正在看的内容藏掉。
+static void sleep_update(const board_data_t *d)
+{
+    if (!d->ok) {
+        // 离线 / 服务端降级：这是需要被看到的异常，不休眠。
+        // 如果已经在休眠就从里面出来 —— 否则屏幕停在一块"● 在线"上，
+        // 而实际上早就断了，是最糟的误导。
+        if (s_asleep) sleep_apply(false);
+        return;
+    }
+
+    bool idle = (d->working == 0) && (d->session_count == 0);
+    bool on_overview = (d->page == 0) && (s_page == 0);
+
+    // 按键唤醒后的保活期内不休眠，否则按下去只亮一帧就黑回去。
+    if (s_awake_until_ms) {
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        // 用有符号差判断：esp_timer 是 64 位微秒，取毫秒后还是 64 位，
+        // 但存进 uint32 会 49 天回绕。有符号比较能正确处理回绕。
+        if ((int32_t)(s_awake_until_ms - now) > 0) {
+            on_overview = false;         // 保活期内：当作"不该休眠"
+        } else {
+            s_awake_until_ms = 0;        // 到期，清掉，恢复按空闲判定
+        }
+    }
+
+    sleep_apply(idle && on_overview);
+}
+
 static void page_apply(int page)
 {
     if (s_nscr < 1) s_nscr = 1;
@@ -1607,6 +1823,26 @@ static void page_apply(int page)
     if (page == s_page) return;
 
     s_page = page;
+
+    // 休眠中切屏：只更新 s_page，**不动可见性**。
+    //
+    // 按键唤醒的顺序是 page_apply → sleep_apply(false)（见 lvgl_task），
+    // 所以这里如果把页面容器点亮，休眠屏的纯黑底就会被戳穿：
+    // s_pg_sleep 在子对象顺序里更靠后（更靠上），视觉上会盖住，
+    // 但它下面那层的宠物和页头控件是隐藏状态 —— 唤醒时 sleep_apply
+    // 会按 s_page 正确恢复，所以这里什么都不做才是对的。
+    if (s_asleep) {
+        // 但缓存必须照常清。不清的话，唤醒时点亮的列表屏里装的是
+        // **上一屏**的行文字，要等下一轮数据（最多 5 秒）才刷掉，
+        // 用户按下键先看到的是一屏张冠李戴的内容。
+        // 这里和正常路径的唯一差别就是"不点亮容器"。
+        if (page != 0 && !(page < MAX_PAGES && s_page_is_chart[page])) {
+            ui_list_reset();
+        }
+        if (s_fetch_task) xTaskNotifyGive(s_fetch_task);
+        ESP_LOGI(TAG, ">>> 休眠中切屏 -> %d/%d（暂不显示）", page, s_nscr);
+        return;
+    }
 
     // 三个容器先全部隐藏再点亮一个。只显示不隐藏的话，从图表屏切回列表屏
     // 会两层叠着画 —— 图表是透明底的，底下的字会透上来。
@@ -1710,6 +1946,30 @@ static void ui_render_battery(void)
 
 static void ui_render(const board_data_t *d)
 {
+    // ---- 休眠判定（最先做：它可能把整屏换成一块时钟）----
+    //
+    // 放在电量/页头/页脚之前，是为了让"睡着"这一轮**直接返回**：
+    // 那些控件都藏着，更新它们的文字是纯浪费 ——
+    // 尤其每次 set_text 都会标脏重绘，240x240 SPI 刷一屏十几毫秒，
+    // 而休眠屏只有在分钟跳变时才真的需要重绘。
+    sleep_update(d);
+
+    if (s_asleep) {
+        // 大时钟：只在文字变化时才 set_text。
+        // 不加这个判等的话，5 秒一轮的 ui_render 会每分钟白白重绘 12 次，
+        // 休眠本来就是为了省电，结果醒着刷屏就说不过去了。
+        static char clock_cache[8] = "";
+        if (strcmp(clock_cache, d->clock) != 0) {
+            strncpy(clock_cache, d->clock, sizeof(clock_cache) - 1);
+            clock_cache[sizeof(clock_cache) - 1] = '\0';
+            lv_label_set_text(s_lbl_bigclock, d->clock);
+        }
+        // 状态点不用每轮改：能进休眠就说明 d->ok 为真，
+        // 建屏时写好的"● 在线"一直是正确的。真掉线了 sleep_update
+        // 会先把人叫醒，那时页头自己的"● 离线"显示出来。
+        return;
+    }
+
     // ---- 电量圆圈（独立于网络状态，离线时也照常更新）----
     ui_render_battery();
 
@@ -2484,6 +2744,11 @@ static void button_task(void *arg)
                         }
                     } else if (held >= LONG_MS) {
                         fired[i] = true;
+                        // 调亮度前先唤醒：休眠屏是 30% 背光，
+                        // 在这个状态下按"调亮"却看不到屏幕变亮，
+                        // 用户只会以为按键没反应。唤醒后亮度回到用户档位，
+                        // 后续的 ☀ 提示也才有意义。
+                        s_wake_req = true;
                         int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
                                  : (k_btns[i].pin == BOARD_BTN_VOL_DOWN) ? -1
                                  : 0;
@@ -2509,6 +2774,11 @@ static void button_task(void *arg)
                 // 这里只投递请求，由 lvgl_task 在持有 LVGL 上下文时执行。
                 if (down_at[i] && !fired[i]) {
                     s_page_req = s_page + 1;
+                    // 不管是不是在休眠，都投一个唤醒请求：
+                    // 睡着时按键 → 亮屏；醒着时 → sleep_apply(false) 是空操作
+                    // （内部有 on == s_asleep 的判等），但保活时间会被续上，
+                    // 这样用户连按几下翻屏的期间不会中途黑掉。
+                    s_wake_req = true;
                 }
                 down_at[i] = 0;
                 fired[i]   = false;
@@ -2668,6 +2938,19 @@ static void lvgl_task(void *arg)
                 s_page_req = -1;
                 page_apply(req);
             }
+        }
+
+        // 按键唤醒：休眠中按任意键，先把人叫起来再干活。
+        //
+        // 顺序有讲究 —— 必须在 page_apply 之后执行：
+        // 用户可能是"想看下一屏"而按的键，page_apply 已经把人送到新屏了，
+        // 这里只需要把屏幕点亮。反过来先唤醒再切屏会出现一帧的跳动。
+        //
+        // 保活 60 秒：这段时间里即使仍然空闲也不睡回去（理由见 s_awake_until_ms）。
+        if (s_wake_req) {
+            s_wake_req       = false;
+            s_awake_until_ms = (uint32_t)(esp_timer_get_time() / 1000) + SLEEP_GRACE_MS;
+            sleep_apply(false);
         }
 
         // 配网请求：按键任务只置标志，真正开热点/起 HTTP 服务在这里做。

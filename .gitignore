@@ -59,9 +59,12 @@ Thumbs.db
 # 临时诊断项目 / 素材生成物
 # ==========================================
 # adc-probe：排查电池引脚时另立的最小验证工程，
-# 只为确认 ADC2_CH6=GPIO17 与 GPIO38 充电检测，
-# 结论已固化进 board_config.h 注释，工程本身不必留。
-adc-probe/
+# 只为确认 ADC2_CH6=GPIO17 与 GPIO38 充电检测。
+# 2026-10-27 改：源码入库，只忽略 build/。
+# 原来整目录忽略，导致这个工程从来没进过版本库 —— 一旦删掉就永久找不回。
+# 实际源码只有 5 个文件 115KB（CMakeLists x2 / main.c / sdkconfig / sdkconfig.defaults），
+# 另外 151MB 全是 build/ 里的 obj 和 .a，重编就有，不该占仓库。
+adc-probe/build/
 
 # 宠物像素画的预览图，由 tools/gen_pet.py 的思路临时渲染，
 # 素材真身是 pet_frames.c，这张 png 只是给人看的，随时可重生成。
@@ -91,8 +94,10 @@ tools/pet_done_frames.png
 .tts/
 
 # 喇叭引脚的一次性探测工程（2026-10-26 实测 BCLK=15/LRCK=16/DOUT=7 时用的）
-# 已经得出结论并写进 firmware/main/audio.cpp 注释，属于历史工具，不参与正式构建
-probe-spk/
+# 已得出结论并写进 firmware/main/audio.cpp 注释，不参与正式构建。
+# 2026-10-27 改：源码入库，只忽略 build/。理由同上面的 adc-probe ——
+# 整目录忽略的结果是「删了就找不回」，而源码本身只有 115KB。
+probe-spk/build/
 
 # ================
 # Node / Python deps
