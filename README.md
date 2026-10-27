@@ -105,16 +105,10 @@ WorkBuddy 数据库 ──► 本机服务 :27777 ──WiFi──► ESP32-S3 �
 
 ## 换 WiFi（手机配网，不用重烧固件）
 
-WiFi 凭据存在板子的 NVS 里，换网络不需要重新编译。
+WiFi 凭据存在板子的 NVS 里，换网络不需要重新编译。长按 BOOT 3 秒进配网，手机连上热点后打开 `192.168.4.1` 就是这个页面：
 
 <p align="center">
-  <img src="docs/images/device-pairing-screen.jpg" width="380" alt="设备配网屏：热点名与配置地址">
-  <img src="docs/images/wifi-pairing-page.png" width="280" alt="手机配网页面">
-</p>
-
-<p align="center">
-  <sub>左：长按 BOOT 3 秒，设备进配网模式，屏幕上直接给出热点名和配置地址<br>
-  右：手机连上热点后打开该地址，扫描 + 输密码即可</sub>
+  <img src="docs/images/wifi-pairing-page.png" width="300" alt="手机配网页面">
 </p>
 
 ### 什么时候会提示配网
