@@ -322,7 +322,7 @@ static lv_timer_t *s_pet_timer;     // 换帧定时器，切状态时要改周�
 // 纯圆弧表示进度，**圆心不放百分比数字**。
 // 数字让位给充电标记：充电时圆心显示 "+"，放电时圆心为空。
 static lv_obj_t *s_arc_bat;        // 进度弧
-static lv_obj_t *s_lbl_chrg;       // 圆心：充电时的 "+"，放电时为空
+static lv_obj_t *s_lbl_chrg;       // 圆心：充电时的 "⚡"，放电时为空
 
 // ---- 多屏 ----
 // 两组控件放在各自的容器里，切页只是切 HIDDEN，不销毁重建。
@@ -659,8 +659,8 @@ static void display_init(void)
 // 充电标记 "+" 的定位。
 //
 // 圆心的百分比数字删掉后，这个位置空了出来 —— 正好给充电标记用：
-// 充电时圆心里一个绿色 "+"，不充电时什么都不显示。
-// 比原来"圈外右上角挂个 +"更好读：圈外那个小符号在缩小到 24px 后
+// 充电时圆心里一个绿色 "⚡"，不充电时什么都不显示。
+// 比原来"圈外右上角挂个符号"更好读：圈外那个小符号在缩小到 24px 后
 // 会飘得离环太远，看着像页面上多了一粒灰。
 //
 // 这里仍然不用 lv_obj_align_to（那是一次性计算，标签创建时宽度是 0，
@@ -1975,12 +1975,19 @@ static void ui_render_battery(void)
 
         lv_obj_set_style_arc_color(s_arc_bat, col, LV_PART_INDICATOR);
 
-        // 充电标记。字体没有 ⚡，用 "+"。
-        // 放在圆心（原数字的位置）。放电时清空。
-        // 颜色跟随充电态：固定绿色，和进度弧一致。
+        // 充电标记：圆心里一个绿色 ⚡，放电时清空。
+        //
+        // 早期这里用的是 "+"，注释里写着"字体没有 ⚡"。那句注释是错的 ——
+        // ⚡ (U+26A1) 一直在 EXTRA_SYMBOLS 里，由 seguisym.ttf 提供，
+        // font_cn_12/16/28 三档都有字形。之前的判断八成是把它和
+        // ° / ℃（那两个确实没有，见页脚温度的注释）混为一谈了。
+        //
+        // 尺寸实测（font_cn_12）：⚡ adv_w=120 → **8px** 宽、位图 7x10，
+        // 而 "+" 是 7px 宽、位图 7x6。只宽 1px，圆环内径 18px 完全放得下，
+        // 不会压到弧线。所以换符号不需要动任何几何常量。
         if (b.charging) {
             lv_obj_set_style_text_color(s_lbl_chrg, COL_OK, 0);
-            lv_label_set_text(s_lbl_chrg, "+");
+            lv_label_set_text(s_lbl_chrg, "⚡");
         } else {
             lv_label_set_text(s_lbl_chrg, "");
         }
