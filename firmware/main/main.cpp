@@ -37,6 +37,7 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "driver/temperature_sensor.h"
 
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -262,6 +263,9 @@ typedef struct {
     int       mem;          // %
     int       disk;         // %
     int       temp;         // °C，0 = 取不到（Windows 上通常如此）
+    // 芯片结温（°C），服务端从 /device/report 透传下来，-1 = 设备还没报过。
+    // 这是**本机**的温度传感器读数，不是 PC 的 —— 和上面 temp 完全两回事。
+    int       chip_temp;
     session_t sessions[MAX_SESSIONS];
     int       session_count;
     // ---- 详情屏 ----
@@ -311,10 +315,10 @@ static uint8_t   s_pet_frame = 0;             // 当前帧号（0/1）
 static lv_timer_t *s_pet_timer;     // 换帧定时器，切状态时要改周期
 
 // ---- 电量圆圈（页头右上角）----
-// 外圈弧 = 进度，中心文字 = 百分比。充电时弧变绿并绕行。
+// 纯圆弧表示进度，**圆心不放百分比数字**。
+// 数字让位给充电标记：充电时圆心显示 "+"，放电时圆心为空。
 static lv_obj_t *s_arc_bat;        // 进度弧
-static lv_obj_t *s_lbl_bat;        // 中心百分比文字
-static lv_obj_t *s_lbl_chrg;       // 充电时在圆圈下方补一个闪电
+static lv_obj_t *s_lbl_chrg;       // 圆心：充电时的 "+"，放电时为空
 
 // ---- 多屏 ----
 // 两组控件放在各自的容器里，切页只是切 HIDDEN，不销毁重建。
@@ -388,6 +392,11 @@ static char     s_meta_cache[MAX_SESSIONS][64];
 // 页脚右侧"多久之前"的显示缓存。ui_render 每帧都跑（约 50ms 一轮），
 // 不判等就每帧 set_text 一次：每次都 malloc/free + 全量重绘，白烧 SPI。
 static char     s_footer_cache[24];
+// 最近一次读到的芯片结温（°C），-1 = 传感器不可用。
+// 由 fetch 任务的 device_report() 刷新；UI 只读不调传感器
+// （避免两个任务同时操作同一个句柄）。
+// 声明放在这里而不是传感器那块：ui_render 在文件中段就要用它。
+static volatile int s_chip_temp = -1;
 static bool     s_waiting[MAX_SESSIONS];     // 当前哪些行在等待操作
 static bool     s_blink_on;                  // 黄灯亮/灭相位
 
@@ -553,7 +562,7 @@ static void display_init(void)
 // ===========================================================================
 // UI 布局（240x240 精算）
 //
-//   y=0    09:44        10-26  ◕     28px 时钟行（右侧圆圈=电量）
+//   y=0    09:44        10-26  ◕     28px 时钟行（右侧小圆弧=电量，无数字）
 //   y=34   ─────────────────────     1px 分隔
 //   y=40   [ 1 ] [ 1 ] [ 5 ]        46px 三格统计
 //   y=92   ● 会话标题 1              40px
@@ -564,39 +573,48 @@ static void display_init(void)
 //   y=220  更新 09:44:12            20px 页脚
 // ===========================================================================
 
-// 电量圆圈几何。34px 直径塞进 0..36 的页头行（y=1..35，留 1px 呼吸）。
-// 减掉弧宽 3px 后内径 26px，font_cn_12 的 ASCII 是 6px/字符，
-// 三字符 "100%" 正好 24px，放得下，不用为 100% 做特殊处理。
-#define BAT_ARC_SIZE    34
+// 电量圆弧几何。
+//
+// 从 34px 缩到 24px：原来圆心里要放 "100%"（font_cn_12 的 ASCII 是 6px/字符，
+// 三字符 18px，加上内径 26px 的下限才撑到 34）。现在**圆心里不放数字了**，
+// 尺寸不再被文字撑住，纯按"一眼扫过去看得清弧长"来定。
+//
+// 24px + 弧宽 3px 的取舍：
+//   内径 = 24 - 2*3 = 18px，中线圈半径 10.5px，周长 66px。
+//   再小（20px）内径只剩 14px，圆弧看起来会像一段短横线而不是"环"；
+//   24px 是还能看出"这是一个容量圆环"的下限，同时比原来小 30%，
+//   页头右上角不再显眼 —— 电量是背景信息，不该和时钟抢注意力。
+//
+// y 方向：24px 在 0..36 的页头行里垂直居中 → y = (36-24)/2 = 6。
+// 原来是 1（34px 几乎顶满），现在缩小后如果还是 y=1 会显得贴顶。
+#define BAT_ARC_SIZE    24
 #define BAT_ARC_WIDTH   3
-#define BAT_ARC_X       (-6)            // 距右边 6px
-#define BAT_ARC_Y       1
-// 日期/状态右对齐的偏移 = 6(右边距) + 34(圆圈) + 6(间隔)
-#define BAT_TEXT_RIGHT  (-46)
+#define BAT_ARC_X       (-7)            // 距右边 7px
+#define BAT_ARC_Y       6
+// 日期/状态右对齐的偏移 = 7(右边距) + 24(圆圈) + 5(间隔)
+// 保持"不碰圆圈"的间隔感，间隔从 6 收到 5 是因为整体已经缩小了。
+#define BAT_TEXT_RIGHT  (-36)
 
 // 页头整行下移量。原来 logo 顶边贴 y=0，时钟（30px 行高）以 logo 中心对齐后
 // 顶边落到 -3，被屏幕顶裁掉；下移 4px 后 logo 占 4..28、时钟 1..31，都完整可见。
 #define HEADER_LOGO_Y   4
 
-// 电量数字的定位：和图表环内百分比同一套路 —— **不用 lv_obj_align_to**。
+// 充电标记 "+" 的定位。
 //
-// align_to 是一次性计算（位置写死后不再重算，见图表常量处的详细说明），
-// 标签创建时宽度还是 0，算出来的位置会把文字左边缘顶在圆心上。
-// 改成"定尺寸文本框 + 文本居中"，位置用坐标算，位数变化不移位。
+// 圆心的百分比数字删掉后，这个位置空了出来 —— 正好给充电标记用：
+// 充电时圆心里一个绿色 "+"，不充电时什么都不显示。
+// 比原来"圈外右上角挂个 +"更好读：圈外那个小符号在缩小到 24px 后
+// 会飘得离环太远，看着像页面上多了一粒灰。
 //
-// 盒高取 15（= line_height），垂直方向墨迹正好居中，补偿量为 0：
-//   font_cn_12 度量：line_height=15, base_line=3，数字 box_h=8, ofs_y=0
-//   墨迹顶 = (15-3) - 8 - 0 = 4，墨迹底(含) = 4+8-1 = 11 → 中心 7.5
-//   盒高 15 的中心 = (15-1)/2 = 7  →  墨迹比盒心低 0.5px，取整不补
-// （之前算成"墨迹底=12 中心 8、比行框中心 7 低 1px"，是闭区间少减了 1，
-//  多算了 0.5px；再叠加符号写反，实际偏了 2px。）
+// 这里仍然不用 lv_obj_align_to（那是一次性计算，标签创建时宽度是 0，
+// 会把文字左边缘顶在圆心上，详见图表常量处的说明）。
+// 用"定尺寸文本框 + 文本居中 + 与圆圈同心"，字符变化不移位。
 //
-// 横向：数字 ofs_x=0、'%' ofs_x=0，墨迹重心与行框中心基本重合。
-// 早前那个 -3 是目测试出来的（"先 -5，用户反馈多了，再 +2"），把数字推偏左 3px。
-#define BAT_LABEL_BOX_W  BAT_ARC_SIZE
-#define BAT_LABEL_BOX_H  15
-#define BAT_LABEL_DX     0
-#define BAT_LABEL_DY     0
+// 盒高取 15（= line_height），与圆圈垂直居中的补偿量：
+//   (24 - 15) / 2 = 4（整数除），所以 dy = 4 → 盒占 10..24
+//   墨迹中心约在 17.5，圆圈中心 18，差 0.5px，肉眼不可见
+#define BAT_CHRG_BOX_H  15
+#define BAT_CHRG_DY     ((BAT_ARC_SIZE - BAT_CHRG_BOX_H) / 2)
 
 // ---- 像素宠物：浮动在右下角 ----
 // 素材是 PET_IMG_W x PET_IMG_H = 120x96（不是 120x120 —— 之前这里的注释
@@ -934,42 +952,36 @@ static void ui_build(void)
     lv_obj_set_style_arc_opa(s_arc_bat, LV_OPA_50, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_arc_bat, COL_OK, LV_PART_INDICATOR);
     // 方头，和图表环一致。rounded=true 会把指示弧**两端各延长 width/2**
-    // （3px/2 = 1.5px）再切圆，两端共多 3px。这个小圈周长才 97.4px
-    // （中线圈半径 15.5px），1% 只有 0.97px，所以视觉弧长恒多 3.1 个百分点
-    // ——50% 看着像 53%。100% 时两个半圆头还会在 12 点撞在一起。
+    // （3px/2 = 1.5px）再切圆，两端共多 3px。这个小圈周长只有 66.0px
+    // （24px 环、弧宽 3px → 中线圈半径 10.5px，2πr = 65.97px），
+    // 1% 只有 0.66px，所以圆头带来的视觉弧长恒多 **4.55 个百分点**
+    // ——50% 看着像 55%。100% 时两个半圆头还会在 12 点撞在一起。
+    // （34px 那版周长 97.4px，误差是 3.1 个百分点；缩小后误差反而变大，
+    //   因为圆头的绝对长度不变、周长却短了近三分之一 —— 方头更不可省。）
     lv_obj_set_style_arc_rounded(s_arc_bat, false, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(s_arc_bat, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(s_arc_bat, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(s_arc_bat, 0, LV_PART_MAIN);
 
-    // 中心百分比。font_cn_12 的 ASCII 是 6px/字符，34px 圆圈内径 26px，
-    // "100%" 墨迹 28px —— 略微超出内径，但字形等宽，视觉上还能放下。
-    // 全部带百分号，口径统一。
+    // 圆心：只有充电时显示一个 "+"，放电时为空。
     //
-    // 定位方式和图表环内百分比一致：定尺寸文本框 + 文本居中，
-    // 不用 align_to（那是一次性计算，创建时宽度为 0 会把文字顶到圆心）。
-    // 文本框与圆圈同宽、与圆圈同心，文字在框内居中即等于在圆心上。
-    s_lbl_bat = lv_label_create(scr);
-    lv_obj_set_style_text_font(s_lbl_bat, &font_cn_12, 0);
-    lv_obj_set_style_text_color(s_lbl_bat, COL_TEXT, 0);
-    lv_obj_set_style_text_align(s_lbl_bat, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_pad_all(s_lbl_bat, 0, 0);
-    lv_obj_set_size(s_lbl_bat, BAT_LABEL_BOX_W, BAT_LABEL_BOX_H);
-    // 用 align（父级相对，每次布局按当前尺寸重算）而不是 align_to（一次性）。
-    // 宽度和圆圈一样，所以右边距直接复用 BAT_ARC_X；
-    // 垂直方向要补 (圆高 - 框高)/2 才同心。
-    lv_obj_align(s_lbl_bat, LV_ALIGN_TOP_RIGHT,
-                 BAT_ARC_X + BAT_LABEL_DX,
-                 BAT_ARC_Y + (BAT_ARC_SIZE - BAT_LABEL_BOX_H) / 2 + BAT_LABEL_DY);
-    lv_label_set_text(s_lbl_bat, "--");
-
-    // 充电闪电：字体里没有 ⚡，用 ASCII 字符拼不行，
-    // 改为在圆圈右上角点一个小绿点表示正在充电。
+    // 为什么彻底不给百分比数字：
+    //   24px 圆环的内径只有 18px，font_cn_12 一个字符 6px，
+    //   "100%" 要 18px —— 正好等于内径，一个字都挤不下，两边会压到弧上。
+    //   既然数字放不进去，那就不放了：弧长本身就是"多少"，
+    //   要精确数字可以按键切到系统屏（那里有完整指标）。
+    //   这也解决了原来"100% 略微超出内径"的将就。
+    //
+    // 定位：定尺寸文本框 + 文本居中 + 与圆圈同心（不用 align_to，那是一次性计算）。
+    // 宽度留得比圆环大一点没关系，因为只有单个 "+"，居中后就在圆心。
     s_lbl_chrg = lv_label_create(scr);
     lv_obj_set_style_text_font(s_lbl_chrg, &font_cn_12, 0);
     lv_obj_set_style_text_color(s_lbl_chrg, COL_OK, 0);
+    lv_obj_set_style_text_align(s_lbl_chrg, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_all(s_lbl_chrg, 0, 0);
+    lv_obj_set_size(s_lbl_chrg, BAT_ARC_SIZE, BAT_CHRG_BOX_H);
+    lv_obj_align(s_lbl_chrg, LV_ALIGN_TOP_RIGHT, BAT_ARC_X, BAT_ARC_Y + BAT_CHRG_DY);
     lv_label_set_text(s_lbl_chrg, "");
-    lv_obj_align_to(s_lbl_chrg, s_arc_bat, LV_ALIGN_TOP_RIGHT, 2, -3);
 
     // ---- WorkBuddy logo 已移到时钟左侧，见上方"logo + 时钟" ----
 
@@ -1633,9 +1645,11 @@ static void page_apply(int page)
 
 // 电量圆圈渲染。只在 LVGL 任务里调用（和 ui_render 同线程）。
 //
+// 只画一圈弧，**不显示百分比数字**。弧长即电量。
+//
 // 分档着色：
 //   >50%  绿   20~50%  黄   <20%  红
-// 充电中：进度弧固定绿色，并在圆圈右上角显示 "+" 标记。
+// 充电中：进度弧固定绿色，圆心显示 "+" 标记。
 //
 // 注意 percent 与 volt_pct 的区别（见 battery.h）：
 //   percent  = 显示用，充电时是"充电前的真实电量"，不会虚高到 100%
@@ -1647,6 +1661,7 @@ static void ui_render_battery(void)
 
     // 判等缓存：每帧 set_value / set_text 都会触发重绘，
     // 5 秒一轮刷新时百分比通常不变，跳过能省下 SPI 带宽。
+    // 现在没有数字了，但弧长仍按 1% 变化，判等照样有意义。
     static int  last_pct  = -2;
     static bool last_chrg = false;
 
@@ -1654,8 +1669,6 @@ static void ui_render_battery(void)
         if (last_pct != -1) {
             last_pct = -1;
             lv_arc_set_value(s_arc_bat, 0);
-            lv_label_set_text(s_lbl_bat, "--");
-            lv_obj_set_style_text_color(s_lbl_bat, COL_DIM, 0);
             lv_obj_set_style_arc_color(s_arc_bat, COL_DIM, LV_PART_INDICATOR);
             lv_label_set_text(s_lbl_chrg, "");
         }
@@ -1673,6 +1686,8 @@ static void ui_render_battery(void)
         lv_arc_set_value(s_arc_bat, pct);
 
         // 三档配色。充电中固定绿色，避免"充电时红光"的矛盾观感。
+        // 去掉数字后，颜色成了**唯一**的告警通道 —— 低电量只能靠弧变红
+        // 来提示，所以这里的三档必须保留，不能像原来那样"反正有数字"。
         lv_color_t col;
         if (b.charging)     col = COL_OK;
         else if (pct > 50)  col = COL_OK;
@@ -1680,14 +1695,16 @@ static void ui_render_battery(void)
         else                col = COL_ERR;
 
         lv_obj_set_style_arc_color(s_arc_bat, col, LV_PART_INDICATOR);
-        lv_obj_set_style_text_color(s_lbl_bat,
-                                    (pct < 20 && !b.charging) ? col : COL_TEXT, 0);
-
-        lv_label_set_text_fmt(s_lbl_bat, "%d%%", pct);
 
         // 充电标记。字体没有 ⚡，用 "+"。
-        // 放电时不显示，避免和百分比抢视觉。
-        lv_label_set_text(s_lbl_chrg, b.charging ? "+" : "");
+        // 放在圆心（原数字的位置）。放电时清空。
+        // 颜色跟随充电态：固定绿色，和进度弧一致。
+        if (b.charging) {
+            lv_obj_set_style_text_color(s_lbl_chrg, COL_OK, 0);
+            lv_label_set_text(s_lbl_chrg, "+");
+        } else {
+            lv_label_set_text(s_lbl_chrg, "");
+        }
     }
 }
 
@@ -1732,7 +1749,30 @@ static void ui_render(const board_data_t *d)
     // "CPU 42%  MEM 68%  DSK 88%" 是同一份数据说两遍，还压在底部字上。
     bool chart_page = (s_page > 0 && s_page < MAX_PAGES && s_page_is_chart[s_page]);
     if (chart_page) {
-        lv_label_set_text(s_lbl_sys, "");
+        // 图表屏页脚左侧空着（三个环已经把 CPU/MEM/DSK 说过了），
+        // 正好放芯片结温 —— 这几个环讲的是 PC 的状态，温度是设备自己的，
+        // 放在同一行反而帮读者区分"屏上哪些数是电脑的、哪些是这块板子的"。
+        // 温度取本地读数为准，服务端透传的那份只当兜底。
+        // 原因：本地传感器 30 秒才上报一次、服务端再等下一轮 5 秒轮询才回传，
+        // 走一趟链路最坏要 35 秒。而 s_chip_temp 是 device_report() 里
+        // 刚读到的值，屏幕 50ms 一刷就能跟上，反应快得多。
+        // d->chip_temp 的意义是"服务端也拿到了这份数据"，供别的端看。
+        int t = (s_chip_temp >= 0) ? s_chip_temp : d->chip_temp;
+        if (t < 0) {
+            lv_label_set_text(s_lbl_sys, "SoC --");
+            lv_obj_set_style_text_color(s_lbl_sys, COL_DIM, 0);
+        } else {
+            char tbuf[24];
+            // 不用 "°C"：字库里没有 ° (U+00B0) 和 ℃ (U+2103)，
+            // 渲染出来是方框。用 "度" —— 汉字有字形，且比裸 "C"
+            // 更不容易被误读成型号（"SoC 48C" 看着像个芯片名）。
+            snprintf(tbuf, sizeof(tbuf), "SoC %d度", t);
+            lv_label_set_text(s_lbl_sys, tbuf);
+            // 结温超过 70°C 变黄：S3 的过热保护在 105°C 左右，
+            // 70 是个"已经开始发烫但还正常"的提示线，不是告警
+            lv_obj_set_style_text_color(s_lbl_sys,
+                                        t >= 70 ? COL_WARN : COL_DIM, 0);
+        }
     } else {
         char sbuf[56];
         if (d->cpu < 0) {
@@ -1907,6 +1947,8 @@ static void parse_into(board_data_t *d, const char *json)
     d->mem  = json_int(json, "mem",  -1);
     d->disk = json_int(json, "disk", -1);
     d->temp = json_int(json, "temp",  0);
+    // 芯片结温：没报过服务端给 -1，页脚显示 "--"，不显示假 0°C
+    d->chip_temp = json_int(json, "chip_temp", -1);
     // 屏数：/status 和 /screen 都下发 nscr，固件据此决定按几屏循环
     d->nscr = json_int(json, "nscr", 0);
 
@@ -2019,6 +2061,104 @@ static esp_err_t http_event_cb(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
+// ===========================================================================
+// 芯片温度 + 设备上报
+// ===========================================================================
+// 温度传感器只在启动时装一次，句柄常驻。
+// ESP32-S3 内置的其实是**射频用的**温度传感器，精度 ±1°C 左右，
+// 测的是芯片结温（die temperature），不是环境温度 ——
+// 芯片自己发热，读数天然比室温高 5~15°C，满载时更高。
+// 所以它适合回答"芯片有没有过热"，不能当室温计用。
+static temperature_sensor_handle_t s_tsens = NULL;
+
+static void tsens_init(void)
+{
+    // 范围给 -10~80：芯片结温正常在 30~70，超出这个范围要么是没焊好，
+    // 要么是真的过热，两种情况都该被看到而不是被钳在边界上。
+    temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    esp_err_t err = temperature_sensor_install(&cfg, &s_tsens);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "温度传感器不可用: %s（页脚将显示 --）", esp_err_to_name(err));
+        s_tsens = NULL;
+        return;
+    }
+    err = temperature_sensor_enable(s_tsens);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "温度传感器使能失败: %s", esp_err_to_name(err));
+        temperature_sensor_uninstall(s_tsens);
+        s_tsens = NULL;
+        return;
+    }
+    ESP_LOGI(TAG, "温度传感器就绪");
+}
+
+static int tsens_read(void)
+{
+    if (!s_tsens) return -1;
+    float c = 0;
+    if (temperature_sensor_get_celsius(s_tsens, &c) != ESP_OK) return -1;
+    return (int)(c + (c >= 0 ? 0.5f : -0.5f));   // 四舍五入到整数
+}
+
+// 把板载指标 POST 给服务端。
+//
+// 为什么用 POST 而不是塞进 GET 的 query：
+//   GET /status 是**服务端 → 设备**的通道，且被标记为冻结契约。
+//   上报是反方向的，混在一起会让"设备只读不写"和"设备只写不读"
+//   两种用法互相牵连。独立端点出问题时也不会影响看板刷新。
+//
+// 为什么失败不重试：
+//   30 秒后又报一次，重试的边际价值几乎为零，反而可能拖住 fetch 任务。
+//   温度不是告警数据，晚一轮没有后果。
+#define DEVICE_REPORT_INTERVAL_MS  (30 * 1000)
+
+static void device_report(void)
+{
+    const char *base = wifi_mgr_svr_base();
+    if (!base || !base[0]) return;
+
+    int t = tsens_read();
+    s_chip_temp = t;
+
+    battery_state_t b;
+    battery_get(&b);
+
+    // JSON 手工拼：只有 4 个字段，上 cJSON 要多分配一次堆，
+    // 而这函数在内存紧张的看板固件里每 30 秒跑一次，能省就省。
+    char body[128];
+    snprintf(body, sizeof(body),
+             "{\"chip_temp\":%d,\"battery\":%d,\"charging\":%s,\"uptime_s\":%lld}",
+             t < 0 ? 0 : t,              // 传感器坏了就先报 0，服务端另有 -1 语义
+             b.percent,
+             b.charging ? "true" : "false",
+             (long long)(esp_timer_get_time() / 1000000));
+
+    char url[96];
+    snprintf(url, sizeof(url), "%s/device/report", base);
+
+    esp_http_client_config_t cfg = {};
+    cfg.url        = url;
+    cfg.method     = HTTP_METHOD_POST;
+    cfg.timeout_ms = 4000;          // 比 GET 短：上报失败无所谓，别拖时间
+
+    esp_http_client_handle_t cli = esp_http_client_init(&cfg);
+    if (!cli) return;
+
+    esp_http_client_set_header(cli, "Content-Type", "application/json");
+    esp_http_client_set_post_field(cli, body, (int)strlen(body));
+
+    esp_err_t err = esp_http_client_perform(cli);
+    int code = (err == ESP_OK) ? esp_http_client_get_status_code(cli) : 0;
+    esp_http_client_cleanup(cli);
+
+    if (err != ESP_OK || code / 100 != 2) {
+        // 用 DEBUG 级别：这个失败不影响看板，刷 WARN 只会淹没真正的问题
+        ESP_LOGD(TAG, "上报失败 err=%s code=%d", esp_err_to_name(err), code);
+    } else {
+        ESP_LOGD(TAG, "上报 chip_temp=%d bat=%d%%", t, b.percent);
+    }
+}
+
 static void fetch_task(void *arg)
 {
     // 让按键能 xTaskNotifyGive 叫醒本任务，切屏后立刻重拉，不等 5 秒周期
@@ -2050,6 +2190,18 @@ static void fetch_task(void *arg)
             wifi_mgr_svr_reset();
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000));
             continue;
+        }
+
+        // 板载指标上报（温度/电量），30 秒一次。
+        // 放在 GET 之前：万一 POST 卡住超时（4 秒），也只影响这一轮的上报，
+        // 不会让看板数据晚到 —— 下一轮 GET 照常。
+        {
+            int64_t now_ms = esp_timer_get_time() / 1000;
+            static int64_t last_report_ms = 0;
+            if (now_ms - last_report_ms >= DEVICE_REPORT_INTERVAL_MS) {
+                last_report_ms = now_ms;
+                device_report();
+            }
         }
 
         // 每轮都重新读屏号和**服务地址**：按钮随时可能切屏，配置页也随时
@@ -2616,6 +2768,9 @@ extern "C" void app_main(void)
     // "任务完成"事件就能响，不会因为还在连 WiFi 而静音。
     // 失败不影响主流程（内部只打日志、不 abort）。
     audio_init();
+
+    // 温度传感器：装不上不影响看板，只是页脚显示 --
+    tsens_init();
 
     /* 编译期 BRIDGE_BASE 只当"一次都没配过"时的初值。
      * NVS 里配过就以 NVS 为准 —— 电脑换 IP 在配置页改一下就行，不用重烧。 */
