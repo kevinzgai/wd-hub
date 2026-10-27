@@ -2,7 +2,7 @@
 //
 // 本文件只做一件事：把预渲染好的 PCM 采样表 + 音量复制成立体声，写进 I2S。
 // 没有任何振荡器、包络、泛音计算 —— 那些全部在离线端做完
-// （tools/gen_tones.py），固件里只剩 memcpy 级别的开销。
+// （tools/gen_tones_from_wav.py），固件里只剩 memcpy 级别的开销。
 //
 // 为什么不在运行时合成
 // --------------------
@@ -34,12 +34,30 @@
 #include "esp_log.h"
 
 #include "board_config.h"
-#include "tone_pcm.h"     // 四段 PCM 采样表（由 tools/gen_tones.py 生成）
+#include "tone_pcm.h"     // 四段 PCM 采样表（由 tools/gen_tones_from_wav.py 生成）
 
 static const char *TAG = "audio";
 
 // ---- 参数 ----
 #define AUDIO_RATE      24000     // 必须与上游板级配置一致（AUDIO_OUTPUT_SAMPLE_RATE）
+
+/* ⚠ 采样率必须和 tone_pcm.h 里的 TONE_RATE 一致。
+ *
+ * 这两个数字分别住在两个文件里，原来只靠注释约定。改了一处 = 提示音
+ * 变速变调（24k 的表按 16k 播出来，快 1.5 倍），而且不报任何错 ——
+ * 听着就是"提示音变得很尖"，排查起来毫无线索。
+ *
+ * 用编译期断言把它钉死：谁改了采样率，另一个文件不改就编不过。
+ *
+ * ⚠ 必须写 static_assert，不能写 _Static_assert。
+ * 本文件是 .cpp（C++ 编译），_Static_assert 是 C11 的关键字，
+ * 在 C++ 里会被当成一个未声明的函数名，直接报
+ *     error: expected constructor, destructor, or type conversion before '(' token
+ * 而 static_assert 从 C++11 起就是关键字，不需要任何头文件。 */
+static_assert(TONE_RATE == AUDIO_RATE,
+              "TONE_RATE (tone_pcm.h) 必须等于 AUDIO_RATE (audio.cpp)，"
+              "否则提示音会变速变调。改一个就要改另一个。");
+
 // 默认音量百分比。用户实测 35% 偏大，降到 20%。
 // 四段采样的响度已在离线端拉齐（极差 6%），所以这里用统一比例就够，
 // 不需要再按段补偿。
@@ -260,10 +278,11 @@ void audio_play(audio_event_t ev)
     }
 }
 
-void audio_set_volume(int percent)
-{
-    if (percent < 0)   percent = 0;
-    if (percent > 100) percent = 100;
-    s_volume = percent;
-    ESP_LOGI(TAG, "音量 -> %d%%", percent);
-}
+/* ⚠ 这里原来有个 audio_set_volume(int)，但全工程没有任何调用者。
+ *
+ * 按键（VOL_UP / VOL_DOWN）已经被背光占用了，提示音音量是固定的
+ * AUDIO_VOL_DEF = 20%。留一个没人调的接口，容易让人以为"音量可调"，
+ * 实际调不了 —— 比没有更误导。
+ *
+ * 真要开放音量，正确做法是加一个独立的配置入口（配置页 / NVS），
+ * 再从那里调这个函数。届时把本函数加回来即可。 */
