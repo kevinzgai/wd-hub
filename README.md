@@ -249,6 +249,21 @@ toolchain/flash-board.sh COM5 460800         # 烧录（设备插在 COM5）
 
 > **编译时别用管道接输出**（`... | tail`）。Git Bash 下会因回压把 ninja 挂死，表现为编译到一半不动、CPU 也不涨。一律重定向到文件：`idf.py build > build.log 2>&1`。
 
+> **直接调 `ninja` 会失败**。`build.ninja` 一旦判定需要重新 configure，就会再跑一遍 CMake，而裸 shell 里没有 `IDF_PATH`，报 `include could not find requested file: /tools/cmake/project.cmake`（注意路径开头是 `/tools` —— `IDF_PATH` 是空的，拼出来的路径就丢了一半）。所以编译**一律走 `toolchain/build-firmware.sh`**，它负责导出 `IDF_PATH` / `ESP_ROM_ELF_DIR` 等一整套环境。
+
+### ESP-IDF 装在哪（重要）
+
+**不在本项目里。** 三个脚本里的 `IDF_PATH` 都硬编码指向系统级安装位置：
+
+| 平台 | 路径 | 版本 |
+|---|---|---|
+| Windows | `C:\esp\v6.1\esp-idf`（约 696MB） | v6.1 |
+| macOS | `~/.espressif/v6.1/esp-idf` | v6.1 |
+
+`toolchain/` 目录**只放脚本，共 50KB**。2026-10-27 之前这里曾残留两套没被引用的 IDF 源码（`esp-idf/` 273MB + `esp-idf-git/` 1.2GB，共吃掉 1.5GB），已清理。判据是：`firmware/build/CMakeCache.txt` 里 `CMAKE_TOOLCHAIN_FILE` 与各 `_SOURCE_DIR` 全部指向 `C:/esp/v6.1/esp-idf`，全仓无一处引用 `toolchain/esp-idf*`。
+
+所以 **`C:\esp\v6.1\esp-idf` 是编译硬依赖**，清 C 盘或换机器时别顺手删掉，否则编译直接挂。
+
 ### 写服务地址兜底值
 
 ```bash
@@ -356,4 +371,4 @@ python scripts/serial_read.py <串口> 30         # 需 pyserial
 | `scripts/` | 自检、截图、串口读取 |
 | `reference/` | 上游板卡参考资料（不进构建） |
 | `adc-probe/`、`probe-spk/` | 硬件探针工程（电池 ADC、喇叭调试） |
-| `toolchain/` | ESP-IDF 工具链与编译脚本（不进版本库） |
+| `toolchain/` | 编译与烧录脚本，共 50KB（不进版本库）。**不含 ESP-IDF 源码** —— IDF 装在本机全局路径，见下方「ESP-IDF 装在哪」 |
