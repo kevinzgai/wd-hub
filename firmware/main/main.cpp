@@ -2605,6 +2605,20 @@ static void fetch_task(void *arg)
                      req_page, s_nscr, parsed.working, parsed.today_done,
                      parsed.automations, parsed.session_count, parsed.row_count,
                      (const char *)s_last_btn);
+            // 第 0 屏额外把第 0 条会话的标题打出来。
+            // 光看 sess=1 不够 —— 上一版就是"sess=1 但屏上显示空闲中"，
+            // 只打计数完全看不出异常。标题是最终要上屏的文字，打它才可核。
+            // 只在变化时打，否则 5 秒一条把日志刷满。
+            if (req_page == 0) {
+                static char last_row0[48] = "\x01";   // 不可能等于真实标题，保证首轮必打
+                const char *r0 = (parsed.session_count > 0)
+                                 ? parsed.sessions[0].title : "（空闲中）";
+                if (strcmp(r0, last_row0) != 0) {
+                    strncpy(last_row0, r0, sizeof(last_row0) - 1);
+                    last_row0[sizeof(last_row0) - 1] = '\0';
+                    ESP_LOGI(TAG, "   行0 -> %s", r0);
+                }
+            }
         } else {
             fails++;
             ESP_LOGW(TAG, "拉取失败 err=%s status=%d (连续%d次)",
