@@ -126,3 +126,32 @@ server/state/
 # 2026-10-27 起已不再写入 WiFi 凭据（改由 NVS + 手机配网）。
 # 仍然不入库：地址是本机环境相关的，别人 clone 后应各自跑 configure.py 生成。
 firmware/main/config.local.h
+
+# ==================================================
+# 拆提交时的临时工具（2026-10-27 清理）
+# ==================================================
+# 把大改动拆成一串可读提交时，临时写了这些脚本来分类 hunk、
+# 切分补丁、逐阶段提交。提交拆完就没用了，重跑也得不到同样的
+# hunk 编号（依赖当时的 diff 上下文）。
+#
+# ⚠ .tmp/ 里有一份 full_worktree.patch（122KB），是当时未提交
+#   固件改动的完整快照。**不要因为这条 ignore 就当它是垃圾删掉** ——
+#   它不进版本库，但删了之后就找不回来了。
+.hunk_*.py
+.hunk_map.json
+.classify_by_map.py
+.split_by_lines.py
+.stage_files.py
+.build_stages*.py
+.build_states.py
+.dump_hunk.py
+.commit_stage.sh
+.check_stage*.sh
+.check_wifi_alone.sh
+.rules.json
+.h1[0-9].txt
+.h2[0-9].txt
+.h3[0-9].txt
+.*.patch
+.stages/
+.tmp/
