@@ -5,26 +5,29 @@
 A real-time status board for WorkBuddy, running on a 1.54" ESP32-S3 panel (ST7789 240×240 + LVGL).
 
 <p align="center">
-  <img src="docs/images/device-system-screen.jpg" width="300" alt="设备实拍：系统屏">
-  <img src="docs/images/device-closeup.jpg" width="300" alt="屏幕特写：CPU / 内存 / 磁盘三环">
+  <img src="docs/images/device-overview.jpg" width="320" alt="设备实拍：概览屏">
+  <img src="docs/images/device-system-screen.jpg" width="290" alt="设备实拍：系统屏">
 </p>
 
 <p align="center">
-  <sub>左：整机实拍（系统屏）· 右：三环特写，CPU 蓝 / 内存 绿 / 磁盘 黄，超阈值自动转红</sub>
+  <sub>
+    左：概览屏 —— 工作中 / 完成 / 自动化三格 + 活跃会话 + 像素宠物，页脚「3s 前」是数据新鲜度<br>
+    右：系统屏 —— CPU 蓝 / 内存 绿 / 磁盘 黄，超阈值自动转红
+  </sub>
 </p>
 
 ## 它能看什么
 
-手机上打开同一个服务，还有一份网页版看板：
+手机上打开同一个服务，还有一份网页版看板 —— 数据同源，手机上也能操作：
 
 <p align="center">
   <img src="scripts/screenshots/board_demo.png" width="720" alt="网页演示页">
 </p>
 
-配网不用重烧固件，手机连热点就能改：
+还有一张三环特写，看细节用：
 
 <p align="center">
-  <img src="docs/images/wifi-pairing-page.png" width="300" alt="手机配网页面">
+  <img src="docs/images/device-closeup.jpg" width="300" alt="屏幕特写：CPU / 内存 / 磁盘三环">
 </p>
 
 ## 屏幕上的 6 屏
@@ -103,6 +106,16 @@ WorkBuddy 数据库 ──► 本机服务 :27777 ──WiFi──► ESP32-S3 �
 ## 换 WiFi（手机配网，不用重烧固件）
 
 WiFi 凭据存在板子的 NVS 里，换网络不需要重新编译。
+
+<p align="center">
+  <img src="docs/images/device-pairing-screen.jpg" width="380" alt="设备配网屏：热点名与配置地址">
+  <img src="docs/images/wifi-pairing-page.png" width="280" alt="手机配网页面">
+</p>
+
+<p align="center">
+  <sub>左：长按 BOOT 3 秒，设备进配网模式，屏幕上直接给出热点名和配置地址<br>
+  右：手机连上热点后打开该地址，扫描 + 输密码即可</sub>
+</p>
 
 ### 什么时候会提示配网
 
