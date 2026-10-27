@@ -250,6 +250,11 @@ typedef struct {
     char      error[64];
     char      clock[8];
     char      date[8];
+    // 数据有多新（秒），服务端 /status 与 /screen 都下发。
+    // -1 = 服务端没给（旧版服务或取不到采集时间），页脚显示 "--"。
+    // 这不是 clock 那种"服务端此刻几点"，而是生成的快照距现在多久 ——
+    // 只有这个数才能回答"屏幕上的数是不是新鲜的"。
+    int       age;
     int       working;
     int       today_done;
     int       automations;
@@ -380,6 +385,9 @@ static volatile bool s_svrcfg_req = false;
 // 服务端 5 秒推一轮，不判等的话滚动会一直"闪回"。
 static char     s_title_cache[MAX_SESSIONS][48];
 static char     s_meta_cache[MAX_SESSIONS][64];
+// 页脚右侧"多久之前"的显示缓存。ui_render 每帧都跑（约 50ms 一轮），
+// 不判等就每帧 set_text 一次：每次都 malloc/free + 全量重绘，白烧 SPI。
+static char     s_footer_cache[24];
 static bool     s_waiting[MAX_SESSIONS];     // 当前哪些行在等待操作
 static bool     s_blink_on;                  // 黄灯亮/灭相位
 
@@ -1294,6 +1302,46 @@ static int session_age_s(const board_data_t *d, int idx)
     return d->sessions[idx].age_s + (int)(extra / 1000);
 }
 
+// 页脚右侧的"数据新鲜度"：3s前 / 12m前 / 2d前
+//
+// 为什么不显示 clock（原来的 "★ 09:44"）：
+//   那是**服务端此刻的钟点**，每轮轮询都在变，和数据是否新鲜毫无关系 ——
+//   断网十分钟后它照样跳到当前时刻，看着像刚更新过。真正有意义的是
+//   快照有多旧，服务端在 payload 里给了 age（秒）。
+//
+// 为什么要本地再累加：
+//   age 是服务端拍下那一刻的值，只随 5 秒轮询刷新。直接用它会"5 秒一跳"，
+//   看着像卡住。锚点用 d->sample_ms（解析这批数据的本地时刻，会话计时
+//   也用它），屏幕上就是每秒一跳的真时间。断网沿用旧数据时 sample_ms
+//   原样保留，秒数照常往上走 —— 正好把"断了多久"如实显示出来。
+//
+// 为什么不带"更新"两个字：
+//   12px 字体下 "更新 59m前" 要 61px，而页脚左侧
+//   "CPU 100%  MEM 100%  DSK 100%" 最坏要 181px。左边从 x=8 起、
+//   右边距右缘 8px，两者之和不能超过 224px，带前缀就顶到 242px 叠字。
+//   去掉前缀后最长 "59m前" 只有 34px，最坏 215px，任何数值组合都不重叠。
+static void footer_render_age(const board_data_t *d)
+{
+    char buf[24];
+    if (d->age < 0) {
+        // 旧版服务端没下发 age：明确显示 --，不假装"刚刚更新"
+        snprintf(buf, sizeof(buf), "--");
+    } else {
+        int64_t extra = (esp_timer_get_time() / 1000) - d->sample_ms;
+        if (extra < 0) extra = 0;        // 时钟异常时不要倒退
+        int sec = d->age + (int)(extra / 1000);
+        // 分档比 fmt_age 粗：这里只表示"多久没更新"，不需要秒级精度
+        if (sec < 60)         snprintf(buf, sizeof(buf), "%ds前", sec);
+        else if (sec < 3600)  snprintf(buf, sizeof(buf), "%dm前", sec / 60);
+        else if (sec < 86400) snprintf(buf, sizeof(buf), "%dh前", sec / 3600);
+        else                  snprintf(buf, sizeof(buf), "%dd前", sec / 86400);
+    }
+    if (strcmp(buf, s_footer_cache) == 0) return;   // 字符串没变，不重绘
+    strncpy(s_footer_cache, buf, sizeof(s_footer_cache) - 1);
+    s_footer_cache[sizeof(s_footer_cache) - 1] = '\0';
+    lv_label_set_text(s_lbl_footer, buf);
+}
+
 static void ui_render_overview(const board_data_t *d)
 {
     char buf[16];
@@ -1658,6 +1706,9 @@ static void ui_render(const board_data_t *d)
         // 离线时页脚左侧让给错误原因（右侧更新时间清空，不然两条挤在一起）
         lv_obj_set_style_text_color(s_lbl_sys, COL_ERR, 0);
         lv_label_set_text(s_lbl_sys, fbuf);
+        // 清缓存一起清：恢复在线后若新鲜度文本恰好和断网前一样，
+        // 判等会拦住重绘，页脚就一直是空白
+        s_footer_cache[0] = '\0';
         lv_label_set_text(s_lbl_footer, "");
         // 离线时宠物回到待机表情（慢眨眼）—— 它还在呼吸，只是没活干，
         // 比冻在最后一帧上更像"设备活着但连不上"。
@@ -1697,9 +1748,7 @@ static void ui_render(const board_data_t *d)
         lv_obj_set_style_text_color(s_lbl_sys, hot ? COL_WARN : COL_DIM, 0);
     }
 
-    char footer[24];
-    snprintf(footer, sizeof(footer), "★ %s", d->clock);
-    lv_label_set_text(s_lbl_footer, footer);
+    footer_render_age(d);
 
     // 宠物表情跟着数据走（本屏两页共用，放在这里只算一次）
     pet_update_state(d);
@@ -1846,6 +1895,8 @@ static void parse_into(board_data_t *d, const char *json)
 
     json_str(json, "clock", d->clock, sizeof(d->clock));
     json_str(json, "date",  d->date,  sizeof(d->date));
+    // 缺省 -1 表示"服务端没下发"，页脚显示 --，而不是假装"刚刚更新"
+    d->age = json_int(json, "age", -1);
     d->working     = json_int(json, "working", 0);
     d->today_done  = json_int(json, "today_done", 0);
     d->automations = json_int(json, "automations", 0);
