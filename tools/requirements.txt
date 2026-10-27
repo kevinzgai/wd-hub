@@ -1,0 +1,21 @@
+# 资源生成工具链的 Python 依赖。
+#
+# ⚠ 为什么要单独一份：tools/ 下的脚本在**模块顶层** import 这些第三方库
+# （numpy / Pillow / pyserial），不是函数内延迟导入。原来没有依赖清单，
+# 新机器上第一步就是 ModuleNotFoundError，所有生成脚本一个都跑不起来。
+#
+# 安装：
+#   pip install -r tools/requirements.txt
+#
+# Node 侧依赖（lv_font_conv，字库生成用）不在这里：
+#   cd tools && npm install
+
+# 音频采样处理（gen_tones_from_wav.py）
+numpy>=1.24
+
+# 位图生成：logo / 宠物帧 / 预览图（gen_logo.py、gen_pet.py、
+# pet_mock_screen.py、pet_opa_compare.py）
+pillow>=10.0
+
+# 串口监视（watch_serial.py）
+pyserial>=3.5

@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """从任意 WAV 素材生成四段提示音，写出 firmware/main/tone_pcm.h。
 
-取代 `gen_tones.py`：那个脚本依赖一段特定的原始 mp3（`C:\\Users\\...\\307888.mp3`），
-素材已经找不到了，跑不起来。这个工具只吃一个 WAV，不绑定任何来源。
+这是**唯一**的提示音生成脚本。
+
+## 历史
+
+早期有两个脚本同时写 tone_pcm.h，算法完全不同：
+  - `gen_tones.py`        依赖一段固定的 mp3（硬编码 C:\\Users\\...\\307888.mp3），
+                          素材早已找不到，跑不起来
+  - `rebuild_done.py`     假设 DONE 音是旧结构（62ms 叮 + 升八度 1412Hz），
+                          而当前产物是 610ms/220ms 叮、**没升八度**
+
+两个都留着 = 谁跑谁毁产物，而且静默产出错误提示音（rebuild_done 跑一次
+会把 220ms 的叮在第 62ms 硬切，再对不存在的频率做陷波）。
+已删除，只保留本脚本。
 
 ## 设计约定（沿用原方案，别随意打破）
 
@@ -81,9 +92,12 @@ def resample(x: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
     """线性插值重采样。1500Hz 以上有混叠风险，所以先做一次简单低通。"""
     if sr_in == sr_out:
         return x
-    # 降采样前低通到目标 Nyquist 的 0.9，否则高频会折返成刺耳杂音
+    # 降采样前低通到**目标** Nyquist 的 0.9，否则高频会折返成刺耳杂音。
+    # ⚠ 截止频率必须按 sr_out 算，不能按 sr_in。
+    # 原写法 lowpass(x, sr_in * 0.45, sr_in)：44.1k → 24k 时实际截止
+    # 19.8k，而目标 Nyquist 只有 12k —— 12k 以上的能量全部折返进可听频段。
     if sr_out < sr_in:
-        x = lowpass(x, sr_in * 0.45, sr_in)
+        x = lowpass(x, sr_out * 0.45, sr_in)
     n_out = int(len(x) * sr_out / sr_in)
     pos = np.linspace(0, len(x) - 1, n_out)
     i = np.floor(pos).astype(int)
