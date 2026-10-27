@@ -281,10 +281,14 @@ def _load_titles(force: bool = False) -> None:
         return
 
     from ..models import session_title as _mk_title
+    before = len(_TITLES)
     for sid, r in rows.items():
         _TITLES[sid] = _mk_title(r["title"], r["custom_title"], r["cwd"], sid)
     _titles_loaded = True
-    log.info("已加载 %d 个会话标题", len(_TITLES))
+    # 只在数量真变了时打日志。这张表 30s 刷一次，无条件打印的话
+    # 一天能刷 2800 行噪音，把真正的告警淹掉。
+    if len(_TITLES) != before:
+        log.info("已加载 %d 个会话标题", len(_TITLES))
 
 
 # ---------------------------------------------------------------- 累加
