@@ -332,9 +332,32 @@ static lv_obj_t *s_lbl_wifi_l1;
 static lv_obj_t *s_lbl_wifi_l2;
 static lv_obj_t *s_lbl_wifi_l3;
 
+// ---- 服务地址浮层 ----
+// WiFi 是通的、但连不上服务（多半是电脑换了 IP）时盖住整屏，
+// 直接把配置页地址（设备自己的 IP）写在屏上：
+//
+//        服务连不上
+//     192.168.0.89:27777     ← 现在用的地址
+//       192.168.1.23         ← 配置页地址（绿）
+//   用浏览器打开上面地址
+//      进去改服务地址
+//
+// 和 WiFi 浮层分开建，是因为两者的触发条件互斥（一个要 WiFi 不通，
+// 一个要 WiFi 通），合成一个状态机反而绕。
+static lv_obj_t *s_pg_svr;
+static lv_obj_t *s_lbl_svr_title;
+static lv_obj_t *s_lbl_svr_l1;
+static lv_obj_t *s_lbl_svr_l2;
+static lv_obj_t *s_lbl_svr_tok;
+static lv_obj_t *s_lbl_svr_l3;
+
 // 按键写入的配网请求，由 LVGL 任务消费（wifi_mgr_start_provision 里有
 // esp_wifi_set_mode / httpd_start，放按键任务里跑会长时间阻塞按键扫描）
 static volatile bool s_prov_req = false;
+
+// 按键写入的"重开服务地址配置页"请求，同样由 LVGL 任务执行
+// （开 httpd 会阻塞几百毫秒，放按键任务里长按判定会失灵）
+static volatile bool s_svrcfg_req = false;
 
 // 标题只在内容变化时才 set_text —— 每次重设都会把跑马灯位置打回开头，
 // 服务端 5 秒推一轮，不判等的话滚动会一直"闪回"。
@@ -790,6 +813,42 @@ static void pet_update_state(const board_data_t *d)
     pet_set_state(st);
 }
 
+// ---- 服务地址浮层 ----
+// 建在 WiFi 浮层之后 = 子对象顺序更靠上，两者同时可见时它盖住 WiFi 那层
+// （理论上不会同时出现：一个要 WiFi 不通，一个要 WiFi 通）。
+static void svr_ui_build(void)
+{
+    s_pg_svr = mk_page(lv_screen_active());
+    lv_obj_set_style_bg_color(s_pg_svr, COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_pg_svr, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_pg_svr, LV_OBJ_FLAG_HIDDEN);
+
+    s_lbl_svr_title = mk_label(s_pg_svr, &font_cn_28, COL_ERR,
+                               LV_ALIGN_TOP_MID, 0, 40);
+    lv_label_set_text(s_lbl_svr_title, "服务连不上");
+
+    s_lbl_svr_l1 = mk_label(s_pg_svr, &font_cn_16, COL_TEXT,
+                            LV_ALIGN_TOP_MID, 0, 100);
+    lv_label_set_text(s_lbl_svr_l1, "");
+
+    s_lbl_svr_l2 = mk_label(s_pg_svr, &font_cn_16, COL_OK,
+                            LV_ALIGN_TOP_MID, 0, 132);
+    lv_label_set_text(s_lbl_svr_l2, "");
+
+    s_lbl_svr_l3 = mk_label(s_pg_svr, &font_cn_12, COL_DIM,
+                            LV_ALIGN_TOP_MID, 0, 178);
+    lv_label_set_text(s_lbl_svr_l3, "用浏览器打开上面地址\n进去改服务地址");
+    lv_label_set_long_mode(s_lbl_svr_l3, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_svr_l3, 216);
+    lv_obj_set_style_text_align(s_lbl_svr_l3, LV_TEXT_ALIGN_CENTER, 0);
+
+    // 验证码。单独一个标签，因为它要**醒目**：用户得照着这 4 位数字
+    // 填进网页表单，混在灰色说明文字里会被看漏。
+    s_lbl_svr_tok = mk_label(s_pg_svr, &font_cn_16, COL_ACCENT,
+                             LV_ALIGN_TOP_MID, 0, 206);
+    lv_label_set_text(s_lbl_svr_tok, "");
+}
+
 static void ui_build(void)
 {
     lv_obj_t *scr = lv_screen_active();
@@ -1142,10 +1201,18 @@ static void ui_build(void)
     lv_label_set_long_mode(s_lbl_wifi_l3, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_wifi_l3, 216);
     lv_obj_set_style_text_align(s_lbl_wifi_l3, LV_TEXT_ALIGN_CENTER, 0);
+
+    // 服务地址浮层：建在最后，子对象顺序最靠上
+    svr_ui_build();
 }
 
 // ===========================================================================
-// 渲染（调用方需持 s_data_lock）
+// 渲染
+//
+// ⚠ 这组函数**不持 s_data_lock**，只读传入的快照。
+// 调用方（lvgl_task）负责：持锁 memcpy 出快照 → 放锁 → 再传进来绘制。
+// 绘制要走 SPI，耗时可达几十毫秒；锁内绘制会堵住 fetch 任务，
+// 导致那一轮数据被静默丢弃。
 // ===========================================================================
 
 // 服务端只发 0..4 的小整数，色板留在固件 —— 换配色不用改服务端
@@ -2171,6 +2238,17 @@ static void button_task(void *arg)
                                      (unsigned long)held);
                             s_prov_req = true;      // 由 LVGL 任务执行
                         }
+                    } else if (is_boot && wifi_mgr_svr_down()) {
+                        /* WiFi 是通的、但服务连不上：长按 BOOT 3 秒重新开放
+                         * 配置页。正常情况页面在连不上时已经自己开了，
+                         * 这里是给"手滑关掉页面 / 想再看一眼地址"留的入口。
+                         * 同样不触发 700ms 的亮度循环，理由同上。 */
+                        if (held >= PROV_MS) {
+                            fired[i] = true;
+                            ESP_LOGW(TAG, ">>> BOOT 长按 %lums（服务连不上），重开配置页",
+                                     (unsigned long)held);
+                            s_svrcfg_req = true;
+                        }
                     } else if (held >= LONG_MS) {
                         fired[i] = true;
                         int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
@@ -2278,6 +2356,62 @@ static void wifi_ui_sync(void)
     }
 }
 
+// 服务地址浮层同步。同样是"只翻译，不判断"：连不上这件事由 wifi_mgr 的
+// 失败计数说了算（连续 5 次），这里只负责把地址显示出来。
+//
+// 参与比对的还有"地址版本号" —— 用户改了地址之后要立刻把新地址显示出来，
+// 不然屏上还挂着旧 IP，会让人以为没改成功。
+static void svr_ui_sync(void)
+{
+    static bool     last_down = false;
+    static uint32_t last_ver  = 0xFFFFFFFF;
+    static char     last_ip[16] = "";
+    static char     last_tok[8] = "";
+
+    // 只有 WiFi 通着时"连不上服务"才有意义：WiFi 都断了的话那是 WiFi 浮层的事
+    bool       down = wifi_mgr_svr_down() && (wifi_mgr_state() == WIFI_ST_CONNECTED);
+    uint32_t   ver  = wifi_mgr_svr_version();
+    const char *ip  = wifi_mgr_ip();
+    /* 验证码 30 秒换一次，所以它也要参与比对 —— 不然新码上了屏，
+     * 用户还照着旧码填，提交被拒却不知道为什么。 */
+    const char *tok = down ? wifi_mgr_cfg_token() : "";
+
+    // IP 也参与比对：路由器重新分了 IP 的话，屏上那个配置页地址得跟着变
+    if (down == last_down && ver == last_ver && strcmp(ip, last_ip) == 0
+        && strcmp(tok, last_tok) == 0) return;
+    last_down = down;
+    last_ver  = ver;
+    strncpy(last_ip, ip, sizeof(last_ip) - 1);
+    strncpy(last_tok, tok, sizeof(last_tok) - 1);
+
+    if (!down) {
+        lv_obj_add_flag(s_pg_svr, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    lv_obj_clear_flag(s_pg_svr, LV_OBJ_FLAG_HIDDEN);
+
+    // 省掉 http:// 前缀：240px 屏上一行要塞下 IP 和端口，前缀没信息量
+    const char *b = wifi_mgr_svr_base();
+    if (strncmp(b, "http://", 7) == 0) b += 7;
+    lv_label_set_text(s_lbl_svr_l1, b[0] ? b : "未配置");
+
+    // 第二行是用户真正要用的东西：设备自己在局域网里的 IP = 配置页地址
+    lv_label_set_text(s_lbl_svr_l2, ip[0] ? ip : "--");
+
+    // 第三行提示 + 验证码。配置页无鉴权（跑在真实局域网上），
+    // 改服务地址必须带这个码 —— 屏幕是唯一的分发渠道。
+    if (tok[0]) {
+        lv_label_set_text(s_lbl_svr_l3, "用浏览器打开上面地址\n照着下面的数字填验证码");
+        char buf[32];
+        snprintf(buf, sizeof(buf), "验证码 %s", tok);
+        lv_label_set_text(s_lbl_svr_tok, buf);
+    } else {
+        lv_label_set_text(s_lbl_svr_l3, "用浏览器打开上面地址\n进去改服务地址");
+        lv_label_set_text(s_lbl_svr_tok, "");
+    }
+}
+
 // ===========================================================================
 // LVGL 任务
 // ===========================================================================
@@ -2310,8 +2444,15 @@ static void lvgl_task(void *arg)
             wifi_mgr_start_provision();
         }
 
+        // 重开服务地址配置页
+        if (s_svrcfg_req) {
+            s_svrcfg_req = false;
+            wifi_mgr_start_svr_config();
+        }
+
         // WiFi 状态变了就更新浮层（内部有状态去重，每帧调用开销可忽略）
         wifi_ui_sync();
+        svr_ui_sync();
 
         // 按键提示：显示 1.5 秒后自动消失
         if (s_toast_val >= 0) {
