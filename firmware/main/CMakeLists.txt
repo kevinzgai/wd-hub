@@ -1,6 +1,15 @@
 idf_component_register(
     SRCS
         "main.cpp"
+        "board_data.cpp"
+        "board_display.cpp"
+        "board_json.cpp"
+        "buttons.cpp"
+        "data_fetch.cpp"
+        "device_report.cpp"
+        "pet_view.cpp"
+        "text_util.cpp"
+        "ui_board.cpp"
         "audio.cpp"
         "battery.cpp"
         "wifi_mgr.cpp"
