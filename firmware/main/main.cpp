@@ -628,7 +628,7 @@ static bool s_prev_any_waiting = false;
 // 让它和 todo 完成共用去抖窗口，短时间内只响一次，避免连响。
 static int  s_prev_working = -1;
 
-static void pet_update_state(void)
+static void pet_update_state(const board_data_t *d)
 {
     // 只有概览屏（第 0 屏，走 /status）的数据里带 working / today_done / sessions。
     // 详情屏（/screen/<i>）只下发 rows，这三个字段在 parse_into 里 fallback 成 0。
@@ -638,7 +638,7 @@ static void pet_update_state(void)
     //   详情(0, 0) -> 概览(2, 3)               : done 增加   → 误响"完成"
     // 也就是每切一圈屏白响两声。加音频之前只表现为表情闪一下，
     // 现在会变成实体噪音，所以非第 0 屏直接跳过，宠物保持原状态不动。
-    if (s_data.page != 0) return;
+    if (d->page != 0) return;
 
     int64_t now = esp_timer_get_time() / 1000;
 
@@ -648,24 +648,24 @@ static void pet_update_state(void)
 
     // 首次拿到数据时只记基线，不触发完成动画 —— 否则每次开机都要先笑一下
     if (s_prev_today_done < 0) {
-        s_prev_today_done = s_data.today_done;
-        s_prev_working    = s_data.working;
+        s_prev_today_done = d->today_done;
+        s_prev_working    = d->working;
         ESP_LOGI(TAG, "pet 基线: done=%d working=%d",
                  s_prev_today_done, s_prev_working);
-    } else if (s_data.today_done > s_prev_today_done) {
+    } else if (d->today_done > s_prev_today_done) {
         // todo 勾完一项或多项。
         // 一次完成多项（0 -> 3）也只响一次：连响三次纯属噪音，
         // "刚才有进展"这一条信息响一声就够了。
         ESP_LOGI(TAG, "pet 完成: done %d -> %d，播放完成音",
-                 s_prev_today_done, s_data.today_done);
+                 s_prev_today_done, d->today_done);
         s_done_until_ms = now + PET_DONE_HOLD_MS;
-        s_prev_today_done = s_data.today_done;
+        s_prev_today_done = d->today_done;
         audio_play(AUDIO_EV_DONE);
         played_done = true;
-    } else if (s_data.today_done < s_prev_today_done) {
+    } else if (d->today_done < s_prev_today_done) {
         ESP_LOGI(TAG, "pet 基线回退: done %d -> %d",
-                 s_prev_today_done, s_data.today_done);
-        s_prev_today_done = s_data.today_done;   // 跨天归零，跟一下基线
+                 s_prev_today_done, d->today_done);
+        s_prev_today_done = d->today_done;   // 跨天归零，跟一下基线
     }
 
     // 会话收工：working 减少。
@@ -677,15 +677,15 @@ static void pet_update_state(void)
     //   - 本轮已经响过 DONE（真的完成了 todo）就不再响，避免连响两声
     //   - 用 played_done 判断而不是比较 s_prev_today_done ——
     //     后者在上一分支里已经更新过了，比较永远成立，是个隐蔽的 bug
-    if (s_prev_working >= 0 && s_data.working < s_prev_working && !played_done) {
+    if (s_prev_working >= 0 && d->working < s_prev_working && !played_done) {
         audio_play(AUDIO_EV_SESSION_END);
     }
-    s_prev_working = s_data.working;
+    s_prev_working = d->working;
 
     // 有没有会话在等用户操作 —— 比"有几个自动化"重要得多
     bool any_waiting = false;
-    for (int i = 0; i < s_data.session_count; i++) {
-        if (s_data.sessions[i].waiting) { any_waiting = true; break; }
+    for (int i = 0; i < d->session_count; i++) {
+        if (d->sessions[i].waiting) { any_waiting = true; break; }
     }
 
     // 只在"从无到有"那一刻响。持续等待期间不重复提示。
@@ -696,7 +696,7 @@ static void pet_update_state(void)
 
     // 优先级：刚完成 > 有会话在等 > 有任务在跑 > 待机
     //
-    // 注意不能拿 s_data.automations 判断"自动化在跑"：
+    // 注意不能拿 d->automations 判断"自动化在跑"：
     // 那个字段是"已启用的自动化总数"，配置了就一直 >0（当前机器是 5），
     // 用它做条件等于永远进不了 IDLE，宠物会一直抖耳朵。
     // AUTO 只用于"确实没有会话、但也不该显示纯待机"的兜底，这里索性并入
@@ -704,7 +704,7 @@ static void pet_update_state(void)
     uint8_t st;
     if (now < s_done_until_ms)     st = PET_ST_DONE;
     else if (any_waiting)          st = PET_ST_AUTO;     // 耳朵压扁：等你操作
-    else if (s_data.working > 0)   st = PET_ST_WORKING;  // 干活中
+    else if (d->working > 0)   st = PET_ST_WORKING;  // 干活中
     else                           st = PET_ST_IDLE;
 
     pet_set_state(st);
@@ -1014,29 +1014,35 @@ static void fmt_age(char *out, size_t n, int sec)
 }
 
 // 会话此刻的年龄（秒）= 服务端拍下的值 + 本地从那一刻起流逝的时间。
-// 调用方需持 s_data_lock（ui_render 已持），不再单独加锁。
-static int session_age_s(int idx)
+// 读的是快照，不加锁。
+static int session_age_s(const board_data_t *d, int idx)
 {
-    int64_t extra = (esp_timer_get_time() / 1000) - s_data.sample_ms;
+    int64_t extra = (esp_timer_get_time() / 1000) - d->sample_ms;
     if (extra < 0) extra = 0;            // 时钟异常时不要倒退
-    return s_data.sessions[idx].age_s + (int)(extra / 1000);
+    return d->sessions[idx].age_s + (int)(extra / 1000);
 }
 
-static void ui_render_overview(void)
+static void ui_render_overview(const board_data_t *d)
 {
     char buf[16];
-    snprintf(buf, sizeof(buf), "%d", s_data.working);
+    snprintf(buf, sizeof(buf), "%d", d->working);
     lv_label_set_text(s_lbl_stat[0], buf);
-    snprintf(buf, sizeof(buf), "%d", s_data.today_done);
+    snprintf(buf, sizeof(buf), "%d", d->today_done);
     lv_label_set_text(s_lbl_stat[1], buf);
-    snprintf(buf, sizeof(buf), "%d", s_data.automations);
+    snprintf(buf, sizeof(buf), "%d", d->automations);
     lv_label_set_text(s_lbl_stat[2], buf);
 
     for (int i = 0; i < MAX_SESSIONS; i++) {
-        if (i < s_data.session_count) {
+        if (i < d->session_count) {
             char title[48], proj[24];
-            utf8_sanitize(&font_cn_12, s_data.sessions[i].title,   title, sizeof(title));
-            utf8_sanitize(&font_cn_12, s_data.sessions[i].project, proj,  sizeof(proj));
+            /* ⚠ 校验用的字体必须和渲染用的字体一致。
+             * 标题渲染用 font_cn_16、项目名渲染用 font_cn_12（进 meta 行），
+             * 但校验时两个都用了 font_cn_12。两个字库的字符集不完全一样，
+             * 于是会出现"校验说这个字没有 → 换成 ?"，而实际渲染的字体
+             * 本来能显示；或者反过来，校验放行但渲染成方框。
+             * 校验与渲染分家，症状就是屏上凭空多出问号。 */
+            utf8_sanitize(&font_cn_16, d->sessions[i].title,   title, sizeof(title));
+            utf8_sanitize(&font_cn_12, d->sessions[i].project, proj,  sizeof(proj));
 
             // 内容没变就别重设 —— set_text 会把跑马灯位置打回开头
             if (strcmp(title, s_title_cache[i]) != 0) {
@@ -1050,11 +1056,11 @@ static void ui_render_overview(void)
             // 周期性的 set_text 也不影响上面标题的跑马灯（那是另一个控件）。
             char agebuf[TEXT_ELAPSED];
             const char *age;
-            if (s_data.sessions[i].age_s >= 0) {
-                fmt_age(agebuf, sizeof(agebuf), session_age_s(i));
+            if (d->sessions[i].age_s >= 0) {
+                fmt_age(agebuf, sizeof(agebuf), session_age_s(d, i));
                 age = agebuf;
             } else {
-                age = s_data.sessions[i].elapsed;   // 旧版服务端没发 e
+                age = d->sessions[i].elapsed;   // 旧版服务端没发 e
             }
 
             char meta[64];
@@ -1068,7 +1074,7 @@ static void ui_render_overview(void)
 
             // 等待操作 → 灯变黄 + 交给 blink_timer_cb 闪；不等待就整颗隐藏，
             // 行首留 10px 白，比常亮一个灰点干净
-            bool waiting = s_data.sessions[i].waiting != 0;
+            bool waiting = d->sessions[i].waiting != 0;
             s_waiting[i] = waiting;
             if (waiting) {
                 lv_obj_set_style_bg_color(s_dot[i], COL_WARN, 0);
@@ -1088,7 +1094,7 @@ static void ui_render_overview(void)
         }
     }
 
-    if (s_data.session_count == 0) {
+    if (d->session_count == 0) {
         lv_label_set_text(s_lbl_sess_title[0], "空闲中");
         lv_obj_set_style_text_color(s_lbl_sess_title[0], COL_DIM, 0);
         lv_obj_clear_flag(s_lbl_sess_title[0], LV_OBJ_FLAG_HIDDEN);
@@ -1098,11 +1104,11 @@ static void ui_render_overview(void)
 }
 
 // 第 1..N-1 屏主体：页标题 + 最多 6 行
-static void ui_render_list(void)
+static void ui_render_list(const board_data_t *d)
 {
     char tb[32];
-    if (s_data.page_title[0]) {
-        utf8_sanitize(&font_cn_16, s_data.page_title, tb, sizeof(tb));
+    if (d->page_title[0]) {
+        utf8_sanitize(&font_cn_16, d->page_title, tb, sizeof(tb));
     } else {
         tb[0] = '\0';
     }
@@ -1113,7 +1119,7 @@ static void ui_render_list(void)
     }
 
     for (int i = 0; i < MAX_ROWS; i++) {
-        if (i >= s_data.row_count) {
+        if (i >= d->row_count) {
             lv_obj_add_flag(s_lbl_row_t[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_lbl_row_v[i], LV_OBJ_FLAG_HIDDEN);
             s_row_t_cache[i][0] = '\0';
@@ -1122,8 +1128,8 @@ static void ui_render_list(void)
         }
 
         char tt[TEXT_ROW], vv[TEXT_ROWVAL];
-        utf8_sanitize(&font_cn_16, s_data.rows[i].t, tt, sizeof(tt));
-        utf8_sanitize(&font_cn_12, s_data.rows[i].v, vv, sizeof(vv));
+        utf8_sanitize(&font_cn_16, d->rows[i].t, tt, sizeof(tt));
+        utf8_sanitize(&font_cn_12, d->rows[i].v, vv, sizeof(vv));
 
         // 三样都判等：文本变了才 set_text，颜色变了才改样式。
         // ui_render 每帧都跑，不判等会一直触发重绘把 SPI 占满。
@@ -1137,8 +1143,8 @@ static void ui_render_list(void)
             s_row_v_cache[i][sizeof(s_row_v_cache[i]) - 1] = '\0';
             lv_label_set_text(s_lbl_row_v[i], vv);
         }
-        if (s_row_c_cache[i] != s_data.rows[i].color) {
-            s_row_c_cache[i] = s_data.rows[i].color;
+        if (s_row_c_cache[i] != d->rows[i].color) {
+            s_row_c_cache[i] = d->rows[i].color;
             lv_color_t cc = row_color(s_row_c_cache[i]);
             lv_obj_set_style_text_color(s_lbl_row_t[i], cc, 0);
             lv_obj_set_style_text_color(s_lbl_row_v[i], cc, 0);
@@ -1250,18 +1256,18 @@ static void ui_render_battery(void)
     }
 }
 
-static void ui_render(void)
+static void ui_render(const board_data_t *d)
 {
     // ---- 电量圆圈（独立于网络状态，离线时也照常更新）----
     ui_render_battery();
 
     // ---- 页头（两屏共用，随时更新）----
-    if (!s_data.ok) {
+    if (!d->ok) {
         lv_obj_set_style_text_color(s_lbl_status, COL_ERR, 0);
         lv_label_set_text(s_lbl_status, "● 离线");
         char fbuf[96], ebuf[64];
         utf8_sanitize(&font_cn_12,
-                      s_data.error[0] ? s_data.error : "无法连接 bridge",
+                      d->error[0] ? d->error : "无法连接 bridge",
                       ebuf, sizeof(ebuf));
         snprintf(fbuf, sizeof(fbuf), "✗ %s", ebuf);
         // 离线时页脚左侧让给错误原因（右侧更新时间清空，不然两条挤在一起）
@@ -1277,41 +1283,41 @@ static void ui_render(void)
     lv_obj_set_style_text_color(s_lbl_status, COL_OK, 0);
     lv_label_set_text(s_lbl_status, "● 在线");
 
-    lv_label_set_text(s_lbl_clock, s_data.clock);
-    lv_label_set_text(s_lbl_date, s_data.date);
+    lv_label_set_text(s_lbl_clock, d->clock);
+    lv_label_set_text(s_lbl_date, d->date);
 
     // ---- 页脚（两屏共用）----
     // 左：本机 CPU / 内存 / 磁盘占用。超阈值时整条变黄，
     // 12px 字号做不到逐段着色，整条变色足够提醒。
     char sbuf[56];
-    if (s_data.cpu < 0) {
+    if (d->cpu < 0) {
         // 旧版服务端没下发这些字段，明确显示 -- 而不是假的 0%
         snprintf(sbuf, sizeof(sbuf), "CPU --  MEM --");
     } else {
         int n = snprintf(sbuf, sizeof(sbuf), "CPU %d%%  MEM %d%%",
-                         s_data.cpu, s_data.mem);
-        if (s_data.disk >= 0 && n > 0 && n < (int)sizeof(sbuf) - 12) {
-            snprintf(sbuf + n, sizeof(sbuf) - n, "  DSK %d%%", s_data.disk);
+                         d->cpu, d->mem);
+        if (d->disk >= 0 && n > 0 && n < (int)sizeof(sbuf) - 12) {
+            snprintf(sbuf + n, sizeof(sbuf) - n, "  DSK %d%%", d->disk);
         }
     }
     lv_label_set_text(s_lbl_sys, sbuf);
-    bool hot = (s_data.cpu >= 85) || (s_data.mem >= 90);
+    bool hot = (d->cpu >= 85) || (d->mem >= 90);
     lv_obj_set_style_text_color(s_lbl_sys, hot ? COL_WARN : COL_DIM, 0);
 
     char footer[24];
-    snprintf(footer, sizeof(footer), "★ %s", s_data.clock);
+    snprintf(footer, sizeof(footer), "★ %s", d->clock);
     lv_label_set_text(s_lbl_footer, footer);
 
     // 宠物表情跟着数据走（本屏两页共用，放在这里只算一次）
-    pet_update_state();
+    pet_update_state(d);
 
     // ---- 主体 ----
-    // 回包可能属于"切页前"发出的那个请求（s_data.page 落后于 s_page），
+    // 回包可能属于"切页前"发出的那个请求（d->page 落后于 s_page），
     // 这时只更新页头页脚，主体等下一轮，别把上一屏的字画到新屏上
-    if (s_data.page != s_page) return;
+    if (d->page != s_page) return;
 
-    if (s_page == 0) ui_render_overview();
-    else             ui_render_list();
+    if (s_page == 0) ui_render_overview(d);
+    else             ui_render_list(d);
 }
 
 // ===========================================================================
@@ -1898,9 +1904,17 @@ static void lvgl_task(void *arg)
             }
         }
 
+        // ⚠ 只在锁内拷快照，绘制放锁外。
+        // 原来这里是"持锁调 ui_render()"，LVGL 绘制全在锁里做完。
+        // 绘制要走 SPI、可能几十毫秒，期间 fetch 任务拿不到锁就超时，
+        // 那一轮拉到的数据被静默丢弃（还看不出报错，只是屏幕不更新）。
+        // 锁内只做一次 memcpy（board_data_t 是纯 POD，几百字节，微秒级），
+        // 拿到快照后立刻放锁，再慢慢画。
+        board_data_t snap;
         if (xSemaphoreTake(s_data_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
-            ui_render();
+            snap = s_data;
             xSemaphoreGive(s_data_lock);
+            ui_render(&snap);
         }
         uint32_t wait = lv_timer_handler();
         if (wait < 5)  wait = 5;
