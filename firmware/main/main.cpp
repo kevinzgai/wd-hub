@@ -1546,9 +1546,45 @@ static void ui_render_overview(const board_data_t *d)
     }
 
     if (d->session_count == 0) {
-        lv_label_set_text(s_lbl_sess_title[0], "空闲中");
+        // 空闲时第 0 行被"接管"成一行的状态提示（"空闲中"），
+        // 而不是真的有一条会话。上面那个循环已经把第 0 行藏了，
+        // 这里再把它点亮，并顺手清掉 meta 缓存 —— 见下方说明。
+        //
+        // ⚠ 必须同步写 s_title_cache[0]，否则会出现"有任务却一直显示空闲中"。
+        //
+        // s_lbl_sess_title[0] 被"空闲中"和"第 0 条会话标题"两个分支共用，
+        // 而上面会话分支是用 strcmp(title, s_title_cache[i]) 判等来决定
+        // 要不要 set_text 的。如果空闲分支只改 label、不改缓存，就会出现：
+        //
+        //   t1: 有任务，标题 "检查完成原因"  → 缓存 = "检查完成原因"
+        //   t2: 空闲                          → 屏上 "空闲中"，缓存仍是 "检查完成原因"
+        //   t3: 又来了同一个任务，标题没变    → strcmp 相等 → **跳过 set_text**
+        //
+        // 结果就是"明明有任务，屏上却一直写着空闲中"，而且会一直卡着，
+        // 直到下一个标题不同的任务才恢复。
+        //
+        // 不用常量字面量直接比较：写成变量是为了让下面两处 strcmp/strncpy
+        // 完全对称，以后加分支时不容易漏掉某一处。
+        static const char idle_txt[] = "空闲中";
+        if (strcmp(idle_txt, s_title_cache[0]) != 0) {
+            strncpy(s_title_cache[0], idle_txt, sizeof(s_title_cache[0]) - 1);
+            s_title_cache[0][sizeof(s_title_cache[0]) - 1] = '\0';
+            lv_label_set_text(s_lbl_sess_title[0], idle_txt);
+        }
+        // meta 缓存同样要清。
+        //
+        // 第 0 行的 meta（"project · 5m"）在空闲时是隐藏的，但缓存里还留着
+        // 上一条会话的字符串。下一条会话如果恰好**同一个项目、同一段时长**，
+        // 判等就会跳过 set_text，结果第 0 行下面的小字停在旧值上。
+        // 时长一般会变（秒数在走），所以这个 bug 比标题那个更隐蔽 ——
+        // 只在"切得极快、而且时长字符串没变"时露头。
+        // 清成空串的成本是一次 strlen，可忽略。
+        s_meta_cache[0][0] = '\0';
+
         lv_obj_set_style_text_color(s_lbl_sess_title[0], COL_DIM, 0);
         lv_obj_clear_flag(s_lbl_sess_title[0], LV_OBJ_FLAG_HIDDEN);
+        // meta 行保持隐藏：空闲时不该出现"project · 5m"这种半截信息。
+        // 上面循环已经 add_flag 隐藏过，这里不用重复。
     } else {
         lv_obj_set_style_text_color(s_lbl_sess_title[0], COL_TEXT, 0);
     }
