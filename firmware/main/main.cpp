@@ -199,13 +199,30 @@ static void utf8_sanitize(const lv_font_t *font, const char *in, char *out, size
 #define CHART_LABEL_Y   156     // 环下名称
 #define CHART_FOOT_Y    185     // 底部进程/运行
 
-// 环内百分比的视觉居中补偿（详见控件创建处的推导）。
-// 量的来源是 font_cn_16.c 的字形度量，不是目测。
-// 垂直 -1：墨迹中心比行框中心低 0.5px（line_height=20, base_line=4, box_h=12），
-//          往回补 0.5px，LVGL 取整为 -1。
-// 水平  0：数字与 '%' 的 ofs_x 抵消，整串墨迹重心与行框中心重合（偏差 ≤0.5px）。
-#define CHART_VALUE_DX   0
-#define CHART_VALUE_DY  (-1)
+// 环内百分比的居中方式：**不用 lv_obj_align_to**。
+//
+// 为什么不用（这是 LVGL 的语义陷阱，踩过一次）：
+//   lv_obj_align_to 在 lv_obj_pos.c:521-522 是这么收尾的：
+//       lv_obj_set_style_align(obj, LV_ALIGN_TOP_LEFT, 0);   // 对齐方式被抹掉
+//       lv_obj_set_pos(obj, x, y);                           // 位置一次性写死
+//   它用**调用那一刻** label 的宽度算一次位置，之后宽度变了也不会重算。
+//   而标签刚 create 出来时宽度是 0（lv_label 的宽高默认 LV_SIZE_CONTENT，
+//   lv_obj_constructor 里初始 coords 是 x2 = x1 - 1）。
+//   → align_to 那一刻算出来的是 x = 环心 - 0/2 = 环心，
+//     文字**左边缘正好顶在圆心**，整串字往右偏出去。
+//   → 表现就是"文字起始点刚好在圆圈中间"，而且偏移量随位数变
+//     （"19%" 偏 11px、"86%" 偏 15px、"100%" 偏 19px），看着忽左忽右。
+//
+// 改用显式宽高 + LV_TEXT_ALIGN_CENTER（LVGL 在框内自己居中），
+// 位置用坐标算：文本框与环同宽同高同位置，框心即环心。
+#define CHART_VALUE_BOX_W  CHART_ARC_SIZE
+
+// 盒高取 20 让墨迹正好居中，垂直补偿量因此为 0：
+//   font_cn_16 度量 line_height=20, base_line=4, 数字 box_h=12, ofs_y=0
+//   墨迹顶 = (20-4) - 12 - 0 = 4，墨迹底(含) = 4+12-1 = 15 → 中心 9.5
+//   盒高 20 的中心 = (20-1)/2 = 9.5  →  完全重合，不用补
+// （早前按"墨迹底=16"算成偏下 0.5px，是闭区间少减了 1 写出界。）
+#define CHART_VALUE_BOX_H  20
 
 typedef struct {
     char    t[TEXT_ROW];
@@ -553,23 +570,25 @@ static void display_init(void)
 // 顶边落到 -3，被屏幕顶裁掉；下移 4px 后 logo 占 4..28、时钟 1..31，都完整可见。
 #define HEADER_LOGO_Y   4
 
-// 电量数字的视觉居中补偿。
+// 电量数字的定位：和图表环内百分比同一套路 —— **不用 lv_obj_align_to**。
 //
-// 补偿量由 font_cn_12.c 的字形度量算出，不是目测试出来的。
-// LVGL 绘制字形（lv_draw_label.c）：
-//   glyph_y1 = pos->y + (line_height - base_line) - box_h - ofs_y
-// font_cn_12 实测：line_height=15, base_line=3；数字 box_h=8, ofs_y=0
-//   → 墨迹顶 = (15-3) - 8 - 0 = 4，墨迹底 = 12，墨迹中心 = 8
-//   行框中心 = (15-1)/2 = 7
-//   → 墨迹重心比行框中心**低 1px**（偏下），要往上补 1px。
+// align_to 是一次性计算（位置写死后不再重算，见图表常量处的详细说明），
+// 标签创建时宽度还是 0，算出来的位置会把文字左边缘顶在圆心上。
+// 改成"定尺寸文本框 + 文本居中"，位置用坐标算，位数变化不移位。
 //
-// ⚠ 之前这里是 +1，方向搞反了：往下推会让偏得更下（总共偏下 2px）。
-// 旧注释里写的 line_height=13/base_line=2 也是旧数据，与现在的字体文件对不上。
-#define BAT_LABEL_DY    (-1)
-// 横向：数字 ofs_x=0、'%' ofs_x=0，整串墨迹重心与行框中心基本重合（±0.5px）。
-// 不做补偿。这个 -3 是早前目测试出来的（"先 -5，用户反馈多了，再 +2"），
-// 实际把数字推得偏左了 3px。
-#define BAT_LABEL_DX    0
+// 盒高取 15（= line_height），垂直方向墨迹正好居中，补偿量为 0：
+//   font_cn_12 度量：line_height=15, base_line=3，数字 box_h=8, ofs_y=0
+//   墨迹顶 = (15-3) - 8 - 0 = 4，墨迹底(含) = 4+8-1 = 11 → 中心 7.5
+//   盒高 15 的中心 = (15-1)/2 = 7  →  墨迹比盒心低 0.5px，取整不补
+// （之前算成"墨迹底=12 中心 8、比行框中心 7 低 1px"，是闭区间少减了 1，
+//  多算了 0.5px；再叠加符号写反，实际偏了 2px。）
+//
+// 横向：数字 ofs_x=0、'%' ofs_x=0，墨迹重心与行框中心基本重合。
+// 早前那个 -3 是目测试出来的（"先 -5，用户反馈多了，再 +2"），把数字推偏左 3px。
+#define BAT_LABEL_BOX_W  BAT_ARC_SIZE
+#define BAT_LABEL_BOX_H  15
+#define BAT_LABEL_DX     0
+#define BAT_LABEL_DY     0
 
 // ---- 像素宠物：浮动在右下角 ----
 // 素材是 PET_IMG_W x PET_IMG_H = 120x96（不是 120x120 —— 之前这里的注释
@@ -906,23 +925,35 @@ static void ui_build(void)
     // 未填充的轨道。底色变深后 30% 太弱，看不出圆圈轮廓，提到 OPA_50
     lv_obj_set_style_arc_opa(s_arc_bat, LV_OPA_50, LV_PART_MAIN);
     lv_obj_set_style_arc_color(s_arc_bat, COL_OK, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_rounded(s_arc_bat, true, LV_PART_INDICATOR);
+    // 方头，和图表环一致。rounded=true 会把指示弧**两端各延长 width/2**
+    // （3px/2 = 1.5px）再切圆，两端共多 3px。这个小圈周长才 97.4px
+    // （中线圈半径 15.5px），1% 只有 0.97px，所以视觉弧长恒多 3.1 个百分点
+    // ——50% 看着像 53%。100% 时两个半圆头还会在 12 点撞在一起。
+    lv_obj_set_style_arc_rounded(s_arc_bat, false, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(s_arc_bat, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(s_arc_bat, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(s_arc_bat, 0, LV_PART_MAIN);
 
     // 中心百分比。font_cn_12 的 ASCII 是 6px/字符，34px 圆圈内径 26px，
-    // "100%" 占 28px —— 略微超出内径，但字形是等宽的，视觉上还能放下。
+    // "100%" 墨迹 28px —— 略微超出内径，但字形等宽，视觉上还能放下。
     // 全部带百分号，口径统一。
     //
-    // 用 align_to(CENTER) 之后再加 BAT_LABEL_DX/DY：CENTER 对齐的是**行框**
-    // （font_cn_12 line_height=15），而人眼判断的是**墨迹**（数字 box_h=8），
-    // 两者差 1px，补偿量见上面常量的推导。
+    // 定位方式和图表环内百分比一致：定尺寸文本框 + 文本居中，
+    // 不用 align_to（那是一次性计算，创建时宽度为 0 会把文字顶到圆心）。
+    // 文本框与圆圈同宽、与圆圈同心，文字在框内居中即等于在圆心上。
     s_lbl_bat = lv_label_create(scr);
     lv_obj_set_style_text_font(s_lbl_bat, &font_cn_12, 0);
     lv_obj_set_style_text_color(s_lbl_bat, COL_TEXT, 0);
+    lv_obj_set_style_text_align(s_lbl_bat, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_all(s_lbl_bat, 0, 0);
+    lv_obj_set_size(s_lbl_bat, BAT_LABEL_BOX_W, BAT_LABEL_BOX_H);
+    // 用 align（父级相对，每次布局按当前尺寸重算）而不是 align_to（一次性）。
+    // 宽度和圆圈一样，所以右边距直接复用 BAT_ARC_X；
+    // 垂直方向要补 (圆高 - 框高)/2 才同心。
+    lv_obj_align(s_lbl_bat, LV_ALIGN_TOP_RIGHT,
+                 BAT_ARC_X + BAT_LABEL_DX,
+                 BAT_ARC_Y + (BAT_ARC_SIZE - BAT_LABEL_BOX_H) / 2 + BAT_LABEL_DY);
     lv_label_set_text(s_lbl_bat, "--");
-    lv_obj_align_to(s_lbl_bat, s_arc_bat, LV_ALIGN_CENTER, BAT_LABEL_DX, BAT_LABEL_DY);
 
     // 充电闪电：字体里没有 ⚡，用 ASCII 字符拼不行，
     // 改为在圆圈右上角点一个小绿点表示正在充电。
@@ -1076,29 +1107,21 @@ static void ui_build(void)
 
         // 环内百分比。16px 字体下 "100%" 行框 38px，内径 48px 装得下。
         //
-        // 居中补偿量是**算出来的**，不是试出来的。LVGL 的
-        // lv_obj_align_to(CENTER) 对齐的是**行框**，而人眼判断的是**墨迹**，
-        // 两者差多少取决于字体字形度量。解析 font_cn_16.c 的 glyph_dsc 得到：
-        //
-        //   数字 0-9: adv=8, box_w=9, ofs_x=0, ofs_y=0
-        //   '%'    : adv=14, box_w=13, ofs_x=1, ofs_y=0
-        //
-        // 水平：数字 ofs_x=0、'%' ofs_x=0，"86%" 整串墨迹重心与行框中心重合
-        //       （解析 glyph_dsc 算出的偏差是 0.00px）→ 不补偿。
-        //
-        // 垂直：line_height=20, base_line=4，数字 box_h=12, ofs_y=0
-        //       墨迹顶 = (20-4) - 12 - 0 = 4，墨迹底 = 16
-        //       墨迹中心 10，行框中心 (20-1)/2 = 9.5 → 墨迹偏**下** 0.5px
-        //       → 往回补 0.5px，LVGL 取整为 -1。
-        //
-        // 之前这里写的是 dy=+1（照抄电量的 BAT_LABEL_DY），方向正好反了，
-        // 数字整体下沉 1.5px，看着就"不在环中间"。
+        // 定位方式见 CHART_VALUE_BOX_* 常量的注释：不用 align_to，
+        // 用"和环同宽同高的定尺寸文本框 + 文本居中"，位置直接算坐标。
+        // 文本框与环同尺寸同位置 → 框心 == 环心 → 文字在框内居中即在环心。
         s_lbl_chart_v[i] = lv_label_create(s_pg_chart);
         lv_obj_set_style_text_font(s_lbl_chart_v[i], &font_cn_16, 0);
         lv_obj_set_style_text_color(s_lbl_chart_v[i], COL_TEXT, 0);
+        lv_obj_set_style_text_align(s_lbl_chart_v[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_pad_all(s_lbl_chart_v[i], 0, 0);
+        lv_obj_set_size(s_lbl_chart_v[i], CHART_VALUE_BOX_W, CHART_VALUE_BOX_H);
+        lv_obj_set_pos(s_lbl_chart_v[i],
+                       CHART_ARC_X0 + i * CHART_ARC_STEP
+                           + (CHART_ARC_SIZE - CHART_VALUE_BOX_W) / 2,
+                       CHART_ARC_Y
+                           + (CHART_ARC_SIZE - CHART_VALUE_BOX_H) / 2);
         lv_label_set_text(s_lbl_chart_v[i], "--");
-        lv_obj_align_to(s_lbl_chart_v[i], arc, LV_ALIGN_CENTER,
-                        CHART_VALUE_DX, CHART_VALUE_DY);
 
         // 环下名称，宽度跟环一致 + 居中，否则"内存"两个字会偏左
         s_lbl_chart_k[i] = mk_label(s_pg_chart, &font_cn_12, COL_DIM,
