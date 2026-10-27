@@ -439,7 +439,9 @@ static volatile const char *s_last_btn  = "none";  // 最后按下的键，随�
 // 退出：下一轮 /status 拿到 working>0 或有会话，自动恢复。
 // 用户明确要"自动唤醒"，所以不绑按键 —— 按键在休眠时仍然可以切屏，
 // 但切屏不会退出休眠（空闲状态下没有可看的内容）。
-static bool     s_asleep      = false;  // 当前是否处于休眠屏
+// volatile：LVGL 任务写、按键任务读。不加的话按键任务可能把值缓存在寄存器里，
+// 永远看到"没睡"（或永远看到"睡着"），按键就时灵时不灵 —— 这种 bug 极难复现。
+static volatile bool s_asleep = false;  // 当前是否处于省电模式
 static lv_obj_t *s_pg_sleep;            // 休眠屏容器（全屏不透明）
 static lv_obj_t *s_lbl_bigclock;        // 休眠屏：72px 大时钟
 static lv_obj_t *s_lbl_sleep_dot;       // 休眠屏：在线状态点
@@ -449,21 +451,27 @@ static lv_obj_t *s_lbl_sleep_dot;       // 休眠屏：在线状态点
 // 休眠亮度是系统行为，不该出现在"☀ 40%"的提示里，也不该被按键改掉。
 #define SLEEP_BRIGHT_PCT   30
 
-// 按键唤醒后的保活时长。
+// 空闲多久才进省电模式。
 //
-// 为什么需要它：休眠是"无任务"驱动的，而用户按键去看屏的时候
-// 机器多半还是无任务的 —— 没有保活的话，按下键刚亮一帧，
-// 下一轮 ui_render 又判成空闲、立刻睡回去，看着像按键坏了。
-// 给 60 秒：够翻完几屏、看清数字，之后自动回休眠，不用记得关。
+// 60 秒是"确认真的没活干"的最短时间：
+//   - 太短（10~20s）：服务端 working 计数带 30 分钟活跃窗口，
+//     两个任务之间正常的思考间隙就会被判成空闲，屏幕反复闪烁睡/醒
+//   - 太长（5min）：人走了屏幕还亮着，省电意义打折
+// 60 秒能盖住绝大多数"任务之间的空档"，又是人眼能感知到的"等一会儿"。
+#define SLEEP_IDLE_MS      (60 * 1000)
+
+// 空闲计时起点。**不是**"醒着要保持到什么时候"，而是"从什么时候开始闲的"。
 //
-// 单独一个时间戳而不是改成状态机：状态机的"醒着但空闲"和"醒着有任务"
-// 在渲染上完全一样，多一个状态只会多一处要维护的分支。
-#define SLEEP_GRACE_MS     (60 * 1000)
-static volatile uint32_t s_awake_until_ms = 0;
+// 两种写法看起来差不多，但语义差很远：
+//   保活制(deadline)  ：空闲 → 睡；按键 → 醒 + 定一个未来时间；到点又睡
+//   计时制(since)     ：空闲开始计时；满 60 秒才睡；任何活动都清零重来
+// 用户要的是后者（"没活动任务时候需要过一分钟才进省电模式"），
+// 而且计时制天然满足"退出后再空闲满一分钟才进"，不用额外记状态。
+static bool     s_idle_tracking = false;   // 是否正在计时
+static uint32_t s_idle_since_ms = 0;       // 计时起点（毫秒）
 // 按键任务写入的"请唤醒"请求，由 LVGL 任务消费（不能跨任务碰 LVGL）。
-// 用独立标志而不是直接写 s_awake_until_ms：后者是纯数据，
-// 让按键任务直接改时间戳虽然也无害，但所有 UI 相关动作集中在
-// LVGL 任务里落实更好排查。
+// 用独立标志而不是直接改 s_asleep：所有 UI 相关动作集中在 LVGL 任务里
+// 落实更好排查，也避免两个任务同时写同一个状态。
 static volatile bool s_wake_req = false;
 
 // 深色底 + 高对比，小屏远看更清楚。
@@ -1754,7 +1762,8 @@ static void sleep_apply(bool on)
 
         lv_obj_clear_flag(s_pg_sleep, LV_OBJ_FLAG_HIDDEN);
         backlight_set(SLEEP_BRIGHT_PCT);
-        ESP_LOGI(TAG, ">>> 进入休眠屏（无任务，背光 %d%%）", SLEEP_BRIGHT_PCT);
+        ESP_LOGI(TAG, ">>> 进入省电模式（空闲满 %ds，背光 %d%%）",
+                 SLEEP_IDLE_MS / 1000, SLEEP_BRIGHT_PCT);
     } else {
         // ---- 唤醒：把可见性还给"正常界面" ----
         lv_obj_add_flag(s_pg_sleep, LV_OBJ_FLAG_HIDDEN);
@@ -1795,42 +1804,59 @@ static void sleep_apply(bool on)
         backlight_set(k_bright_steps[s_bright_idx]);
         // 文案不写"有任务"：唤醒有两个来源（来了任务 / 用户按键），
         // 写死成前者会让人排查时误以为数据在变。
-        ESP_LOGI(TAG, ">>> 退出休眠屏（背光 %u%%）", k_bright_steps[s_bright_idx]);
+        ESP_LOGI(TAG, ">>> 退出省电模式（背光 %u%%）", k_bright_steps[s_bright_idx]);
     }
 }
 
-// 根据最新数据决定该不该休眠。每轮 ui_render 都调用，内部有状态判等，
-// 稳态下只是一次比较。
+// 根据最新数据决定该不该进省电模式。每轮 ui_render 都调用。
 //
 // ⚠ d->page == 0 这个守卫不能省，理由见 s_asleep 的注释。
 // 注意同时要求 s_page == 0：数据属于第 0 屏、但用户已经按键切走了的话，
 // 屏幕上是详情屏，这时候休眠会把人正在看的内容藏掉。
 static void sleep_update(const board_data_t *d)
 {
-    if (!d->ok) {
-        // 离线 / 服务端降级：这是需要被看到的异常，不休眠。
-        // 如果已经在休眠就从里面出来 —— 否则屏幕停在一块"● 在线"上，
-        // 而实际上早就断了，是最糟的误导。
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
+    // ---- 有任务 / 离线：立刻退出，且清零计时 ----
+    //
+    // 两种情况都立刻退出，但语义不同：
+    //   有任务     —— 屏幕本就是给人看进度的，藏起来毫无道理
+    //   离线/降级  —— 这是需要被看到的异常。如果停在"● 在线"上而实际
+    //                 早就断了，是最糟的误导
+    bool ok     = d->ok;
+    bool busy   = ok && ((d->working > 0) || (d->session_count > 0));
+    bool here   = ok && (d->page == 0) && (s_page == 0);
+
+    if (!ok || busy) {
+        // 清零计时：等活干完了要重新数满一分钟，而不是"上次闲过一会儿、
+        // 一停就睡"。这是"空闲满一分钟"的字面含义。
+        s_idle_tracking = false;
         if (s_asleep) sleep_apply(false);
         return;
     }
 
-    bool idle = (d->working == 0) && (d->session_count == 0);
-    bool on_overview = (d->page == 0) && (s_page == 0);
-
-    // 按键唤醒后的保活期内不休眠，否则按下去只亮一帧就黑回去。
-    if (s_awake_until_ms) {
-        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        // 用有符号差判断：esp_timer 是 64 位微秒，取毫秒后还是 64 位，
-        // 但存进 uint32 会 49 天回绕。有符号比较能正确处理回绕。
-        if ((int32_t)(s_awake_until_ms - now) > 0) {
-            on_overview = false;         // 保活期内：当作"不该休眠"
-        } else {
-            s_awake_until_ms = 0;        // 到期，清掉，恢复按空闲判定
-        }
+    if (!here) {
+        // 人在详情屏：既不该睡，也不该开始计时 —— 他正在看内容。
+        s_idle_tracking = false;
+        if (s_asleep) sleep_apply(false);
+        return;
     }
 
-    sleep_apply(idle && on_overview);
+    // ---- 走到这里：在线 + 空闲 + 停在第 0 屏 ----
+    if (s_asleep) return;              // 已经睡着，什么都不用做
+
+    if (!s_idle_tracking) {
+        s_idle_tracking = true;
+        s_idle_since_ms = now;
+        ESP_LOGI(TAG, ">>> 空闲开始计时，%d 秒后进省电模式", SLEEP_IDLE_MS / 1000);
+        return;
+    }
+
+    // 有符号差比较：uint32 毫秒在 49.7 天回绕，无符号相减在回绕点会
+    // 变成一个巨大的正数，导致"刚进计时就满一分钟"的诡异行为。
+    if ((int32_t)(now - s_idle_since_ms) < (int32_t)SLEEP_IDLE_MS) return;
+
+    sleep_apply(true);
 }
 
 static void page_apply(int page)
@@ -1857,7 +1883,7 @@ static void page_apply(int page)
             ui_list_reset();
         }
         if (s_fetch_task) xTaskNotifyGive(s_fetch_task);
-        ESP_LOGI(TAG, ">>> 休眠中切屏 -> %d/%d（暂不显示）", page, s_nscr);
+        ESP_LOGI(TAG, ">>> 省电模式中切屏 -> %d/%d（暂不显示）", page, s_nscr);
         return;
     }
 
@@ -2761,15 +2787,31 @@ static void button_task(void *arg)
                         }
                     } else if (held >= LONG_MS) {
                         fired[i] = true;
-                        // 调亮度前先唤醒：休眠屏是 30% 背光，
-                        // 在这个状态下按"调亮"却看不到屏幕变亮，
-                        // 用户只会以为按键没反应。唤醒后亮度回到用户档位，
-                        // 后续的 ☀ 提示也才有意义。
-                        s_wake_req = true;
-                        int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
-                                 : (k_btns[i].pin == BOARD_BTN_VOL_DOWN) ? -1
-                                 : 0;
-                        button_action(k_btns[i].name, step);
+                        // 省电模式下长按 BOOT 只当"退出省电"，不调亮度。
+                        //
+                        // 理由：屏幕上只有一个时钟，此时按住不放的用户
+                        // 十有八九是想把屏幕点回来（"按一下退出"），
+                        // 手指比 700ms 慢一点很正常。如果这时顺带把亮度
+                        // 从 100% 循环掉到 40%，用户会莫名其妙发现屏幕变暗，
+                        // 而且因为 fired 已经被置位，他松手时也不会再翻屏。
+                        // VOLUP/VOLDN 在省电下仍然调亮度 —— 那两键唯一语义
+                        // 就是调亮度，不存在歧义。
+                        bool vol_key = (k_btns[i].pin == BOARD_BTN_VOL_UP) ||
+                                       (k_btns[i].pin == BOARD_BTN_VOL_DOWN);
+                        if (s_asleep && !vol_key) {
+                            s_wake_req = true;      // 只唤醒，不改亮度
+                        } else {
+                            // 调亮度前先唤醒：省电模式是 30% 背光，
+                            // 在这个状态下按"调亮"却看不到屏幕变亮，
+                            // 用户只会以为按键没反应。
+                            // VOL 键也退出省电（用户明确要求）：按 VOL
+                            // 这个动作本身就说明"我想看清屏幕"。
+                            s_wake_req = true;
+                            int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
+                                     : (k_btns[i].pin == BOARD_BTN_VOL_DOWN) ? -1
+                                     : 0;
+                            button_action(k_btns[i].name, step);
+                        }
                     }
                 }
                 continue;
@@ -2789,13 +2831,22 @@ static void button_task(void *arg)
                 // 短按（没走长按分支）→ 下一屏。
                 // **不能直接调 page_apply**：它要动控件，而 LVGL 不是线程安全的，
                 // 这里只投递请求，由 lvgl_task 在持有 LVGL 上下文时执行。
+                //
+                // 省电模式下短按只负责"点亮屏幕"，**不顺带切屏**：
+                // 屏幕全黑时按键，用户唯一意图是"我想看时间"。
+                // 如果这时还切到下一屏，醒来第一眼看到的是详情页而不是
+                // 概览页，反而找不到时间 —— 所以他得按第二下才能回去。
+                // 醒来后再按，才按正常语义翻屏。
                 if (down_at[i] && !fired[i]) {
-                    s_page_req = s_page + 1;
-                    // 不管是不是在休眠，都投一个唤醒请求：
-                    // 睡着时按键 → 亮屏；醒着时 → sleep_apply(false) 是空操作
-                    // （内部有 on == s_asleep 的判等），但保活时间会被续上，
-                    // 这样用户连按几下翻屏的期间不会中途黑掉。
-                    s_wake_req = true;
+                    if (s_asleep) {
+                        s_wake_req = true;
+                    } else {
+                        s_page_req = s_page + 1;
+                        // 醒着时也投一个唤醒请求：sleep_apply(false) 是空操作
+                        // （内部有 on == s_asleep 的判等），但会把空闲计时清零，
+                        // 这样连按几下翻屏的期间不会中途黑掉。
+                        s_wake_req = true;
+                    }
                 }
                 down_at[i] = 0;
                 fired[i]   = false;
@@ -2957,16 +3008,18 @@ static void lvgl_task(void *arg)
             }
         }
 
-        // 按键唤醒：休眠中按任意键，先把人叫起来再干活。
+        // 按键唤醒：省电模式中按键，先把人叫起来。
         //
         // 顺序有讲究 —— 必须在 page_apply 之后执行：
         // 用户可能是"想看下一屏"而按的键，page_apply 已经把人送到新屏了，
         // 这里只需要把屏幕点亮。反过来先唤醒再切屏会出现一帧的跳动。
         //
-        // 保活 60 秒：这段时间里即使仍然空闲也不睡回去（理由见 s_awake_until_ms）。
+        // 清掉空闲计时：退出后要重新数满一分钟才睡回去。
+        // 不清的话 s_idle_since_ms 还停在睡着之前的时刻，
+        // 下一轮 sleep_update 一算差值早就超过 60 秒，立刻又睡 —— 按键等于白按。
         if (s_wake_req) {
-            s_wake_req       = false;
-            s_awake_until_ms = (uint32_t)(esp_timer_get_time() / 1000) + SLEEP_GRACE_MS;
+            s_wake_req      = false;
+            s_idle_tracking = false;
             sleep_apply(false);
         }
 
