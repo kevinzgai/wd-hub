@@ -59,6 +59,57 @@ else:
 VERSION = "1.0.0"
 log = logging.getLogger("board.api")
 
+# ---------------------------------------------------------------- 访问令牌
+#
+# ⚠ 为什么需要：服务默认监听 0.0.0.0，也就是**整个局域网**都能访问。
+# 而返回的内容包含会话标题、项目名、任务标题、改动的文件路径 ——
+# 足以还原你一整天在干什么。
+#
+# 默认不加 token 是为了不破坏现有用法（固件不会带 token）。
+# 但只要加了 --token，除了固件专用的几个路径，其余接口都要带
+# `?t=<token>` 或 `X-Board-Token` 头。
+#
+# 固件路径豁免的原因：固件的 URL 是写死在 BRIDGE_BASE 里的，
+# 加 query 会让它每 5 秒拉一个带 token 的长 URL；而且固件本来就跑在
+# 局域网内、屏幕上的数据也是给人看的。
+#
+# ⚠ 固件路径仍然会暴露会话标题 —— 真正的防护应该是"别在公共网络上跑"。
+# 见 README 的"已知限制"。 */
+API_TOKEN: Optional[str] = None
+
+# 豁免鉴权的路径。
+#
+# ⚠ 这里不能用 startswith 前缀匹配整个列表 —— 列表里有 "/"，
+# 而 startswith("/") 对**任何**路径都为真，等于全部豁免。
+# 所以分成两类：精确匹配的路径，和前缀匹配的路径。
+TOKEN_EXEMPT_EXACT = ("/", "/docs", "/redoc", "/openapi.json",
+                       "/ticker", "/api/ticker")
+TOKEN_EXEMPT_PREFIX = ("/status", "/screen/")
+
+
+def _token_ok(request) -> bool:
+    """校验请求带的令牌。没配 token 就一律放行。"""
+    if not API_TOKEN:
+        return True
+    path = request.url.path
+    if path in TOKEN_EXEMPT_EXACT:
+        return True
+    if any(path.startswith(p) for p in TOKEN_EXEMPT_PREFIX):
+        return True
+
+    # 两种带法：query（?t=xxx，方便浏览器调试）和请求头（干净一点）
+    supplied = request.query_params.get("t") or request.headers.get("X-Board-Token")
+    if not supplied:
+        return False
+    # 常量时间比较，避免时序侧信道
+    if len(supplied) != len(API_TOKEN):
+        return False
+    diff = 0
+    for a, b in zip(supplied, API_TOKEN):
+        diff |= ord(a) ^ ord(b)
+    return diff == 0
+
+
 # 默认端口。刻意不用 8080（开发机上太容易撞车）。
 # 改这个值必须同步改三处：
 #   firmware/main/main.cpp 的 BRIDGE_BASE
@@ -101,6 +152,24 @@ app = FastAPI(
                 "`/api/v1/*` 为通用接口。全部端点均为 GET，无写操作。",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def _auth_middleware(request, call_next):
+    """令牌校验中间件。
+
+    只在 --token 指定了令牌时才生效（API_TOKEN 为 None 时一律放行）。
+    固件契约路径（/status、/screen/*）豁免 —— 固件 URL 是写死的，
+    加 query 会变成每 5 秒拉一个长 URL。"""
+    if not _token_ok(request):
+        log.warning("未授权访问: %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=401,
+            content={"ok": False, "error": "unauthorized",
+                     "detail": "缺少或错误的访问令牌（?t=xxx 或 X-Board-Token 头）",
+                     "source": None},
+        )
+    return await call_next(request)
 
 
 @app.exception_handler(Exception)
@@ -291,8 +360,9 @@ def _screen_rows(snap, idx: int) -> tuple[str, list[dict]]:
         return "任务", [
             _row("总计",     t.get("total")),
             _row("已完成",   t.get("completed"), 2),
-            # 用 snap.today_done 而不是 tasks.today_completed：
-            # 后者口径不同（实测恒 0），会和概览屏的"完成"数字打架
+            # snap.today_done 与 tasks["today_completed"] 现在同源（collector 直接
+            # 转发），保留 today_done 这个入口是因为概览屏用的也是它 —— 两处取
+            # 同一个来源，将来口径再调不会出现"一屏新一屏旧"。
             _row("今日完成", snap.today_done, 2),
             _row("进行中",   ip, 1 if ip else 4),
         ]
@@ -453,7 +523,10 @@ async def v1_sessions(
             db_src.sessions_recent, limit, state, project)
     else:
         rows = await asyncio.to_thread(db_src.sessions_active, limit, include_background)
-        total = len(rows)
+        # ⚠ total 必须是**过滤后的总条数**，不是当前返回的条数。
+        # sessions_active() 带 LIMIT，len(rows) 最多等于 limit ——
+        # 前端拿它算分页会永远只看到一页。
+        total = await asyncio.to_thread(db_src.sessions_active_total, include_background)
     return SessionListResponse(total=total, items=[_session_item(r) for r in rows[:limit]])
 
 
@@ -553,7 +626,38 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 async def index() -> HTMLResponse:
     page = STATIC_DIR / "index.html"
     if page.is_file():
-        return HTMLResponse(page.read_text(encoding="utf-8"))
+        html = page.read_text(encoding="utf-8")
+        # ⚠ 把 token 注入页面。
+        # 页面自己会去 fetch /api/v1/board 和 /api/v1/health，这两个路径
+        # 在设了 --token 时是受保护的。没有注入的话，页面打开就是一片
+        # "连接失败"，而服务端日志里 401 一片 —— 看起来像 bug，其实是
+        # 鉴权生效了但页面没带上凭据。
+        #
+        # 注入方式是把 token 写进一段 JS 全局变量，页面读取后
+        # 拼到 fetch 的 query 上。
+        #
+        # ⚠ 安全性说明：token 会被送到浏览器，任何能打开这个页面的人
+        # 都能从开发者工具里看到它。所以这是"防误用/防同网段乱扫"级别的
+        # 防护，不是"防定向攻击"。真要更严，得改成登录态 + 服务端 session，
+        # 而不是把 token 明文塞进 HTML。
+        token_js = json.dumps(API_TOKEN or "")
+        inject = "<script>window.__WB_TOKEN__ = %s;</script>" % token_js
+        # ⚠ 注入时**不能**吃掉原来那个 <script> 的开标签。
+        # 之前写成 html[:idx] + inject + html[idx+len("<script>"):]，
+        # 结果 inject 自带一个 </script>，原开标签又被删掉 ——
+        # 于是原来 <script> 里的 JS 变成了普通文本，直接显示在页面上。
+        # 正确做法：在原 <script> **之前**插入一段完整闭合的 script，
+        # 原标签原样保留。
+        head_end = html.lower().find("</head>")
+        if head_end >= 0:
+            html = html[:head_end] + inject + "\n" + html[head_end:]
+        else:
+            idx = html.find("<script>")
+            if idx >= 0:
+                html = html[:idx] + inject + "\n" + html[idx:]
+            else:
+                html = inject + "\n" + html
+        return HTMLResponse(html)
     return HTMLResponse(
         "<h1>WorkBuddy 看板 API</h1>"
         "<p>调试页未找到。可访问 <a href='/docs'>/docs</a> 查看接口。</p>"
@@ -585,15 +689,22 @@ def lan_ips() -> list[str]:
 
 
 def main() -> None:
+    global API_TOKEN
+
     ap = argparse.ArgumentParser(description="WorkBuddy 看板数据服务")
     # 27777 是刻意挑的：8080 太常见，容易和别的开发服务撞车。
     # 改这里必须同步改固件 BRIDGE_BASE、start-board.bat、configure.py。
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--refresh", type=float, default=2.0, help="采集周期（秒）")
+    ap.add_argument("--token", default="",
+                    help="访问令牌。指定后 /api/v1/* 需要带 ?t=<token>；"
+                         "固件契约路径（/status、/screen/*）豁免。"
+                         "默认不加 —— 服务监听 0.0.0.0，局域网内都能访问。")
     args = ap.parse_args()
 
     collector.refresh_sec = args.refresh
+    API_TOKEN = args.token.strip() or None
 
     print("=" * 64)
     print("  WorkBuddy 看板数据服务  v" + VERSION)
@@ -605,6 +716,10 @@ def main() -> None:
         print(f"  固件地址   : http://{ip}:{args.port}/status")
     print(f"  采集周期   : {args.refresh}s")
     print(f"  数据源     : {db_src.DB_PATH}")
+    if API_TOKEN:
+        print(f"  访问令牌   : 已启用（/api/v1/* 需带 ?t=...）")
+    else:
+        print("  访问令牌   : 未启用（局域网内任何人可读全部数据）")
     print("=" * 64)
     print("  Ctrl+C 停止\n")
 

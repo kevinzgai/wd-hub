@@ -181,11 +181,36 @@
     <a href="/docs" target="_blank">/docs</a>
     <span id="foot" style="float:right"></span>
   </footer>
+  <!-- token 由服务端注入；没开鉴权时这些链接就是普通链接。
+       用 JS 补 ?t=，避免在 HTML 里硬编码 token。
+       ⚠ 这里必须读 window.__WB_TOKEN__ 而不是后面那个 script 里的 const TOKEN：
+       本段 script 排在主 script **之前**，那时 TOKEN 还没初始化（TDZ），
+       直接引用会抛 ReferenceError，整段逻辑不执行。 -->
+  <script>
+    (function () {
+      var tok = window.__WB_TOKEN__ || '';
+      if (!tok) return;
+      document.querySelectorAll('footer a').forEach(function (a) {
+        if (a.pathname.startsWith('/status')) return;   // /status 本来就豁免
+        a.href = a.pathname + '?t=' + encodeURIComponent(tok);
+      });
+    })();
+  </script>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
 let timer = null;
+
+/* 服务端注入的访问令牌（服务端配了 --token 时才有值）。
+ * 空串 = 服务端没开鉴权，请求照常不带 t 参数。 */
+const TOKEN = (typeof window !== 'undefined' && window.__WB_TOKEN__) || '';
+
+/* 拼上 token 的查询串。服务端认 ?t=xxx 和 X-Board-Token 头，
+ * 这里用 query —— fetch 里加 header 更啰嗦，而且 <a> 链接没法带 header。 */
+function apiUrl(path) {
+  return TOKEN ? path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN) : path;
+}
 
 function setBars(sys) {
   const set = (bar, num, val) => {
@@ -280,11 +305,20 @@ function showErr(msg) {
   b.classList.add('show');
 }
 
+let inFlight = false;
+
 async function tick() {
+  /* ⚠ 重入保护：上一轮还没回来就不再发一轮。
+   * setInterval 是固定节奏，不管上一轮耗时多久。后端慢一点（比如 SQLite
+   * 被占用、采集降级），请求就会越堆越多，浏览器把连接全占满，
+   * 页面反而越来越卡，最后连"连接失败"都显示不出来。
+   * 上一轮的响应回来后自然会再触发下一轮，节奏自动降级而不是堆积。 */
+  if (inFlight) return;
+  inFlight = true;
   try {
     const [b, h] = await Promise.all([
-      fetch('/api/v1/board', { cache: 'no-store' }).then(r => r.json()),
-      fetch('/api/v1/health', { cache: 'no-store' }).then(r => r.json()),
+      fetch(apiUrl('/api/v1/board'), { cache: 'no-store' }).then(r => r.json()),
+      fetch(apiUrl('/api/v1/health'), { cache: 'no-store' }).then(r => r.json()),
     ]);
     render(b);
     renderHealth(h);
@@ -293,11 +327,28 @@ async function tick() {
     $('dot').className = 'dot bad';
     $('pulseTxt').textContent = '连接失败';
     showErr('无法连接后端：' + e.message);
+  } finally {
+    inFlight = false;
   }
 }
 
 tick();
 timer = setInterval(tick, 2000);
+
+/* ⚠ 页面隐藏时停掉轮询：后台标签页的定时器会被浏览器限流到
+ * 最低 1 次/分钟，但请求已经发出去了，白占后端。切回来再重新起。
+ * beforeunload 里清 timer，避免离开页面后还挂着句柄。 */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (timer !== null) { clearInterval(timer); timer = null; }
+  } else if (timer === null) {
+    tick();
+    timer = setInterval(tick, 2000);
+  }
+});
+window.addEventListener('beforeunload', () => {
+  if (timer !== null) { clearInterval(timer); timer = null; }
+});
 </script>
 </body>
 </html>
