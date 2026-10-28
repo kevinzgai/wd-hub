@@ -222,8 +222,8 @@ static void lvgl_task(void *arg)
          * 降到 2fps 后吞吐掉到 1/10，其余时间 CPU 在阻塞态，
          * IDF 会自动进 light sleep（不需要 CONFIG_PM_ENABLE）。
          *
-         * 深睡屏只有一个大时钟，秒针本来就是一秒跳一次，
-         * 2fps 完全够用 —— 再高纯属白烧。 */
+         * 深睡屏是待机屏（像素眼睛 + 28px 时钟），眼睛本来就只有 20fps
+         * 的眨眼动作、时钟一分钟才跳一次，2fps 完全够用 —— 再高纯属白烧。 */
         uint32_t max_wait = power_save_lvgl_max_wait_ms();
         if (wait > max_wait) wait = max_wait;
         vTaskDelay(pdMS_TO_TICKS(wait));

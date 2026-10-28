@@ -415,7 +415,7 @@ python scripts/serial_read.py <串口> 30         # 需 pyserial
 | 目录 | 内容 |
 |---|---|
 | `server/` | 数据服务（FastAPI，只读 WorkBuddy 数据库），`sources/` 下分 db / files / ledger / system / tokens 五个数据源 |
-| `firmware/` | 看板固件（ESP-IDF + LVGL）。`main/` 按职责分文件：`main.cpp`（入口 + LVGL 任务编排 + 按键回调适配，288 行）、`ui_board.cpp`（建屏 / 渲染 / 切屏 / 休眠 / 浮层）、`board_display.cpp`（SPI / ST7789 / LVGL display / 背光）、`data_fetch.cpp`（取数）、`board_json.cpp` + `board_data.cpp`（解析 / 数据结构与共享快照）、`buttons.cpp`（按键）、`pet_view.cpp`（像素宠物）、`device_report.cpp`（温度上报）、`text_util.cpp`（字体工具）、`wifi_mgr.cpp`（联网与配网页） |
+| `firmware/` | 看板固件（ESP-IDF + LVGL）。`main/` 按职责分文件：`main.cpp`（入口 + LVGL 任务编排 + 按键回调适配，310 行）、`ui_board.cpp`（建屏 / 渲染 / 切屏 / 待机屏像素眼睛 / 浮层）、`power_save.cpp`（三级省电：背光 / WiFi PS / 轮询间隔 / 帧率统一状态机）、`board_display.cpp`（SPI / ST7789 / LVGL display / 背光）、`data_fetch.cpp`（取数）、`board_json.cpp` + `board_data.cpp`（解析 / 数据结构与共享快照）、`buttons.cpp`（按键）、`pet_view.cpp`（像素宠物）、`device_report.cpp`（温度上报）、`text_util.cpp`（字体工具）、`wifi_mgr.cpp`（联网与配网页） |
 | `docs/` | 需求文档与图片资源 |
 | `tools/` | 字库 / Logo / 宠物帧 / 音色生成脚本 |
 | `scripts/` | 自检、截图、串口读取 |

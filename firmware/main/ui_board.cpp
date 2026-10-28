@@ -282,7 +282,7 @@ static volatile const char *s_last_btn  = "none";  // 最后按下的键，随�
 //
 // 第 3 条不是可选的：/screen/<i> 只下发 rows，working/done/sessions 在
 // parse_into 里 fallback 成 0。不加这个守卫，用户按键切到任何详情屏
-// 都会被立刻判成"空闲"，画面直接跳回时钟屏 —— 按键等于失效。
+// 都会被立刻判成"空闲"，画面直接跳回待机眼睛屏 —— 按键等于失效。
 // pet_view_update() 里有一模一样的守卫，原因相同。
 //
 // 退出：下一轮 /status 拿到 working>0 或有会话，自动恢复。
@@ -292,7 +292,7 @@ static volatile const char *s_last_btn  = "none";  // 最后按下的键，随�
 // 永远看到"没睡"（或永远看到"睡着"），按键就时灵时不灵 —— 这种 bug 极难复现。
 static volatile bool s_asleep = false;  // 当前是否处于省电模式
 static lv_obj_t *s_pg_sleep;            // 休眠屏容器（全屏不透明）
-static lv_obj_t *s_lbl_bigclock;        // 休眠屏：72px 大时钟
+static lv_obj_t *s_lbl_bigclock;        // 休眠屏：28px 时钟（原 72px，让位给眼睛）
 static lv_obj_t *s_lbl_sleep_dot;       // 休眠屏：在线状态点
 // 休眠时背光降到这个值。30% 是"看得见但不刺眼"的下限 ——
 // 再低（20%）在白天室内就快读不出时间了。
@@ -303,7 +303,7 @@ static lv_obj_t *s_lbl_sleep_dot;       // 休眠屏：在线状态点
 // 为什么是 30% —— 真正的值在 power_save.cpp 的 LIGHT_BRIGHT_PCT。
 #define SLEEP_BRIGHT_PCT   30
 
-// 空闲多久进**轻度**省电（背光 30% + 大时钟，但仍在 5 秒拉数据）。
+// 空闲多久进**轻度**省电（背光 30% + 切到待机屏，但仍在 5 秒拉数据）。
 //
 // 原来是 60 秒，实测太急：服务端 working 计数带 30 分钟活跃窗口，
 // 两个任务之间正常的思考间隙就会被判成空闲，屏幕反复睡/醒。
@@ -483,6 +483,7 @@ static void svr_ui_build(void)
 #define EYES_BH        82
 
 #define EYES_MS        50      // 20fps 节拍。眼睛不需要 25fps，省一点 SPI
+#define EYE_SLIDE_MAX_MS 250   // 单帧最多推进 250ms（超过就按 50ms 算）
 #define EYE_CLOSE_MS   70
 #define EYE_HOLD_MS    60
 #define EYE_OPEN_MS    70
@@ -492,6 +493,7 @@ static void svr_ui_build(void)
 static lv_obj_t   *s_cv_eyes   = NULL;
 static lv_timer_t *s_eye_timer = NULL;
 static uint16_t   *s_eye_buf   = NULL;
+static uint32_t    s_eye_last_ms = 0;   // 上一帧的时间戳，用来算真实 dt
 
 enum { EYES_IDLE, EYES_CLOSING, EYES_HOLD, EYES_OPENING };
 
@@ -679,6 +681,7 @@ static uint32_t eyes_blink_interval(void)
 
 static void eyes_reset(void)
 {
+    s_eye_last_ms     = (uint32_t)(esp_timer_get_time() / 1000);   // 第一帧 dt 干净
     s_eyes.open_pct   = 0.0f;      // 从合着的状态睁眼，像被叫醒
     s_eyes.base_pct   = 100.0f;
     s_eyes.phase_from = 0.0f;
@@ -703,7 +706,25 @@ static void eyes_reset(void)
 static void eyes_tick_cb(lv_timer_t *t)
 {
     (void)t;
-    const uint32_t dt = EYES_MS;
+
+    /* 用**真实经过的时间**推进状态机，不能用固定的 EYES_MS。
+     *
+     * lv_timer 只是"最早该在什么时候跑"，实际执行时刻取决于
+     * lv_timer_handler 被调用的频率，而那个频率由省电档位决定：
+     *   ACTIVE / LIGHT  主循环最多等 50 / 100ms  → 帧率基本准
+     *   DEEP            最多等 500ms            → 10 倍慢
+     * 写死 EYES_MS 的话，DEEP 档下一次眨眼会拖成 2 秒的慢动作幻灯片。
+     * 按真实间隔推进，动画时长就与档位无关，只是帧数少了（更快、更跳）。
+     *
+     * 上限夹在 EYE_SLIDE_MAX_MS：从被长时间阻塞中恢复时（比如刚
+     * eyes_enter），一帧不该把整段眨眼一次性跳完 —— 那样看起来像是
+     * "眼睛突然闭了一下"，不如老老实实从当前状态继续。
+     * eyes_reset() 会把时间戳归零，所以进入待机屏的第一帧是干净的。 */
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t dt  = now - s_eye_last_ms;
+    s_eye_last_ms = now;
+    if (dt == 0 || dt > EYE_SLIDE_MAX_MS) dt = EYES_MS;
+
     s_eyes.ms += dt;
 
     // ---- 犯困：待机满 3 分钟，睑线降到 44%，偶尔点一下头 ----
@@ -1694,7 +1715,7 @@ static void sleep_apply(bool on)
         // 这里写死会跟 power_save_set(POWER_DEEP) 打架 —— 谁后调谁生效，
         // 而调用顺序取决于 idle_ms 落在哪个区间，行为会飘。
         // 由 sleep_update 在调完本函数后立刻 power_save_set() 决定。
-        ESP_LOGI(TAG, ">>> 进入省电模式（界面已切到时钟屏）");
+        ESP_LOGI(TAG, ">>> 进入省电模式（界面已切到待机眼睛屏）");
     } else {
         // ---- 唤醒：把可见性还给"正常界面" ----
         // 眼睛先停：它每 50ms 会 invalidate 一次画布，
@@ -1737,7 +1758,7 @@ static void sleep_apply(bool on)
          *
          * 顺序要紧：必须先 sleep_apply 把界面还原（上面那些可见性），
          * 再放功耗。反过来的话，power_save_set(ACTIVE) 出去的那一瞬间
-         * 屏还是时钟屏 + 5% 背光，会闪一下黑的。
+         * 屏还是待机眼睛屏 + 5% 背光，会闪一下黑的。
          *
          * 为什么放在这里而不是 ui_board_wake：唤醒有三个入口
          * （按键、来了任务、数据恢复在线），三个都得恢复功耗，
@@ -1795,7 +1816,7 @@ static void sleep_update(const board_data_t *d)
     // ⚠ 这里**不能**因为 s_asleep 就提前 return。原来写的是
     // `if (s_asleep) return;` —— 那样睡着之后就不再往下走了，
     // 永远进不了 DEEP 级（LIGHT → DEEP 的升级路径被这个 return 掐死）。
-    // 睡着只是"界面已切到时钟屏"，空闲计时还得继续跑。
+    // 睡着只是"界面已切到待机眼睛屏"，空闲计时还得继续跑。
 
     if (!s_idle_tracking) {
         s_idle_tracking = true;
@@ -1975,7 +1996,7 @@ void ui_board_render(const board_data_t *d)
     sleep_update(d);
 
     if (s_asleep) {
-        // 大时钟：只在文字变化时才 set_text。
+        // 待机屏时钟：只在文字变化时才 set_text。
         // 不加这个判等的话，5 秒一轮的渲染会每分钟白白重绘 12 次，
         // 休眠本来就是为了省电，结果醒着刷屏就说不过去了。
         static char clock_cache[8] = "";
