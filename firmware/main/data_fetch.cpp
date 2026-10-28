@@ -163,12 +163,30 @@ static void fetch_task(void *arg)
             // 只在变化时打，否则 5 秒一条把日志刷满。
             if (req_page == 0) {
                 static char last_row0[48] = "\x01";   // 不可能等于真实标题，保证首轮必打
+                static uint8_t s_last_st0 = 0xFF;     // 同样不可能等于真实值
+                static char     s_last_act0[16] = "\x01";
                 const char *r0 = (parsed.session_count > 0)
                                  ? parsed.sessions[0].title : "（空闲中）";
                 if (strcmp(r0, last_row0) != 0) {
                     strncpy(last_row0, r0, sizeof(last_row0) - 1);
                     last_row0[sizeof(last_row0) - 1] = '\0';
                     ESP_LOGI(TAG, "   行0 -> %s", r0);
+                }
+
+                // 实时状态（st/act）也要打出来。
+                // 标题对了不代表状态对了 —— 这两个键是**可选的**，
+                // 服务端不发时固件会退化成 st=0，光看标题发现不了
+                // "服务端已经在报运行中但固件没解析出来"这种问题。
+                if (parsed.session_count > 0) {
+                    uint8_t st0 = parsed.sessions[0].state;
+                    const char *act0 = parsed.sessions[0].action;
+                    if (st0 != s_last_st0 || strcmp(act0, s_last_act0) != 0) {
+                        s_last_st0 = st0;
+                        strncpy(s_last_act0, act0, sizeof(s_last_act0) - 1);
+                        s_last_act0[sizeof(s_last_act0) - 1] = '\0';
+                        ESP_LOGI(TAG, "   实时 -> st=%u act=%s", st0,
+                                 act0[0] ? act0 : "(空)");
+                    }
                 }
             }
         } else {
