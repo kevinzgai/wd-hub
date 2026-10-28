@@ -113,9 +113,12 @@ void device_report_send(void)
     esp_http_client_cleanup(cli);
 
     if (err != ESP_OK || code / 100 != 2) {
-        // 用 DEBUG 级别：这个失败不影响看板，刷 WARN 只会淹没真正的问题
-        ESP_LOGD(TAG, "上报失败 err=%s code=%d", esp_err_to_name(err), code);
+        // 用 WARN 级别：这条链路上行静默失败了很久没人发现，
+        // 而它一轮只打一次，不会淹没日志。DEBUG 级别的代价是
+        // 「服务端 chip_temp 一直 -1」时串口上一点线索都没有。
+        ESP_LOGW(TAG, "上报失败 err=%s code=%d body=%s",
+                 esp_err_to_name(err), code, body);
     } else {
-        ESP_LOGD(TAG, "上报 chip_temp=%d bat=%d%%", t, b.percent);
+        ESP_LOGI(TAG, "上报 chip_temp=%d bat=%d%% code=%d", t, b.percent, code);
     }
 }
