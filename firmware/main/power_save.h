@@ -67,6 +67,21 @@ void power_save_set(power_level_t lv);
  * 所以让 UI 主循环每帧问一次：连上了吗？连上了且还没设过就补一次。 */
 void power_save_tick(void);
 
+/* ---- HTTP 请求前后的钩子 ----
+ *
+ * 目前是空实现，保留是为了以后换 WiFi PS 策略时有个统一插入点。
+ *
+ * 历史教训：DEEP 档原用 WIFI_PS_MAX_MODEM，60 秒轮询下第一轮拉取就
+ * `ESP_ERR_HTTP_FETCH_HEADER`（连响应头都收不到）。在请求前
+ * esp_wifi_set_ps(NONE)、请求后切回去 —— **无效**，照样失败。
+ * 说明不是"发请求时射频没醒"，而是长时间 MAX_MODEM 下 DTIM 缓存
+ * 把会话状态搞坏了，切 PS 模式不足以立刻恢复。
+ *
+ * 最终改成 MIN_MODEM 解决。代价是多耗几 mW，换来 100% 拉取成功率。
+ * 省电的大头在轮询 60 秒 + 2fps，不受影响。 */
+void power_save_http_begin(void);
+void power_save_http_end(void);
+
 /* 当前级别 */
 power_level_t power_save_level(void);
 

@@ -37,3 +37,12 @@ idf_component_register(
         esp_lcd
         nvs_flash
 )
+
+# 测试钩子：cmake 传 -DWB_TEST_IGNORE_BUSY=1 会定义这个宏，
+# 让 sleep_update 忽略 working/session，以便在有人干活时也能实测
+# 省电三档（否则设备永远不空闲，档位切换没法验证）。
+# 正式固件不带这个参数，行为不变。
+if(DEFINED WB_TEST_IGNORE_BUSY)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE WB_TEST_IGNORE_BUSY)
+    message(STATUS "WB_TEST: 忽略 busy 判定（仅用于验证省电档位）")
+endif()

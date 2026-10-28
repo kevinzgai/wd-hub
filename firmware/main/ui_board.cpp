@@ -1765,7 +1765,14 @@ static void sleep_update(const board_data_t *d)
     //   离线/降级  —— 这是需要被看到的异常。如果停在"● 在线"上而实际
     //                 早就断了，是最糟的误导
     bool ok     = d->ok;
+#ifdef WB_TEST_IGNORE_BUSY
+    /* 测试开关：忽略 working/session，用来实测省电三档。
+     * 正常干活时设备永远不空闲（working 一直 >0），否则没法验证档位切换。
+     * 正式固件不定义这个宏，行为完全不变。 */
+    bool busy   = false;
+#else
     bool busy   = ok && ((d->working > 0) || (d->session_count > 0));
+#endif
     bool here   = ok && (d->page == 0) && (s_page == 0);
 
     if (!ok || busy) {

@@ -75,7 +75,11 @@ static void fetch_task(void *arg)
     cfg.method     = HTTP_METHOD_GET;
     cfg.event_handler = http_event_cb;
     cfg.user_data  = &acc;
-    cfg.timeout_ms = 5000;
+    /* 5 秒 -> 8 秒。省电模式下 WiFi 是 MIN_MODEM，下行包要等 beacon
+     * 间隔才收（约 100ms 量级），加上服务端偶尔聚合慢一点，
+     * 5 秒在 DEEP 档会踩线。放宽到 8 秒，失败率明显下降。
+     * 代价：真断网时每轮多等 3 秒 —— 但那种情况本来就在退避（15 秒）。 */
+    cfg.timeout_ms = 8000;
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
@@ -104,7 +108,12 @@ static void fetch_task(void *arg)
             static int64_t last_report_ms = 0;
             if (now_ms - last_report_ms >= DEVICE_REPORT_INTERVAL_MS) {
                 last_report_ms = now_ms;
+                /* 上报也是个 HTTP POST，DEEP 档下一样会被 MAX_MODEM 卡住。
+                 * 好消息是上报失败无所谓（见 device_report.cpp 的注释），
+                 * 但白白唤醒一次射频更亏 —— 干脆同样处理。 */
+                power_save_http_begin();
                 device_report_send();
+                power_save_http_end();
             }
         }
 
@@ -123,7 +132,34 @@ static void fetch_task(void *arg)
         acc.len = 0;
         s_http_buf[0] = '\0';
 
+        /* 深度省电时把射频叫醒，拉完再放回去。
+         *
+         * 不叫的话 DEEP 档（WIFI_PS_MAX_MODEM + 60 秒轮询）第一轮就
+         * ESP_ERR_HTTP_FETCH_HEADER —— 发完请求射频继续睡，响应头
+         * 回来时还没醒，5 秒超时先到了。实测必现。
+         *
+         * 唤醒窗口只覆盖这一次 perform（几十~几百 ms），不影响省电。 */
+        power_save_http_begin();
+
+        /* ⚠ DEEP 档必须断开 keep-alive 连接。
+         *
+         * 服务端 uvicorn 的 timeout_keep_alive=30 秒（见 api_server.py 里
+         * 那段注释，当初是给"5 秒轮询"配的 6 倍余量）。DEEP 档 60 秒才
+         * 请求一次，**远超 30 秒**，连接早被服务端关掉了，但
+         * esp_http_client 的 handle 还攥着那条死连接继续复用 ——
+         * 结果就是 ESP_ERR_HTTP_FETCH_HEADER（响应头收不到）。
+         *
+         * 实测：5 秒轮询时 100% 成功；切到 60 秒后第一轮就失败，
+         * 失败点精确落在"距上次成功 60 秒"。
+         *
+         * 修法：非 ACTIVE 档每次请求前清掉连接。60 秒一次的频率下
+         * 复用连接本来也没价值，重建 TCP 的代价（几十 ms）完全可接受。 */
+        if (power_save_poll_ms() > 10000) {
+            esp_http_client_close(client);
+        }
+
         esp_err_t err = esp_http_client_perform(client);
+        power_save_http_end();
         // perform 失败时 handle 里的 status_code 是**上一轮的残留值**，
         // 直接打印会看到 "err=ESP_ERR_HTTP_CONNECT status=200" 这种自相矛盾的日志，
         // 排查时极易误判成"服务端返回 200 但解析失败"。连接没通就没有 HTTP 状态码。

@@ -77,10 +77,28 @@ static void apply_wifi_ps(power_level_t lv)
     wifi_ps_type_t ps;
     switch (lv) {
         case POWER_DEEP:
-            /* 最大省电：射频在 beacon 间隔（默认 100ms）才醒一次听 AP 的
-             * 缓存指示。下行延迟涨到 100~300ms，但深睡时没人在等。
-             * 上行不受影响，所以按键唤醒后的"立刻重拉"照样快。 */
-            ps = WIFI_PS_MAX_MODEM;
+            /* ⚠ 必须是 MIN_MODEM，MAX_MODEM 实测不可用。
+             *
+             * 实测记录（60 秒轮询 + esp_http_client_close 双保险下）：
+             *   MAX_MODEM → 每轮必定失败，ESP_ERR_HTTP_FETCH_HEADER
+             *               与 ESP_ERR_HTTP_CONNECTION_CLOSED 交替出现，
+             *               设备随即被判离线、退出省电，60 秒轮询从没成功过一次
+             *   MIN_MODEM → 一次成功（实测间隔 60.5s，数据正常）
+             *
+             * 为什么 MAX_MODEM 不行：它让射频只在 DTIM 周期醒来听 AP 的
+             * 缓存指示，休眠窗口比 beacon 间隔（100ms）长得多。停 60 秒
+             * 再发请求时，链路层状态已经和 AP 不同步了 —— 试过请求前后
+             * 临时 esp_wifi_set_ps(NONE) 唤醒，**照样失败**。
+             * 这不是"短暂没醒"，而是长期深度休眠后重同步要几百 ms 到几秒，
+             * 远超 8 秒的 HTTP 超时预算里的合理余量。
+             *
+             * 代价：MIN_MODEM 空闲时每 100ms 醒一次听 beacon，比 MAX_MODEM
+             * 多耗几 mW。但省电的大头是**轮询 60 秒 + 2fps**（这两项才是
+             * 数倍的差距），拿几 mW 换 100% 拉取成功率，值。
+             *
+             * 另一条路是 deep sleep（~20µA），但唤醒要重启重连 3~5 秒，
+             * 人还在时体验太差，已经否掉了。 */
+            ps = WIFI_PS_MIN_MODEM;
             break;
         case POWER_LIGHT:
             /* 轻度：还是 MIN_MODEM。用户可能随时回来，别让切屏变卡。 */
@@ -152,6 +170,23 @@ void power_save_tick(void)
     if (!s_ps_ready && wifi_mgr_state() == WIFI_ST_CONNECTED) {
         apply_wifi_ps(s_level);
     }
+}
+
+void power_save_http_begin(void)
+{
+    /* 目前**什么都不做**，保留这对外壳是为了以后换 PS 策略时有个
+     * 统一的插入点。
+     *
+     * 历史：DEEP 档原用 MAX_MODEM，60 秒轮询下请求必失败
+     * （ESP_ERR_HTTP_FETCH_HEADER）。试过在这里临时切 WIFI_PS_NONE
+     * 唤醒射频 —— 无效。最终改成 MIN_MODEM 解决，就不再需要临时唤醒了。
+     *
+     * 详见 power_save.cpp 里 POWER_DEEP 分支的说明。 */
+}
+
+void power_save_http_end(void)
+{
+    /* 同 power_save_http_begin。 */
 }
 
 power_level_t power_save_level(void)
