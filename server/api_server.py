@@ -133,8 +133,9 @@ MAX_SESSION_ROWS = 3
 # 屏幕页数：0 = 概览（/status），1..N-1 = 详情屏（/screen/<i>）。
 # 改这里就改了设备上能按出几屏，**不用重烧固件** —— 固件从 /status 的 nscr 读。
 #
-# 现有分配：1 任务 / 2 自动化 / 3 今日活动 / 4 系统（图表）/ 5 Token 用量 / 6 实时
-SCREEN_COUNT = 7
+# 现有分配：1 任务 / 2 自动化 / 3 今日活动 / 4 系统（图表）/ 5 Token 用量
+#          6 实时（当前会话在干什么 + 这轮耗时）/ 7 耗时（全局累计）
+SCREEN_COUNT = 8
 
 # 哪一屏用图表渲染（服务端只发数据，具体画法在固件）。
 # 改这个数字 = 换一屏图表化，固件不用动 —— 它按 kind 字段判断，不认屏号。
@@ -604,23 +605,71 @@ def _screen_rows(snap, idx: int) -> tuple[str, list[dict]]:
             _row("请求",  f"{int(t.get('requests') or 0):,}", 4),
         ]
 
-    if idx == 6:                                    # 实时（消耗了多少资源）
+    if idx == 6:                                    # 实时（当前在干什么 + 这轮花了多久）
         lv = getattr(snap, "live", None) or {}
         run  = lv.get("running") or []
         wait = lv.get("waiting") or []
-        totals = lv.get("tool_totals") or {}
-        if not run and not wait and not totals:
+        durs = lv.get("durations") or {}
+        if not run and not wait:
             return "实时", [_row("状态", "无活动", 4)]
+
         rows = [
             _row("运行中", len(run), 2 if run else 4),
             _row("等你",   len(wait), 3 if wait else 4),
         ]
-        # 资源消耗：按累计耗时排前 3 的工具。
-        # ⚠ 这些是**墙钟时间**（模型在想、Bash 在跑），不是 CPU 时间 ——
-        # 屏上要说清楚，别让人以为是在烧 CPU。
-        for name, sec in sorted(totals.items(), key=lambda kv: -kv[1])[:3]:
-            rows.append(_row(utf8_trunc(str(name), 10), f"{int(sec)}s", 4))
+        # 每个活跃会话一行：**项目 · 动作** + 时长。
+        #
+        # ⚠ 耗时取 durations[session_id]，只对**活跃**会话可靠 ——
+        # sessions/<pid>.json 只有活着的 worker 才有，历史会话的耗时
+        # 认不出归属。屏上只列活跃会话，正好绕开这个限制。
+        #
+        # ⚠ durations 有个时序坑：trace 文件**回合结束才落盘**，所以刚开始的
+        # 会话拿不到累计耗时（显示 0）。这时退回「已进行/已等待」——
+        # 拿不到精确值就别给 0，"跑了 0 秒"比"跑了 3 分钟"更误导。
+        #
+        # ⚠ 这是**墙钟时间**（模型在想 + 命令在跑），不是 CPU 时间。
+        # 别让人误读成在烧 CPU。
+        seen: set[str] = set()
+        # 等你确认的排前面 —— 那是用户最该先处理的
+        items: list[tuple[int, dict, int]] = []
+        for w in wait:
+            sid = str(w.get("session_id") or "")
+            if sid and sid not in seen:
+                seen.add(sid)
+                items.append((0, w, int(w.get("wait_s") or 0)))
+        for r in run:
+            sid = str(r.get("session_id") or "")
+            if sid and sid not in seen:
+                seen.add(sid)
+                items.append((1, r, int(r.get("elapsed_s") or 0)))
+
+        for kind, item, ongoing in items[:3]:
+            sid = str(item.get("session_id") or "")
+            proj = project_name(item.get("cwd")) or "临时"
+            act  = str(item.get("action") or "")
+            # 标签拼接：项目名 + 动作。40 字节 ≈ 13 个中文，两段别都放太长
+            label = f"{proj}·{act}" if act else proj
+            # 等你确认 → 显示"已等多久"（最该知道的数）；
+            # 运行中 → 优先显示本会话累计耗时，缺失时退回"已进行多久"
+            if kind == 0:
+                val = ongoing
+            else:
+                val = sum(durs.get(sid, {}).values()) or ongoing
+            rows.append(_row(utf8_trunc(label, 36),
+                             _fmt_uptime(val) if val else "-",
+                             3 if kind == 0 else 1))
         return "实时", rows
+
+    if idx == 7:                                    # 累计耗时（全局）
+        lv = getattr(snap, "live", None) or {}
+        totals = lv.get("tool_totals") or {}
+        if not totals:
+            return "耗时", [_row("状态", "暂无数据", 4)]
+        rows = []
+        # 按累计耗时排前 5。全局聚合，跟「实时」屏的活跃会话无关。
+        for name, sec in sorted(totals.items(), key=lambda kv: -kv[1])[:5]:
+            rows.append(_row(utf8_trunc(str(name), 12), f"{int(sec)}s", 4))
+        return "耗时", rows
 
     return "", []
 
