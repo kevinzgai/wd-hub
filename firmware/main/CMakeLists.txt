@@ -46,3 +46,10 @@ if(DEFINED WB_TEST_IGNORE_BUSY)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE WB_TEST_IGNORE_BUSY)
     message(STATUS "WB_TEST: 忽略 busy 判定（仅用于验证省电档位）")
 endif()
+
+# 调试钩子：cmake 传 -DWB_TEST_BAT_TICK=1 会让电池采样每轮打一行 "tick"，
+# 用来核对采样周期（预热 2s → 稳定 30s）。正式固件不带这个参数。
+if(DEFINED WB_TEST_BAT_TICK)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE BAT_DEBUG_TICK)
+    message(STATUS "WB_TEST: 打印电池采样节拍（仅用于核对周期）")
+endif()

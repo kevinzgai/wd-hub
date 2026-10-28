@@ -26,9 +26,19 @@ static const char *TAG = "battery";
 #define BAT_ADC_UNIT   ADC_UNIT_2
 #define BAT_ADC_CH     ADC_CHANNEL_6
 
-// 采样周期。上游是每秒一次；我们只做显示，2 秒足够，
-// 且能避免和 5 秒一次的 HTTP 拉取、刷屏抢 CPU。
-#define BAT_SAMPLE_PERIOD_MS   2000
+// 采样周期。电量是慢变量，30 秒一次足够，也顺手把 DEEP 档的功耗缺口
+// 补上 —— 原来 2 秒一次（每轮还是 16 次 oversample + 5ms 间隔 ≈ 80ms
+// ADC 常开），整机都降到 60 秒轮询了，这里每 2 秒醒一次采 ADC 很讽刺。
+#define BAT_SAMPLE_PERIOD_MS   30000
+
+// 还没拿到过有效读数时的重试周期。
+//
+// ⚠ 这个不能省。充电状态要去抖（连续 CHRG_DEBOUNCE_N 次同向才认），
+// 而 chrg_settled 之前 bat_sample_once 直接 return，不会写 s_state ——
+// 一律 30 秒的话，开机要 3 × 30 = 90 秒才出第一个电量值，屏幕上
+// 电池圈空一分半。用 s_state.valid 当判据快速重试，开机 6 秒内出数。
+#define BAT_WARMUP_PERIOD_MS   2000
+
 #define BAT_OVERSAMPLE         16      // 单次平均的样本数
 #define BAT_OVERSAMPLE_GAP_MS  5
 
@@ -92,6 +102,11 @@ int battery_raw_to_percent(int raw)
 // 采一次平均，写入 s_state（调用方需持锁，或独占期调用）
 static void bat_sample_once(void)
 {
+#ifdef BAT_DEBUG_TICK
+    /* 临时验证用：每次采样打一行，看周期对不对。
+     * 平时不定义，正式固件一行都不打。 */
+    ESP_LOGI(TAG, "tick");
+#endif
     long raw_sum = 0;
     long mv_sum  = 0;
     int  n = 0;
@@ -215,7 +230,7 @@ static void bat_task(void *arg)
         battery_state_t snap = s_state;
         xSemaphoreGive(s_lock);
 
-        // 只在"显示电量变化"或"充放电切换"时打日志，避免每 2 秒刷一行。
+        // 只在"显示电量变化"或"充放电切换"时打日志，避免每轮刷一行。
         // last_pct 初值 -999 保证第一轮必打 —— 否则开机去抖那几轮不打日志，
         // 等数值稳定下来又"没变化"，串口里就一行都看不到，排查时很误导。
         static int  last_pct  = -999;
@@ -230,7 +245,22 @@ static void bat_task(void *arg)
                      snap.charging ? "充电中" : "放电");
         }
 
-        vTaskDelay(pdMS_TO_TICKS(BAT_SAMPLE_PERIOD_MS));
+        /* 周期三选一：
+         *   还没拿到过有效值        -> 2 秒   （攒够充电去抖，开机约 6 秒出数）
+         *   充电口电平与稳定值不一致 -> 2 秒   （正在插拔，加速确认）
+         *   其余                    -> 30 秒  （稳定运行）
+         *
+         * 为什么不能一律 30 秒：去抖要连续 CHRG_DEBOUNCE_N(3) 次同向采样，
+         * 30 秒 × 3 意味着插上充电器后屏幕要 90 秒才变成"充电中"（原来
+         * 2 秒周期时只要 6 秒）。这里每轮顺手读一次 GPIO（纯数字口，
+         * 零成本），只要读到方向和当前稳定值不一致就立刻切回 2 秒，
+         * 3 次采样后确认，再回 30 秒。插拔最坏延迟从 90 秒降到约 36 秒
+         * （30 秒等待 + 6 秒确认）。 */
+        bool chrg_now = (gpio_get_level(BOARD_CHRG_GPIO) == 1);
+        bool switching = (chrg_now != snap.charging);
+        uint32_t period = (!snap.valid || switching) ? BAT_WARMUP_PERIOD_MS
+                                                     : BAT_SAMPLE_PERIOD_MS;
+        vTaskDelay(pdMS_TO_TICKS(period));
     }
 }
 
