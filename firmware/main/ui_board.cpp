@@ -28,6 +28,7 @@
 #include "text_util.h"
 #include "battery.h"
 #include "pet.h"
+#include "power_save.h"
 #include "wifi_mgr.h"
 
 // 中文字体（由 tools/gen_charset.py + lv_font_conv 生成）
@@ -297,16 +298,28 @@ static lv_obj_t *s_lbl_sleep_dot;       // 休眠屏：在线状态点
 // 再低（20%）在白天室内就快读不出时间了。
 // 注意这不进 k_bright_steps：那是用户按键调节的档位，
 // 休眠亮度是系统行为，不该出现在"☀ 40%"的提示里，也不该被按键改掉。
+//
+// ⚠ 2026-10-28 起背光由 power_save_set() 统一设置，这里只留注释说明
+// 为什么是 30% —— 真正的值在 power_save.cpp 的 LIGHT_BRIGHT_PCT。
 #define SLEEP_BRIGHT_PCT   30
 
-// 空闲多久才进省电模式。
+// 空闲多久进**轻度**省电（背光 30% + 大时钟，但仍在 5 秒拉数据）。
 //
-// 60 秒是"确认真的没活干"的最短时间：
-//   - 太短（10~20s）：服务端 working 计数带 30 分钟活跃窗口，
-//     两个任务之间正常的思考间隙就会被判成空闲，屏幕反复闪烁睡/醒
-//   - 太长（5min）：人走了屏幕还亮着，省电意义打折
-// 60 秒能盖住绝大多数"任务之间的空档"，又是人眼能感知到的"等一会儿"。
-#define SLEEP_IDLE_MS      (60 * 1000)
+// 原来是 60 秒，实测太急：服务端 working 计数带 30 分钟活跃窗口，
+// 两个任务之间正常的思考间隙就会被判成空闲，屏幕反复睡/醒。
+// 3 分钟能盖住绝大多数思考间隙，又不会让人走后白亮太久。
+#define SLEEP_IDLE_MS      (3 * 60 * 1000)
+
+// 空闲多久再降到**深度**省电（背光 5% + WiFi 最大省电 + 轮询 60 秒 + 2fps）。
+//
+// 10 分钟的判断依据：一个人离开工位去开会/吃饭，10 分钟是很自然的门槛。
+// 这时候他确实不会回来看屏，深度省电的"响应变慢"代价可以接受；
+// 而 3~10 分钟之间他随时可能回来瞄一眼，那时拉数据还得是 5 秒一轮。
+//
+// ⚠ 深睡**不是** deep sleep。设备一直在跑、WiFi 一直连着，
+// 只是把"醒着的成本"压到最低。所以按 BOOT 1 秒内就能回到正常界面，
+// 不用重连 WiFi、不用重拉数据 —— 这是相比真 deep sleep 的关键优势。
+#define DEEP_IDLE_MS       (10 * 60 * 1000)
 
 // 空闲计时起点。**不是**"醒着要保持到什么时候"，而是"从什么时候开始闲的"。
 //
@@ -1677,9 +1690,11 @@ static void sleep_apply(bool on)
         lv_obj_clear_flag(s_pg_sleep, LV_OBJ_FLAG_HIDDEN);
         // 眼睛定时器这时候才启动：醒着的时候一帧都不算，省的是实打实的 CPU
         eyes_enter();
-        board_display_backlight_set(SLEEP_BRIGHT_PCT);
-        ESP_LOGI(TAG, ">>> 进入省电模式（空闲满 %ds，背光 %d%%）",
-                 SLEEP_IDLE_MS / 1000, SLEEP_BRIGHT_PCT);
+        // ⚠ 背光**不在这里设**。省电分三级，亮度也是三档（30% / 5%），
+        // 这里写死会跟 power_save_set(POWER_DEEP) 打架 —— 谁后调谁生效，
+        // 而调用顺序取决于 idle_ms 落在哪个区间，行为会飘。
+        // 由 sleep_update 在调完本函数后立刻 power_save_set() 决定。
+        ESP_LOGI(TAG, ">>> 进入省电模式（界面已切到时钟屏）");
     } else {
         // ---- 唤醒：把可见性还给"正常界面" ----
         // 眼睛先停：它每 50ms 会 invalidate 一次画布，
@@ -1718,6 +1733,16 @@ static void sleep_apply(bool on)
 
         // 背光恢复成用户调的档位
         board_display_backlight_set(k_bright_steps[s_bright_idx]);
+        /* 电源级别跟着恢复。
+         *
+         * 顺序要紧：必须先 sleep_apply 把界面还原（上面那些可见性），
+         * 再放功耗。反过来的话，power_save_set(ACTIVE) 出去的那一瞬间
+         * 屏还是时钟屏 + 5% 背光，会闪一下黑的。
+         *
+         * 为什么放在这里而不是 ui_board_wake：唤醒有三个入口
+         * （按键、来了任务、数据恢复在线），三个都得恢复功耗，
+         * 放在共用的出口只写一次。 */
+        power_save_set(POWER_ACTIVE);
         // 文案不写"有任务"：唤醒有两个来源（来了任务 / 用户按键），
         // 写死成前者会让人排查时误以为数据在变。
         ESP_LOGI(TAG, ">>> 退出省电模式（背光 %u%%）", k_bright_steps[s_bright_idx]);
@@ -1744,8 +1769,8 @@ static void sleep_update(const board_data_t *d)
     bool here   = ok && (d->page == 0) && (s_page == 0);
 
     if (!ok || busy) {
-        // 清零计时：等活干完了要重新数满一分钟，而不是"上次闲过一会儿、
-        // 一停就睡"。这是"空闲满一分钟"的字面含义。
+        // 清零计时：等活干完了要重新数满 3 分钟/10 分钟，而不是
+        // "上次闲过一会儿、一停就睡"。这是"空闲满 N 分钟"的字面含义。
         s_idle_tracking = false;
         if (s_asleep) sleep_apply(false);
         return;
@@ -1759,20 +1784,50 @@ static void sleep_update(const board_data_t *d)
     }
 
     // ---- 走到这里：在线 + 空闲 + 停在第 0 屏 ----
-    if (s_asleep) return;              // 已经睡着，什么都不用做
+    //
+    // ⚠ 这里**不能**因为 s_asleep 就提前 return。原来写的是
+    // `if (s_asleep) return;` —— 那样睡着之后就不再往下走了，
+    // 永远进不了 DEEP 级（LIGHT → DEEP 的升级路径被这个 return 掐死）。
+    // 睡着只是"界面已切到时钟屏"，空闲计时还得继续跑。
 
     if (!s_idle_tracking) {
         s_idle_tracking = true;
         s_idle_since_ms = now;
-        ESP_LOGI(TAG, ">>> 空闲开始计时，%d 秒后进省电模式", SLEEP_IDLE_MS / 1000);
+        ESP_LOGI(TAG, ">>> 空闲开始计时，%d 分钟后进省电模式",
+                 (int)(SLEEP_IDLE_MS / 60000));
         return;
     }
 
     // 有符号差比较：uint32 毫秒在 49.7 天回绕，无符号相减在回绕点会
     // 变成一个巨大的正数，导致"刚进计时就满一分钟"的诡异行为。
-    if ((int32_t)(now - s_idle_since_ms) < (int32_t)SLEEP_IDLE_MS) return;
+    uint32_t idle_ms = (uint32_t)(int32_t)(now - s_idle_since_ms);
 
-    sleep_apply(true);
+    /* ---- 三级递进 ----
+     *
+     * 从深到浅判断，命中就 return —— 空闲越久级别越深，所以先问最深的。
+     * 用 if/return 而不是 if/else-if，是因为前面那个 `if (!s_asleep)`
+     * 需要在两级分支里各写一份：第一次跨门槛才切界面，之后升级只改功耗。
+     *
+     * 一次跨两个门槛也可能发生（开机就没人动、计时一直没清零），
+     * 那时应该直接进 DEEP，不该先假装进一下 LIGHT 再降级 ——
+     * 两级都会调 sleep_apply(true)，但它是幂等的（s_asleep 已为 true
+     * 就直接 return），所以不会多闪一次。
+     *
+     * sleep_apply() 只管"睡不睡"（界面切换），power_save_set() 管
+     * "省到什么程度"。两者分开是因为界面状态机只认睡着/醒着两态，
+     * 而功耗分三级 —— 硬塞进一个枚举会让 sleep_apply 里到处是 if。
+     */
+    if (idle_ms >= DEEP_IDLE_MS) {
+        if (!s_asleep) sleep_apply(true);
+        power_save_set(POWER_DEEP);
+        return;
+    }
+
+    if (idle_ms >= SLEEP_IDLE_MS) {
+        if (!s_asleep) sleep_apply(true);
+        power_save_set(POWER_LIGHT);
+        return;
+    }
 }
 
 static void page_apply(int page)
@@ -2279,7 +2334,18 @@ void ui_board_poll_input(void)
     // 按键产生的亮度变更，统一在 LVGL 任务里落实
     if (s_bright_apply) {
         s_bright_apply = 0;
-        board_display_backlight_set(k_bright_steps[s_bright_idx]);
+        /* ⚠ 省电模式中**只记档位、不马上应用**。
+         *
+         * 原来这里无条件 set 背光。省电模式下按键调亮度会让屏幕
+         * 突然从 5% 跳到 70%，然后又因为还闲着被 idle 逻辑压回 5%
+         * —— 闪一下很怪，而且用户看不到"我调的档位生效了"。
+         *
+         * 现在：档位照记（s_bright_idx 已由按键任务改好），
+         * 点亮要等唤醒。醒来时 sleep_apply(false) 会用这个新档位。
+         */
+        if (!s_asleep) {
+            board_display_backlight_set(k_bright_steps[s_bright_idx]);
+        }
     }
 
     // 切屏请求也在这里执行：LVGL 的控件操作必须留在本任务，

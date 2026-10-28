@@ -12,6 +12,7 @@ idf_component_register(
         "ui_board.cpp"
         "audio.cpp"
         "battery.cpp"
+        "power_save.cpp"
         "wifi_mgr.cpp"
         "font_cn_12.c"
         "font_cn_16.c"

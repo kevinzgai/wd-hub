@@ -22,6 +22,7 @@
 #include "board_data.h"
 #include "board_json.h"
 #include "device_report.h"
+#include "power_save.h"
 #include "wifi_mgr.h"
 
 /* 沿用拆分前的 TAG：主日志格式不变，拆分前后可以直接对比串口输出。 */
@@ -29,7 +30,7 @@ static const char *TAG = "wb-board";
 
 /* 服务地址只给 base：第 0 屏走 /status，其余屏走 /screen/<i>。 */
 #define BRIDGE_PATH_MAIN  "/status"
-#define POLL_INTERVAL_MS  (5 * 1000)
+/* 轮询周期不写死 —— 深度省电要拉到 60 秒。见 power_save.h。 */
 #define HTTP_BUF_SIZE     4096
 
 static char s_http_buf[HTTP_BUF_SIZE];
@@ -216,7 +217,12 @@ static void fetch_task(void *arg)
         board_data_set(&parsed);
 
         // 用通知代替死等：切屏时 xTaskNotifyGive 会让它立刻醒来换 URL
-        uint32_t wait = (fails > 3) ? 15000 : POLL_INTERVAL_MS;
+        //
+        // 周期跟着电源级别走（power_save_poll_ms）：深度省电 60 秒，
+        // 其余 5 秒。失败多了再退到 15 秒 —— 服务挂了的时候狂刷没意义，
+        // 反而让 WiFi 一直醒着。
+        uint32_t base_wait = power_save_poll_ms();
+        uint32_t wait = (fails > 3 && base_wait < 15000) ? 15000 : base_wait;
         // 服务地址刚被改过：别等这一轮走完，300ms 后立刻按新地址重试，
         // 否则用户改完地址要干等十几秒才看到屏幕提示消失。
         uint32_t ver = wifi_mgr_svr_version();

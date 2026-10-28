@@ -667,9 +667,14 @@ def _screen_rows(snap, idx: int) -> tuple[str, list[dict]]:
             return "耗时", [_row("状态", "暂无数据", 4)]
         rows = []
         # 按累计耗时排前 5。全局聚合，跟「实时」屏的活跃会话无关。
+        #
+        # ⚠ 口径是**近 30 分钟**内 trace 的累计（SCAN_WINDOW_MS），
+        # 不是从开天辟地到现在。服务一重启这个数就会从 0 重新长起来，
+        # 因为聚合状态在内存里。屏上不写窗口会让人以为"耗时怎么缩水了"，
+        # 所以标题里带上"近30分"。
         for name, sec in sorted(totals.items(), key=lambda kv: -kv[1])[:5]:
             rows.append(_row(utf8_trunc(str(name), 12), f"{int(sec)}s", 4))
-        return "耗时", rows
+        return "耗时·近30分", rows
 
     return "", []
 

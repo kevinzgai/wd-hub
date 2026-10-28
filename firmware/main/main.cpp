@@ -69,6 +69,7 @@
 #include "board_config.h"
 #include "battery.h"
 #include "audio.h"
+#include "power_save.h"
 
 static const char *TAG = "wb-board";
 
@@ -201,6 +202,9 @@ static void lvgl_task(void *arg)
         // 浮层同步 + 按键提示（必须在上面的网络动作之后）
         ui_board_poll_status();
 
+        // WiFi 连上后补设省电模式（开机时还连不上，见 power_save_tick 注释）
+        power_save_tick();
+
         // ⚠ board_data_get() 内部只做一次加锁 memcpy，绘制在锁外。
         // 原来这里是"持锁调 ui_render()"，LVGL 绘制全在锁里做完。
         // 绘制要走 SPI、可能几十毫秒，期间 fetch 任务拿不到锁就超时，
@@ -209,8 +213,19 @@ static void lvgl_task(void *arg)
         board_data_t snap;
         if (board_data_get(&snap)) ui_board_render(&snap);
         uint32_t wait = lv_timer_handler();
-        if (wait < 5)  wait = 5;
-        if (wait > 50) wait = 50;
+        if (wait < 5) wait = 5;
+        /* 上限跟着电源级别走：正常 50ms（约 20fps），轻度 100ms，
+         * 深度省电 500ms（2fps）。
+         *
+         * 为什么降帧率真的省电：LVGL 每帧要刷 SPI（240x240x2 = 115KB），
+         * 20fps 就是每秒 2.3MB 的 SPI 吞吐，CPU 一直在搬运字节。
+         * 降到 2fps 后吞吐掉到 1/10，其余时间 CPU 在阻塞态，
+         * IDF 会自动进 light sleep（不需要 CONFIG_PM_ENABLE）。
+         *
+         * 深睡屏只有一个大时钟，秒针本来就是一秒跳一次，
+         * 2fps 完全够用 —— 再高纯属白烧。 */
+        uint32_t max_wait = power_save_lvgl_max_wait_ms();
+        if (wait > max_wait) wait = max_wait;
         vTaskDelay(pdMS_TO_TICKS(wait));
     }
 }
@@ -274,6 +289,13 @@ extern "C" void app_main(void)
     wifi_mgr_set_default_base(BRIDGE_BASE);
 
     wifi_mgr_begin();
+
+    /* 省电策略。必须在 wifi_mgr_begin() 之后 —— 它要下发 WiFi PS 模式，
+     * 驱动还没 start 时设了会被后续 esp_wifi_start() 重置。
+     * 放这里时 wifi 可能还没连上（那是异步的），power_save 内部对此
+     * 有处理：连上之前跳过 PS 设置，第一次切级别时才真正接管。 */
+    power_save_init();
+
 #ifdef CONFIG_WB_LOCAL_TIME
     time_init();
 #endif
