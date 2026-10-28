@@ -75,6 +75,28 @@ static const char *TAG = "wifi";
 #define MAX_RETRY       4
 #define RETRY_DELAY_MS  4000
 
+/* FAILED 状态下的"慢性重试"周期。
+ *
+ * ⚠ 为什么必须有：MAX_RETRY 用尽后进 FAILED，然后就**再也不会重连**了 ——
+ * 只有用户长按 BOOT 进配网才能恢复。这在真实场景里是致命的：
+ *
+ *   · 电脑/路由器短暂断电重启，正好卡在设备重连的那 16 秒窗口里
+ *     → 4 次全败 → 永久 FAILED
+ *   · 路由器重启后信道变了、5GHz 漫游切换、AP 恰好在 DFS 静默期
+ *     → 同样是永久 FAILED
+ *   · 更隐蔽：**深度省电 60 秒一轮**时，人不在、路由器抖动一下，
+ *     回来发现设备是死的，必须手动按键进配网
+ *
+ * 用户感知就是"睡了一觉醒来，看板再也连不上了"。
+ *
+ * 所以 FAILED 只是"这次快速重试放弃了"，不是"放弃治疗"。每 60 秒
+ * 再试一次，代价可忽略（一次 esp_wifi_connect + 几秒等待），换来的是
+ * 路由器恢复后设备自己活过来，不需要人去按板子。
+ *
+ * 60 秒而不是 5 秒：FAILED 时屏幕已经明示"WiFi 未连接"，用户知道
+ * 出问题了；高频重试只会在"密码真的改了"的情况下白耗电、刷日志。 */
+#define FAILED_RETRY_MS (60 * 1000)
+
 /* 保存成功后延时重启，给浏览器一点时间收到响应 */
 #define REBOOT_DELAY_MS 1500
 
@@ -148,6 +170,10 @@ static esp_netif_t       *s_ap_netif;
 static esp_timer_handle_t s_retry_timer;
 static esp_timer_handle_t s_reboot_timer;
 static esp_timer_handle_t s_prov_timer;
+/* FAILED 状态下的慢性重试。和 s_retry_timer 分开：
+ * 那个是"这一次连接周期的快速重试（4 秒 × 4）"，这个是"彻底放弃之后
+ * 每 60 秒碰一次运气"，两者的生命周期和取消条件都不一样。 */
+static esp_timer_handle_t s_slow_timer;
 static httpd_handle_t     s_httpd;
 
 /* ⚠ 配网页提交上来的凭据。
@@ -315,6 +341,34 @@ static void reboot_timer_cb(void *arg)
     esp_restart();
 }
 
+/* FAILED 状态下的慢性重试（见 FAILED_RETRY_MS 的说明）。
+ *
+ * 做两件事：
+ *   1. 明确把状态从 FAILED 拉回 CONNECTING —— 否则 wifi_mgr_state() 一直
+ *      报 FAILED，屏幕上的"WiFi 未连接 / 长按 BOOT"提示永远不消失，
+ *      即使这次连上了（GOT_IP 会改状态，但连的过程中显示也不该是 FAILED）。
+ *   2. 清失败计数再 connect。不清的话，下一次 DISCONNECTED 事件
+ *      立刻又满足 `>= MAX_RETRY`，等于每次重试只有一次机会，
+ *      信道抖动一下就连不上。
+ *
+ * ⚠ 进配网后必须停掉这个定时器（wifi_mgr_start_provision 里做了），
+ * 否则配网期间它还在偷偷 esp_wifi_connect()，会打断热点。 */
+static void slow_retry_timer_cb(void *arg)
+{
+    if (s_suppress_reconnect) return;
+    if (s_state == WIFI_ST_PROVISION) return;
+    if (s_state == WIFI_ST_CONNECTED) return;
+
+    ESP_LOGI(TAG, "慢性重试：再试一次连接 %s", s_ssid);
+    s_fail_count = 0;
+    s_state = WIFI_ST_CONNECTING;
+    esp_wifi_connect();
+
+    /* 连不上就会来 DISCONNECTED，那里会重新挂上这个定时器；
+     * 连上了 GOT_IP 会把它停掉。这里不再续期，避免和 DISCONNECTED
+     * 路径双重挂载导致两个定时器叠加。 */
+}
+
 /* 配网长时间没人访问 —— 多半是误触发进来的，重启回正常工作。
  *
  * ⚠ 只在**已经存过凭据**时才重启。一次都没配过的设备本来就该停在配网
@@ -358,10 +412,14 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
 
         s_fail_count = s_fail_count + 1;    /* volatile 不能用 ++（C++20 弃用） */
         if (s_fail_count >= MAX_RETRY) {
-            /* 不再重连，等用户按 BOOT 进配网。屏幕会切到提示界面。 */
+            /* 这次快速重试放弃了，但**不是永久放弃**：
+             * 挂上慢性重试定时器，每 FAILED_RETRY_MS 再碰一次运气。
+             * 电脑/路由器重启、AP 信道切换都会走这条路恢复。 */
             s_state = WIFI_ST_FAILED;
-            ESP_LOGW(TAG, "连不上 %s（已试 %d 次），请长按 BOOT 3 秒重新配网",
-                     s_ssid, s_fail_count);
+            ESP_LOGW(TAG, "连不上 %s（已试 %d 次），%d 秒后再试；长按 BOOT 3 秒可重新配网",
+                     s_ssid, s_fail_count, FAILED_RETRY_MS / 1000);
+            esp_timer_stop(s_slow_timer);
+            esp_timer_start_once(s_slow_timer, (uint64_t)FAILED_RETRY_MS * 1000);
             return;
         }
         s_state = WIFI_ST_CONNECTING;
@@ -374,6 +432,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         s_fail_count = 0;
         s_state = WIFI_ST_CONNECTED;
+        /* 连上了就把慢性重试停掉，否则 60 秒后它会再 connect 一次，
+         * 把一条好的连接踢掉重连。 */
+        esp_timer_stop(s_slow_timer);
         ESP_LOGI(TAG, "已连接 %s，IP %s", s_ssid, s_ip);
 
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
@@ -1094,6 +1155,11 @@ void wifi_mgr_begin(void)
     a3.name     = "wprov";
     esp_timer_create(&a3, &s_prov_timer);
 
+    esp_timer_create_args_t a4 = {};
+    a4.callback = slow_retry_timer_cb;
+    a4.name     = "wslow";
+    esp_timer_create(&a4, &s_slow_timer);
+
     /* AP 网关地址：向驱动查真实值，不要硬编码。
      *
      * 原来这里写死 "192.168.4.1"。ESP-IDF 默认 AP 网段确实是 192.168.4.1，
@@ -1152,6 +1218,9 @@ void wifi_mgr_retry(void)
     if (s_state == WIFI_ST_PROVISION) return;
     s_fail_count = 0;
     s_state = WIFI_ST_CONNECTING;
+    /* 手动重试优先于慢性重试：先把这个定时器停掉，
+     * 否则 60 秒后它会再来一次重复 connect。 */
+    esp_timer_stop(s_slow_timer);
     ESP_LOGI(TAG, "手动重试");
     esp_wifi_connect();
 }
@@ -1162,6 +1231,10 @@ void wifi_mgr_start_provision(void)
 
     s_suppress_reconnect = true;
     esp_timer_stop(s_retry_timer);
+    /* 慢性重试也要停。不停的话配网期间每 60 秒会有一次 esp_wifi_connect()，
+     * 而那时模式是 APSTA —— 连接尝试会占用射频时间、刷日志，
+     * 严重时让手机连热点变慢甚至连不上。 */
+    esp_timer_stop(s_slow_timer);
     esp_wifi_disconnect();
 
     /* 热点名带 MAC 后两字节，附近有多台看板时能分清 */

@@ -2377,7 +2377,34 @@ void ui_board_poll_input(void)
     if (s_wake_req) {
         s_wake_req      = false;
         s_idle_tracking = false;
+
+        /* ⚠ 必须记住"唤醒前是不是深睡档"，而且要在 sleep_apply 之前取。
+         *
+         * 原因：sleep_apply(false) 内部会 power_save_set(POWER_ACTIVE)，
+         * 之后 power_save_level() 就再也读不到 DEEP 了。而下面要不要
+         * 立刻补一轮数据，恰恰取决于"刚才是不是 DEEP"——
+         * 只有 DEEP 档才把轮询拉到了 60 秒，才存在"屏幕亮了但数据是
+         * 60 秒前的"这种状态。LIGHT 档只降到 5 秒，不值当多拉一次。 */
+        bool was_deep = (power_save_level() == POWER_DEEP);
+
         sleep_apply(false);
+
+        /* 立刻踢醒取数任务，别等那一轮超时。
+         *
+         * ⚠ 这是"休眠唤醒后连不上服务器"的**第二个原因**（第一个是
+         * data_fetch.cpp 里的 keep-alive 判据）。
+         * DEEP 档下 fetch 任务正阻塞在 ulTaskNotifyTake(60000) 里，
+         * 按键唤醒只改了屏幕和功耗，没有任何东西去叫醒它 ——
+         * 于是屏幕亮了，但数据要等最多 60 秒才刷新。
+         * 用户看到的是"连不上"，其实只是没去拉。
+         *
+         * 只能由 UI 侧发起：唤醒入口有三个（按键 / 来了任务 / 数据恢复
+         * 在线），其中"来了任务"和"数据恢复在线"本身就是 fetch 拉回来
+         * 之后才知道的，不可能由它们触发补拉 —— 那样会自激。 */
+        if (was_deep) {
+            data_fetch_kick();
+            ESP_LOGI(TAG, ">>> 深睡唤醒，立刻补拉一轮数据");
+        }
     }
 }
 

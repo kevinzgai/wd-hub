@@ -33,6 +33,23 @@ static const char *TAG = "wb-board";
 /* 轮询周期不写死 —— 深度省电要拉到 60 秒。见 power_save.h。 */
 #define HTTP_BUF_SIZE     4096
 
+/* keep-alive 连接的"安全闲置时长"。
+ *
+ * 服务端 uvicorn 的 timeout_keep_alive=30 秒（见 api_server.py，当初给
+ * 5 秒轮询配的 6 倍余量）。只要一条连接闲置超过 30 秒，服务端就会单方面
+ * FIN 掉它，而 esp_http_client 的 handle 毫不知情，下一轮照样复用 ——
+ * 结果必然是 ESP_ERR_HTTP_FETCH_HEADER（发了请求，响应头永远等不到）。
+ *
+ * ⚠ 为什么不用「当前档位的轮询间隔」来判断（原来的写法
+ * `if (power_save_poll_ms() > 10000) close()`）：
+ * 那个判据只在**一直停在 DEEP 档**时成立。真正的坑在**刚唤醒**那一刻 ——
+ * 唤醒后 poll_ms 立刻变回 5000，判据不成立、不断连，可上一轮请求是
+ * 60 秒前发的，连接早就死了。设备表现为"醒了、屏亮了，但数据拉不回来"。
+ *
+ * 改成按**距上次请求的真实间隔**判断，跟档位无关，唤醒这一刀自然被覆盖。
+ * 取 20 秒（留 10 秒余量）。 */
+#define KEEPALIVE_SAFE_MS 20000
+
 static char s_http_buf[HTTP_BUF_SIZE];
 
 typedef struct {
@@ -91,6 +108,14 @@ static void fetch_task(void *arg)
     int fails = 0;
     uint32_t base_ver = wifi_mgr_svr_version();
 
+    /* 上一次请求发出的时刻。用来判断 keep-alive 连接是否已经闲置到
+     * 被服务端关掉（见 KEEPALIVE_SAFE_MS 的说明）。
+     * 初值 0 是个特殊值：esp_timer 已经跑了几千 ms，`now - 0` 一定
+     * 大于 KEEPALIVE_SAFE_MS，于是**第一轮一定会先 close** ——
+     * 那是我们想要的（新开的 handle 本来也没有连接可复用）。
+     * 用 -1 之类反而绕，0 天然满足"第一次当久闲置处理"。 */
+    int64_t last_req_ms = 0;
+
     while (1) {
         // WiFi 不通就别拉了。这时 HTTP 只会超时（一次 5 秒）并且把失败计数
         // 算到服务端头上 —— 屏幕会误弹"改服务地址"。等连上再说。
@@ -141,22 +166,31 @@ static void fetch_task(void *arg)
          * 唤醒窗口只覆盖这一次 perform（几十~几百 ms），不影响省电。 */
         power_save_http_begin();
 
-        /* ⚠ DEEP 档必须断开 keep-alive 连接。
+        /* ⚠ 闲置太久就必须断开 keep-alive 连接。
          *
          * 服务端 uvicorn 的 timeout_keep_alive=30 秒（见 api_server.py 里
-         * 那段注释，当初是给"5 秒轮询"配的 6 倍余量）。DEEP 档 60 秒才
-         * 请求一次，**远超 30 秒**，连接早被服务端关掉了，但
-         * esp_http_client 的 handle 还攥着那条死连接继续复用 ——
-         * 结果就是 ESP_ERR_HTTP_FETCH_HEADER（响应头收不到）。
+         * 那段注释，当初是给"5 秒轮询"配的 6 倍余量）。只要距上次请求
+         * 超过 30 秒，连接已经被服务端关掉了，但 esp_http_client 的
+         * handle 还攥着那条死连接继续复用 —— 结果就是
+         * ESP_ERR_HTTP_FETCH_HEADER（响应头收不到）。
          *
-         * 实测：5 秒轮询时 100% 成功；切到 60 秒后第一轮就失败，
-         * 失败点精确落在"距上次成功 60 秒"。
+         * ⚠ 判据必须是「距上次请求的真实间隔」，**不能**用当前档位的
+         * 轮询间隔（原来写的是 `power_save_poll_ms() > 10000`）。
+         * 原来那个写法在三种情况下会漏：
+         *   1. **刚唤醒**：poll_ms 已变回 5000，判据不成立 → 不断连，
+         *      但上一轮请求是 60 秒前发的，连接早死了。这就是
+         *      "休眠唤醒后连不上服务器"的主因。
+         *   2. 从 DEEP 掉回 LIGHT/ACTIVE 的同一瞬间，同上。
+         *   3. 失败退避 15 秒时，poll_ms 仍是 5000 但真实间隔是 15 秒
+         *      （这个还在 30 秒内，不算漏，但说明判据和现实脱钩了）。
          *
-         * 修法：非 ACTIVE 档每次请求前清掉连接。60 秒一次的频率下
-         * 复用连接本来也没价值，重建 TCP 的代价（几十 ms）完全可接受。 */
-        if (power_save_poll_ms() > 10000) {
+         * 60 秒一次的频率下复用连接本来也没价值，重建 TCP 的代价
+         * （几十 ms）完全可接受，所以这里宁可多断。 */
+        int64_t now_req_ms = esp_timer_get_time() / 1000;
+        if (last_req_ms == 0 || now_req_ms - last_req_ms > KEEPALIVE_SAFE_MS) {
             esp_http_client_close(client);
         }
+        last_req_ms = now_req_ms;
 
         esp_err_t err = esp_http_client_perform(client);
         power_save_http_end();
@@ -257,8 +291,16 @@ static void fetch_task(void *arg)
         // 周期跟着电源级别走（power_save_poll_ms）：深度省电 60 秒，
         // 其余 5 秒。失败多了再退到 15 秒 —— 服务挂了的时候狂刷没意义，
         // 反而让 WiFi 一直醒着。
+        //
+        // ⚠ 退避判据原来是 `base_wait < 15000`，在 DEEP 档（base=60000）
+        // 下永远不成立 —— 也就是说 60 秒档位的退避逻辑是**死代码**。
+        // 更糟的是它和"唤醒后连不上"叠加：唤醒瞬间档次已经变回 ACTIVE，
+        // 但第一轮失败后仍按 5 秒重试倒还好；反过来如果卡在 DEEP，
+        // 每轮 60 秒，5 轮 5 分钟才够 wifi_mgr 判 s_svr_down。
+        // 改成"取两档中较大的那个"，任何档位都保证不低于 15 秒。
         uint32_t base_wait = power_save_poll_ms();
-        uint32_t wait = (fails > 3 && base_wait < 15000) ? 15000 : base_wait;
+        uint32_t wait = base_wait;
+        if (fails > 3 && wait < 15000) wait = 15000;
         // 服务地址刚被改过：别等这一轮走完，300ms 后立刻按新地址重试，
         // 否则用户改完地址要干等十几秒才看到屏幕提示消失。
         uint32_t ver = wifi_mgr_svr_version();

@@ -166,3 +166,4 @@ firmware/main/config.local.h
 .*.patch
 .stages/
 .tmp/
+/video
