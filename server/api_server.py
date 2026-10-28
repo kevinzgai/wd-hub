@@ -53,7 +53,8 @@ else:
     from .collector import STALE_MS, Collector, iso_now
     from .models import (
         ActivityStat, ArtifactListResponse, AutomationItem, AutomationListResponse,
-        BoardResponse, HealthResponse, SessionItem, SessionListResponse,
+        BoardResponse, HealthResponse, LiveRunItem, LiveState, LiveWaitItem,
+        SessionItem, SessionListResponse,
         SourceHealth, Summary, SystemStat, TaskItem, TaskListResponse, TaskStat,
         TokenDay, TokenHour, TokenModel, TokenSession, TokenSummary,
         human_ago, project_name, session_title, utf8_trunc,
@@ -132,8 +133,8 @@ MAX_SESSION_ROWS = 3
 # 屏幕页数：0 = 概览（/status），1..N-1 = 详情屏（/screen/<i>）。
 # 改这里就改了设备上能按出几屏，**不用重烧固件** —— 固件从 /status 的 nscr 读。
 #
-# 现有分配：1 任务 / 2 自动化 / 3 今日活动 / 4 系统（图表）/ 5 Token 用量
-SCREEN_COUNT = 6
+# 现有分配：1 任务 / 2 自动化 / 3 今日活动 / 4 系统（图表）/ 5 Token 用量 / 6 实时
+SCREEN_COUNT = 7
 
 # 哪一屏用图表渲染（服务端只发数据，具体画法在固件）。
 # 改这个数字 = 换一屏图表化，固件不用动 —— 它按 kind 字段判断，不认屏号。
@@ -265,7 +266,35 @@ def _waiting_flag(row: dict, pending_convs: set[str]) -> bool:
     return int(time.time() * 1000) - last >= WAIT_IDLE_MS
 
 
-def _firmware_session(row: dict, pending_convs: set[str]) -> dict:
+def _live_by_session(snap) -> dict:
+    """把实时状态按 session_id 归拢，供固件逐行下发。
+
+    返回 {session_id: {"st": 1|2, "act": "中文动作"}}：
+      st=1 运行中（绿）  st=2 等你确认（黄）
+
+    ⚠ 口径：同一会话同时命中"运行中"和"等你确认"时，**等确认优先**——
+    用户更需要知道"我得出手了"，而不是"它还在忙"。
+    """
+    out: dict[str, dict] = {}
+    lv = getattr(snap, "live", None) or {}
+    for r in lv.get("running") or []:
+        sid = str(r.get("session_id") or "")
+        if not sid:
+            continue
+        out[sid] = {"st": 1, "act": str(r.get("action") or "")}
+    for w in lv.get("waiting") or []:
+        sid = str(w.get("session_id") or "")
+        if not sid:
+            continue
+        prev = out.get(sid) or {}
+        if prev.get("st") == 2:
+            continue
+        out[sid] = {"st": 2, "act": str(w.get("action") or "")}
+    return out
+
+
+def _firmware_session(row: dict, pending_convs: set[str],
+                     live_map: Optional[dict] = None) -> dict:
     """单行会话的固件载荷。
 
     `e` = 距最近活动的**原始秒数**（2026-10-27 加）。只发 `elapsed` 那种成品
@@ -290,6 +319,17 @@ def _firmware_session(row: dict, pending_convs: set[str]) -> dict:
     # w=1 表示等待操作，固件闪黄灯。不等待时**不发这个键**，省字节
     if _waiting_flag(row, pending_convs):
         out["w"] = 1
+    # ---- 实时状态（可选键）----
+    # st: 0空闲 1运行中 2等你确认；act: 当前动作的中文名
+    #
+    # ⚠ 这两个键是**可选的**：老固件不认会直接忽略，新固件读老服务端
+    # 也会因为缺省值退化成"空闲"。所以只在真的有实时信息时才发，
+    # 没数据就不占字节（固件响应体上限 4095）。
+    lv = (live_map or {}).get(str(row.get("id") or ""))
+    if lv and lv.get("st"):
+        out["st"] = int(lv["st"])
+        if lv.get("act"):
+            out["act"] = utf8_trunc(str(lv["act"]), 12)
     return out
 
 
@@ -338,6 +378,11 @@ def _firmware_payload(snap) -> dict:
         pending_convs = files_src.tasks_pending_by_conversation()
     except Exception:      # 任务目录不可读不该拖垮整个 /status
         pending_convs = set()
+    # 实时状态映射（运行中 / 等确认）
+    try:
+        live_map = _live_by_session(snap)
+    except Exception:
+        live_map = {}
     return {
         "ok": not snap.degraded,
         # 固件 error 字段 char[64]，按字节截断（纯 ASCII 原因码，不含中文）
@@ -351,7 +396,7 @@ def _firmware_payload(snap) -> dict:
         "today_done": snap.today_done,
         "automations": snap.automations,
         "sessions": [
-            _firmware_session(r, pending_convs)
+            _firmware_session(r, pending_convs, live_map)
             for r in snap.sessions[:MAX_SESSION_ROWS]
         ],
         # 设备（本机）指标：页脚状态条。全部取整下发——屏幕只有 12px 字体，
@@ -470,7 +515,7 @@ def _screen_rows(snap, idx: int) -> tuple[str, list[dict]]:
     if idx == 1:                                    # 任务
         t = snap.tasks or {}
         ip  = int(t.get("in_progress") or 0)
-        return "任务", [
+        rows = [
             _row("总计",     t.get("total")),
             _row("已完成",   t.get("completed"), 2),
             # snap.today_done 与 tasks["today_completed"] 现在同源（collector 直接
@@ -479,6 +524,20 @@ def _screen_rows(snap, idx: int) -> tuple[str, list[dict]]:
             _row("今日完成", snap.today_done, 2),
             _row("进行中",   ip, 1 if ip else 4),
         ]
+        # 「有哪些任务」——只列**正在做**的任务标题。
+        # 屏上只有 6 行，前 4 行给了统计，剩 2 行放最靠前的两个进行中任务。
+        # 标题用 16px 主字体，中文一行大概 10 个字，超了会被截。
+        try:
+            _, ip_tasks = files_src.tasks_list(status="in_progress", limit=2)
+            if not ip_tasks:
+                _, ip_tasks = files_src.tasks_list(status="pending", limit=2)
+        except Exception:
+            ip_tasks = []
+        for tk in ip_tasks:
+            subj = str(tk.get("subject") or "").strip()
+            if subj:
+                rows.append(_row(utf8_trunc(subj, 8), None, 1))
+        return "任务", rows
 
     if idx == 2:                                    # 自动化
         a = snap.automation_runs or {}
@@ -544,6 +603,24 @@ def _screen_rows(snap, idx: int) -> tuple[str, list[dict]]:
             _row("缓存率", f"{rate:.0f}%", 3 if rate < 50 else 4),
             _row("请求",  f"{int(t.get('requests') or 0):,}", 4),
         ]
+
+    if idx == 6:                                    # 实时（消耗了多少资源）
+        lv = getattr(snap, "live", None) or {}
+        run  = lv.get("running") or []
+        wait = lv.get("waiting") or []
+        totals = lv.get("tool_totals") or {}
+        if not run and not wait and not totals:
+            return "实时", [_row("状态", "无活动", 4)]
+        rows = [
+            _row("运行中", len(run), 2 if run else 4),
+            _row("等你",   len(wait), 3 if wait else 4),
+        ]
+        # 资源消耗：按累计耗时排前 3 的工具。
+        # ⚠ 这些是**墙钟时间**（模型在想、Bash 在跑），不是 CPU 时间 ——
+        # 屏上要说清楚，别让人以为是在烧 CPU。
+        for name, sec in sorted(totals.items(), key=lambda kv: -kv[1])[:3]:
+            rows.append(_row(utf8_trunc(str(name), 10), f"{int(sec)}s", 4))
+        return "实时", rows
 
     return "", []
 
@@ -789,6 +866,45 @@ async def v1_activity() -> ActivityStat:
 async def v1_artifacts(limit: int = Query(20, ge=1, le=200)) -> ArtifactListResponse:
     total, items = await asyncio.to_thread(files_src.artifacts_list, limit)
     return ArtifactListResponse(total=total, items=items)
+
+
+@app.get("/api/v1/live", response_model=LiveState, tags=["v1"],
+         summary="实时工作状态")
+async def v1_live() -> LiveState:
+    """此刻在干什么 / 卡在哪等你确认 / 烧了多少时间。
+
+    数据来自本地 traces + 会话日志的增量扫描，不查云端。
+    详见 sources/live.py 的口径说明。
+    """
+    snap = await collector.snapshot()
+    lv = getattr(snap, "live", None) or {}
+    running = []
+    for r in (lv.get("running") or [])[:8]:
+        running.append(LiveRunItem(
+            session_id=r.get("session_id") or "",
+            pid=str(r.get("pid") or ""),
+            project=project_name(r.get("cwd")),
+            action=r.get("action") or "",
+            raw_action=r.get("raw_action") or "",
+            elapsed_s=int(r.get("elapsed_s") or 0),
+        ))
+    waiting = []
+    for w in (lv.get("waiting") or [])[:8]:
+        waiting.append(LiveWaitItem(
+            session_id=w.get("session_id") or "",
+            project=project_name(w.get("cwd")),
+            tool=w.get("tool") or "",
+            action=w.get("action") or "",
+            wait_s=int(w.get("wait_s") or 0),
+            is_ask=bool(w.get("is_ask")),
+        ))
+    return LiveState(
+        running=running,
+        waiting=waiting,
+        durations=lv.get("durations") or {},
+        tool_totals=lv.get("tool_totals") or {},
+        scanned=lv.get("scanned") or {},
+    )
 
 
 @app.get("/api/v1/system", response_model=SystemStat, tags=["v1"],

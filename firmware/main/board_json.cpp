@@ -200,6 +200,13 @@ void board_parse(board_data_t *d, const char *json)
         d->sessions[i].age_s = (e < 0) ? -1 : e;
         // w 只在等待操作时下发，缺省即 0
         d->sessions[i].waiting = (uint8_t)json_int(sub, "w", 0);
+        // ---- 实时状态（可选键）----
+        // st: 0空闲 1运行中 2等你确认。服务端不发时按 0 处理，
+        // 行为跟旧固件完全一样。
+        int st = json_int(sub, "st", 0);
+        d->sessions[i].state = (uint8_t)((st >= 0 && st <= 2) ? st : 0);
+        // act: 当前动作的中文名，空表示没有实时信息
+        json_str(sub, "act", d->sessions[i].action, sizeof(d->sessions[i].action));
         d->session_count++;
     }
 

@@ -16,6 +16,9 @@
 
 #define MAX_SESSIONS 3
 #define TEXT_TITLE   40
+/* 实时动作名（"跑命令"/"等模型"/"等你回答"）。
+ * 服务端已翻译成中文，固件不维护映射表。 */
+#define TEXT_ACTION  12
 #define TEXT_PROJECT 20
 #define TEXT_ELAPSED 12
 
@@ -54,6 +57,14 @@ typedef struct {
     char    elapsed[TEXT_ELAPSED];  // 服务端算好的成品串，e 缺失时的回退
     int     age_s;          // 服务端拍下这一行时，距最近活动多少秒
     uint8_t waiting;        // 1 = 等待操作，行首黄灯闪
+    /* ---- 实时状态（2026-10-28 新增）----
+     * st: 0 空闲 / 1 运行中（绿灯）/ 2 等你确认（黄灯闪）
+     * act: 当前动作的中文名，空字符串表示服务端没给
+     *
+     * 这两个键是**可选**的：服务端不发时 st=0、act 空，
+     * 行为跟旧固件完全一致。新固件读老服务端也不会崩。 */
+    uint8_t state;         // 见上：0空闲 1运行 2等确认
+    char    action[TEXT_ACTION];  // 当前动作（中文）
 } session_t;
 
 typedef struct {

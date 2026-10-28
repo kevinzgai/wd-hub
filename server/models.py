@@ -250,6 +250,52 @@ class ArtifactListResponse(BaseModel):
     items: list[ArtifactItem]
 
 
+# ---------------------------------------------------------------- 实时状态
+
+
+class LiveRunItem(BaseModel):
+    """正在执行的工作流。
+
+    action 是中文动作名（"跑命令"/"等模型"/"等你回答"），
+    服务端翻译好了，固件和前端都不用维护映射表。
+    """
+
+    session_id: str = Field(default="", description="会话 ID")
+    pid: str = Field(default="", description="worker 进程 ID")
+    project: str = Field(default="", description="项目名（cwd 末级目录）")
+    action: str = Field(default="", description="当前动作（中文）")
+    raw_action: str = Field(default="", description="当前动作（工具原名）")
+    elapsed_s: int = Field(default=0, description="这个动作已经持续多少秒")
+
+
+class LiveWaitItem(BaseModel):
+    """卡住等你确认的工作流。
+
+    is_ask=True 表示是 AI 在问你（AskUserQuestion）；
+    False 表示是工具调用挂了很久（可能是网络慢，不是真的在等）。
+    """
+
+    session_id: str = Field(default="", description="会话 ID")
+    project: str = Field(default="", description="项目名")
+    tool: str = Field(default="", description="工具原名")
+    action: str = Field(default="", description="动作（中文）")
+    wait_s: int = Field(default=0, description="已经等了多久（秒）")
+    is_ask: bool = Field(default=False, description="是否在等你回答")
+
+
+class LiveState(BaseModel):
+    """实时工作状态总览。"""
+
+    running: list[LiveRunItem] = Field(default_factory=list, description="正在执行")
+    waiting: list[LiveWaitItem] = Field(default_factory=list, description="等你确认")
+    durations: dict[str, dict[str, int]] = Field(
+        default_factory=dict, description="会话 ID → {工具名: 累计秒}")
+    tool_totals: dict[str, int] = Field(
+        default_factory=dict, description="工具名 → 累计秒（所有会话合计）")
+    scanned: dict[str, int] = Field(
+        default_factory=dict, description="本轮扫描的文件数")
+
+
 class TokenToday(BaseModel):
     """今日 token 用量。与总体 KPI 分开，是因为屏幕上只有一个位置，
     要显示"今天花了多少"而不是"历史一共多少"。

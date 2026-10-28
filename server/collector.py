@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from . import sources
-from .sources import db, files, system, tokens
+from .sources import db, files, live, system, tokens
 from .sources.db import SourceError
 
 log = logging.getLogger("board.collector")
@@ -52,6 +52,11 @@ class Snapshot:
         "cost_est": 0.0, "today": {"requests": 0, "total": 0, "cost_est": 0.0}})
     sys: dict[str, Any] = field(default_factory=lambda: {
         "cpu": 0.0, "mem": 0.0, "disk": 0.0, "temp": 0, "proc": 0, "uptime": 0})
+    # 实时工作状态：此刻在干什么、卡在哪等你确认、烧了多少时间。
+    # live.py 提供（traces + 会话日志增量扫），失败时降级为空。
+    live: dict[str, Any] = field(default_factory=lambda: {
+        "running": [], "waiting": [], "durations": {}, "tool_totals": {},
+        "scanned": {"traces": 0, "logs": 0}})
     health: dict[str, dict[str, Any]] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
@@ -194,6 +199,20 @@ def _collect_sync() -> Snapshot:
         # 日志目录可能读不了，或某条记录结构怪异 —— 都不该影响主看板
         s.health["tokens"] = {"ok": False, "count": 0, "detail": str(e)[:80]}
         log.warning("Token 采集失败: %s", e)
+
+    # ---- 实时工作状态 ----
+    # 不计入"业务源是否全挂"的判定：它挂了只影响实时展示，
+    # 不该让整屏数据被判为失效而保留旧快照。
+    try:
+        s.live = live.live_snapshot()
+        s.health["live"] = {
+            "ok": True,
+            "count": len(s.live.get("running") or []) + len(s.live.get("waiting") or []),
+            "detail": "",
+        }
+    except Exception as e:                          # noqa: BLE001
+        s.health["live"] = {"ok": False, "count": 0, "detail": str(e)[:80]}
+        log.warning("实时状态采集失败: %s", e)
 
     # ---- 系统（永不失败）----
     try:

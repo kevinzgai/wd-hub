@@ -247,6 +247,9 @@ static char     s_footer_cache[24];
 // 芯片结温不在这里存：传感器句柄和最近读数都归 device_report.cpp，
 // 渲染侧调 device_report_chip_temp() 读缓存（避免两个任务抢同一个句柄）。
 static bool     s_waiting[MAX_SESSIONS];     // 当前哪些行在等待操作
+// 实时状态：0空闲 / 1运行中（绿灯常亮）/ 2等你确认（黄灯闪）
+// 为 0 时行首灯整颗隐藏，保持旧行行为。
+static uint8_t  s_state[MAX_SESSIONS];
 static bool     s_blink_on;                  // 黄灯亮/灭相位
 
 // 详情屏的判等缓存（理由同上：每帧 set_text 会把 SPI 刷屏占满）
@@ -1364,8 +1367,21 @@ static void ui_render_overview(const board_data_t *d)
                 age = d->sessions[i].elapsed;   // 旧版服务端没发 e
             }
 
+            // 动作文本（"跑命令""等模型""等你回答"……）
+            // 放在 meta 行的项目名前面，两者一起被 64 字节截断，
+            // 截断后优先保留"动作"（用户最关心的那个信息）。
+            char act[16];
+            act[0] = '\0';
+            if (d->sessions[i].action[0]) {
+                utf8_sanitize(&font_cn_12, d->sessions[i].action, act, sizeof(act));
+            }
+
             char meta[64];
-            snprintf(meta, sizeof(meta), "%s · %s", proj, age);
+            if (act[0]) {
+                snprintf(meta, sizeof(meta), "%s · %s", act, age);
+            } else {
+                snprintf(meta, sizeof(meta), "%s · %s", proj, age);
+            }
             // meta 也判等，避免每轮都触发该行的重绘
             if (strcmp(meta, s_meta_cache[i]) != 0) {
                 strncpy(s_meta_cache[i], meta, sizeof(s_meta_cache[i]) - 1);
@@ -1375,10 +1391,21 @@ static void ui_render_overview(const board_data_t *d)
 
             // 等待操作 → 灯变黄 + 交给 blink_timer_cb 闪；不等待就整颗隐藏，
             // 行首留 10px 白，比常亮一个灰点干净
-            bool waiting = d->sessions[i].waiting != 0;
+            //
+            // 实时状态 st：1=运行中（绿灯常亮），2=等你确认（黄灯闪）。
+            // st 优先于 w："等你确认"比"还在干活"更要紧急，
+            // 同时命中时取 st=2。旧服务端不发 st，就回退到 w 的旧行为。
+            uint8_t st = d->sessions[i].state;
+            bool waiting = (st == 2) || (st == 0 && d->sessions[i].waiting != 0);
+            bool running = (st == 1) && !waiting;
             s_waiting[i] = waiting;
+            s_state[i] = st;
             if (waiting) {
                 lv_obj_set_style_bg_color(s_dot[i], COL_WARN, 0);
+                lv_obj_set_style_bg_opa(s_dot[i], LV_OPA_COVER, 0);
+                lv_obj_clear_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
+            } else if (running) {
+                lv_obj_set_style_bg_color(s_dot[i], COL_OK, 0);
                 lv_obj_set_style_bg_opa(s_dot[i], LV_OPA_COVER, 0);
                 lv_obj_clear_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
             } else {
@@ -1389,6 +1416,7 @@ static void ui_render_overview(const board_data_t *d)
             lv_obj_clear_flag(s_lbl_sess_meta[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             s_waiting[i] = false;
+            s_state[i] = 0;
             lv_obj_add_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_lbl_sess_title[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_lbl_sess_meta[i], LV_OBJ_FLAG_HIDDEN);
