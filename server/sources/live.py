@@ -215,6 +215,10 @@ def _pid_from_path(path: str) -> str:
 #   trace 文件里没有 sessionId，但会话日志的 providerData.traceId 能对上。
 #   这是把耗时统计归到正确会话的唯一可靠办法。
 _PENDING_CALLS: dict[str, dict[str, Any]] = {}
+# 已经拿到结果的 callId。日志里同一个 callId 可能「先 result 后 call」
+# 重复出现（会话恢复时重放），见 _consume_log 里的说明。
+_DONE_CALLS: set[str] = set()
+_DONE_CALLS_MAX = 4000
 _SPAN_STATE: dict[str, dict[str, Any]] = {}
 _FILE_CURSOR: dict[str, int] = {}
 _DURATIONS: dict[str, dict[str, int]] = {}
@@ -330,6 +334,10 @@ def _scan_trace_file(path: str) -> None:
             sp = rec.get("span") or {}
             sid = sp.get("spanId")
             if sid:
+                # span 只能结算一次。文件重放 / 读到重复行时
+                # 不拦就会把同一个 span 的耗时累加两遍。
+                if sid in st["ended"]:
+                    continue
                 st["ended"].add(sid)
                 dur = sp.get("duration")
                 name = sp.get("name")
@@ -506,6 +514,14 @@ def _scan_session_log(path: str) -> None:
         rtype = rec.get("type")
         cid = rec.get("callId")
         if rtype == "function_call":
+            # ⚠ 日志里**同一个 callId 可能出现两次**：先有 result、
+            # 后有函数调用（实测串口复位/会话恢复时会重放）。
+            # 顺序处理时那次 result 来得太早、pop 了个空气，随后这条
+            # function_call 就永远等不到结果 —— 于是「等你确认」永久误报。
+            # 实测这个 bug 让一个 64 分钟前的 Bash 一直占着黄灯。
+            # 所以记下已经完成的 callId，重复出现时直接跳过。
+            if cid and cid in _DONE_CALLS:
+                continue
             _PENDING_CALLS[cid] = {
                 "name": rec.get("name") or "?",
                 "ts": int(rec.get("timestamp") or 0),
@@ -521,6 +537,13 @@ def _scan_session_log(path: str) -> None:
         if rtype == "function_call_result":
             if cid:
                 _PENDING_CALLS.pop(cid, None)
+                _DONE_CALLS.add(cid)
+                # 集合别无限涨：超出就丢掉最早的一半。
+                # 只保留最近的很够用 —— 重放的都是刚写入的相邻行。
+                if len(_DONE_CALLS) > _DONE_CALLS_MAX:
+                    keep = list(_DONE_CALLS)[-_DONE_CALLS_MAX // 2:]
+                    _DONE_CALLS.clear()
+                    _DONE_CALLS.update(keep)
             continue
         # 用户消息：标记「这一轮刚开始」
         if rtype == "message" and rec.get("role") == "user":
@@ -654,6 +677,11 @@ def live_snapshot() -> dict[str, Any]:
         sid = str(call.get("session_id") or "")
         if not sid or sid in seen_wait:
             continue
+        # 同一会话不能既"运行中"又"等你确认" —— 它此刻正在动，
+        # 那条挂起记录必然是被重放/漏配对的老数据（见 _consume_log）。
+        # 不拦的话屏上会出现「运行中 1 / 等你 1」却只列 1 行会话。
+        if sid in seen_running:
+            continue
         seen_wait.add(sid)
         cwd = call.get("cwd") or ""
         if not cwd and sid in sid_to_log:
@@ -707,20 +735,16 @@ def waiting_conversations() -> set[str]:
     固件"黄灯闪"用。注意只认**明确在问问题**的工具（ASK_TOOLS），
     普通工具执行慢不算 —— 那会满屏黄灯。
 
-    阈值与 live_snapshot 第 5 步保持一致（ACTIVE_WINDOW_MS），
-    否则会出现"看板说在等，固件灯不闪"的不一致。
+    ⚠ 直接复用 live_snapshot 的 waiting 结果，不要自己再遍历
+    _PENDING_CALLS —— 那边有多重过滤（已完成的 callId、同一会话
+    不能同时 running/waiting）。自己重算一遍必然跟看板对不上，
+    就会出现"看板说在等、固件灯不闪"。
     """
-    now_ms = int(time.time() * 1000)
+    snap = live_snapshot()
     out: set[str] = set()
-    for cid, call in list(_PENDING_CALLS.items()):
-        ts = int(call.get("ts") or 0)
-        if not ts:
-            continue
-        waited = now_ms - ts
-        if waited < ACTIVE_WINDOW_MS or waited > WAIT_ZOMBIE_MS:
-            continue
-        if (call.get("name") or "") in ASK_TOOLS:
-            sid = call.get("session_id") or ""
+    for w in snap.get("waiting") or []:
+        if w.get("is_ask"):
+            sid = str(w.get("session_id") or "")
             if sid:
                 out.add(sid)
     return out
@@ -729,6 +753,7 @@ def waiting_conversations() -> set[str]:
 def reset_cache() -> None:
     """清空跨轮状态。仅测试用。"""
     _PENDING_CALLS.clear()
+    _DONE_CALLS.clear()
     _SPAN_STATE.clear()
     _FILE_CURSOR.clear()
     _DURATIONS.clear()
