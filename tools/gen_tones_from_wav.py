@@ -44,16 +44,21 @@
 
 ## ⚠ 运行方式
 
-**必须用 python.exe 全路径**，不要用 `py`：
+**用 python.exe 全路径**，别用裸 `py`：
 
     "C:/Users/Administrator/AppData/Local/Programs/Python/Python314/python.exe" \
         tools/gen_tones_from_wav.py tools/tones_preview.wav
 
-原因：本机的 `py` 启动器被 WorkBuddy 装了个 shim 接管（`...\\cli\\vendor\\shim`），
-走 `py script.py` 时**不会加载用户级 site-packages**
-（`%APPDATA%\\Python\\Python314\\site-packages`），numpy 直接 ModuleNotFoundError。
-而 `py -c "import numpy"` 又是正常的 —— 所以很容易误判成"numpy 没装"，
-反复重装也修不好。和 edge-tts 那个坑同源（见 .workbuddy/memory/2026-10-26.md）。
+原因：本机 `py` 可用的解释器不止一个 —— 系统的 Python314（有 numpy）和
+WorkBuddy 自带的 3.13.14（site-packages 在 `Python313` 下，**没有 numpy**）。
+不同启动方式会让 `py` 解析到不同的那个，于是同一命令时好时坏：
+
+    py tools/gen_tones_from_wav.py   -> ModuleNotFoundError: numpy
+    py -c "import numpy"             -> 有时又能正常
+
+报错信息里如果出现 `.workbuddy/binaries/python/versions/3.13.x`，就是选错了。
+全路径把解释器钉死，不受 PATH 顺序影响；也可以 `py -3.14 ...` 显式指定。
+自查：`py -c "import sys; print(sys.executable)"`。
 
 ## 用法
 
