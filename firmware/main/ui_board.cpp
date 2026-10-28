@@ -1030,7 +1030,12 @@ void ui_board_build(void)
         s_lbl_stat[i] = lv_label_create(box);
         lv_obj_set_style_text_font(s_lbl_stat[i], &font_cn_28, 0);
         lv_obj_set_style_text_color(s_lbl_stat[i], colors[i], 0);
-        lv_label_set_text(s_lbl_stat[i], "0");
+        /* 占位用 "--" 而不是 "0"：开机到第一次 /status 成功之间（实测
+         * 3.8 秒，WiFi 慢时可能几十秒）ui_board_render 的 !ok 分支会
+         * 直接 return，三格就一直停在建屏时的值。写 "0" 的话，这几十秒
+         * 屏幕上是"工作 0 / 完成 0 / 自动 0"，和"连上了但真的没数据"
+         * 长得一模一样 —— 2026-10-28 实测被误判成设备坏了排查过一轮。*/
+        lv_label_set_text(s_lbl_stat[i], "--");
         lv_obj_align(s_lbl_stat[i], LV_ALIGN_TOP_MID, 0, -4);
 
         lv_obj_t *cap = lv_label_create(box);
