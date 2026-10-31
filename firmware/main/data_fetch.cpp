@@ -13,6 +13,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -32,6 +33,14 @@ static const char *TAG = "wb-board";
 #define BRIDGE_PATH_MAIN  "/status"
 /* 轮询周期不写死 —— 深度省电要拉到 60 秒。见 power_save.h。 */
 #define HTTP_BUF_SIZE     4096
+
+/* ⚠ 本文件是 **WiFi/HTTP 架构**的取数实现，只在 WB_BLE_ONLY=0 时参与编译。
+ * 当前默认 WB_BLE_ONLY=ON（纯蓝牙，见 README 的「架构」），所以下面这些
+ * HTTP 细节不生效，保留是为了能回退。
+ *
+ * 文中提到的 api_server.py 是旧的 FastAPI 服务（端口 27777），已删除；
+ * 源码在 git 历史（`git log -- server/`），设计说明在
+ * archive/README-legacy-http.md。 */
 
 /* keep-alive 连接的"安全闲置时长"。
  *
@@ -320,7 +329,9 @@ void data_fetch_start(int (*current_page)(void), const char *(*last_btn)(void))
     /* ⚠ 检查 xTaskCreate 返回值。
      * 失败时任务根本没起来，但设备看起来是正常的（能亮屏、能连 WiFi），
      * 只是数据永远不刷新 —— 静默失效，最难排查。 */
-    if (xTaskCreate(fetch_task, "fetch", 8192, NULL, 5, NULL) != pdPASS) {
+    // 栈放 PSRAM：与 lvgl 任务同理 —— 开蓝牙后内部 RAM 不足以容纳 8192 栈。
+    if (xTaskCreateWithCaps(fetch_task, "fetch", 8192, NULL, 5, NULL,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAG, "fetch 任务创建失败 —— 屏幕不会更新数据");
     }
 }

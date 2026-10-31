@@ -138,6 +138,30 @@ server/state/
 # 仍然不入库：地址是本机环境相关的，别人 clone 后应各自跑 configure.py 生成。
 firmware/main/config.local.h
 
+# ⚠ 主机端登录凭据（wb_credential.py 落盘）：access_token / refresh_token
+# 都是 1400+ 字符的真实 JWT，等同于本账号的登录态。
+# **绝对不能入库** —— 提交一次就等于把账号钥匙永久写进 git 历史，
+# 即使后续删除，`git log -S refresh_token` 依然能把原文翻出来。
+# 换机器后由 wb_credential.py 重新走一遍登录即可。
+host/.aiwk_auth.json
+host/*.auth.json
+**/.aiwk_auth.json
+
+# ==================
+# 生成物（可随时重新生成，不入库）
+# ==================
+# token-dashboard.html 由外部技能产出：
+#   node ~/.workbuddy/skills/token-dashboard/dist/cli.js --out artifacts/token-dashboard.html
+# 572KB 单文件 HTML，内容全是当天实时数据快照 —— 入库只会每次改动都产生
+# 一个巨大的 diff，且数据本身第二天就过期了。
+artifacts/token-dashboard.html
+
+# 提示音试听页与对比 wav：都从 firmware/main/tone_pcm.h 或 audio/candidates/
+# 解析导出（见 tools/tones/gen_tones_multistruct.py 的用法说明）。
+# 源素材（audio/candidates/）入库，导出的副本不入库。
+audio/preview/
+audio/verify/
+
 # ==================================================
 # 拆提交时的临时工具（2026-10-27 清理）
 # ==================================================

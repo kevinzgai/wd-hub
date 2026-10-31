@@ -32,7 +32,15 @@
 // 不会拖慢 20ms 一轮的按键扫描扫描周期。
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
+
+/* audio.cpp 是 C++ 编译的，控制台（wb_console.c）是 C ——
+ * 不加 extern "C" 的话，C 侧链接时找不到被 name mangling 过的符号
+ * （报 undefined reference to `audio_play`）。 */
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // 播放事件。数值用于入队，不要随意改已有项的值。
 //
@@ -68,3 +76,21 @@ void audio_play(audio_event_t ev);
 // 这里没有 audio_set_volume()：按键（VOL_UP/VOL_DOWN）已被背光占用，
 // 提示音音量目前不可调。曾有一个没人调用的 audio_set_volume()，
 // 已被删除 —— 留个空接口比没有更容易误导。
+
+// 用指定采样率播放一段单声道 16bit PCM（麦克风回环自检用）。
+//
+// 为什么需要这个接口而不是复用提示音那套：
+//   1) 提示音是离线渲染好的 24kHz 表，麦克风录的是 16kHz。把 16k 数据
+//      按 24k 播会慢 1.5 倍、音调变低，听起来像卡带拖不动。
+//      所以这里临时把 I2S 时钟切到 rate，播完再切回 AUDIO_RATE。
+//   2) 提示音缓冲只有 1.2 秒，2 秒的回环塞不进去 —— 内部按 1024 帧分块写。
+//
+// 音量固定 100%，不乘提示音的 20%：这是通路自检，乘下去麦克风那点信号
+// 基本就听不见了，会被误判成"麦克风坏了"。
+//
+// 返回 false 表示音频未就绪或写入失败。阻塞，直到整段播完或出错。
+bool audio_play_pcm_at(const int16_t *pcm, size_t frames, uint32_t rate);
+
+#ifdef __cplusplus
+}
+#endif

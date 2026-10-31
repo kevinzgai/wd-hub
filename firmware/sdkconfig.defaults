@@ -46,9 +46,33 @@ CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=y
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=y
 
-# ---- 关闭不需要的功能，省 Flash 和 RAM ----
-CONFIG_BT_ENABLED=n
+# ---- Bluetooth LE / NimBLE ----
+# WorkBuddy 控制台要靠 BLE 收主机推的帧（Service 4fafc201… / Char beb5483e…）。
+# 只开单连接 peripheral 所需的最小配置：本设备永远是被连的一方，
+# 不扫描、不主动连别人，因此关掉 CENTRAL 与 OBSERVER 省 RAM。
+#
+# ⚠ 与 WiFi 共存：S3 支持 BLE + WiFi 同时工作（CONFIG_ESP_COEX_ENABLED 已开），
+#   但两者抢 2.4G 射频，共存时 BLE 吞吐会掉。控制台的帧都很小（≤480B/2s），
+#   这点带宽足够，不需要为它调整 WiFi 参数。
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
+# 不把配对信息落 NVS：控制台没有配对流程，主机按设备名直连。
+CONFIG_BT_NIMBLE_NVS_PERSIST=n
 CONFIG_FREERTOS_USE_TRACE_FACILITY=n
+
+# NimBLE 日志降到 WARNING。INFO 级别下每发一个 notify 就 print 一行
+# "GATT procedure initiated"，录音时每秒 50 包 × 2 片 = 100 行，
+# 串口 115200 根本吐不完（100 行 × ~50B = 5KB/s，接近串口上限的一半），
+# 直接和音频采集抢 CPU，实测造成丢帧与实时率偏低。
+# 这一项必须留在 defaults 里：改 sdkconfig 会在下次 reconfigure 时被覆盖。
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+CONFIG_BT_NIMBLE_LOG_LEVEL=2
 
 # ---- LVGL ----
 CONFIG_LV_COLOR_DEPTH_16=y

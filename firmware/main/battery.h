@@ -32,6 +32,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* battery.cpp 是 C++ 编译的，而控制台（wb_console.c）是 C ——
+ * 不加 extern "C" 的话，C 侧链接时找不到被 name mangling 过的符号
+ * （报 undefined reference to `battery_get`）。 */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     int  raw;          // 最近一次平均 raw 值
     int  mv;           // 换算电压，-1 = 校准不可用
@@ -50,3 +57,7 @@ void battery_get(battery_state_t *out);
 
 // 把 raw 值按上游分段表换算成百分比（供单元测试直接调用）
 int battery_raw_to_percent(int raw);
+
+#ifdef __cplusplus
+}
+#endif

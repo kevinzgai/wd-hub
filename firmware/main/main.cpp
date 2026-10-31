@@ -46,6 +46,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"
 
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -70,6 +71,7 @@
 #include "battery.h"
 #include "audio.h"
 #include "power_save.h"
+#include "wb_console.h"
 
 static const char *TAG = "wb-board";
 
@@ -114,7 +116,8 @@ static const char *TAG = "wb-board";
 /* ⚠ 这里原来配 SNTP + TZ，是一段死代码，已删除。
  *
  * 屏幕上的 clock / date 全部来自服务端（api_server.py 里 datetime.now()
- * 格式化后下发），固件从头到尾没有调用过 localtime / strftime。
+ * 格式化后下发 —— 那是旧的 WiFi/HTTP 架构，现已在 git 历史中归档，
+ * 当前架构见 README），固件从头到尾没有调用过 localtime / strftime。
  * 也就是说：SNTP 对齐的时间戳，**没有任何代码去读**。
  *
  * 留着它的代价是实打实的：
@@ -160,12 +163,27 @@ static bool btn_wifi_connected(void) { return wifi_mgr_state() == WIFI_ST_CONNEC
 static bool btn_svr_down(void)       { return wifi_mgr_svr_down(); }
 static bool btn_is_asleep(void)      { return ui_board_asleep(); }
 
-/* 位置初始化而不是指定字段：C++ 下只填部分字段会被 -Wmissing-field-initializers
- * 判成错误（项目开了 -Werror）。顺序必须与 buttons_hooks_t 一致。 */
+/* 控制台占用按键时，按键层不再做切屏/亮度/配网分流，
+ * 全部改投给 wb_console_key()。判定放按键层是因为长按语义在那儿
+ * （700ms 阈值 + fired 去重），上层自己计时会和页面切换打架。 */
+static bool btn_console_active(void) { return wb_console_active(); }
+
+static void btn_console_key(const char *key, bool long_press)
+{
+    wb_console_key(key, long_press);
+}
+
+/* 顺序必须与 buttons_hooks_t 一致（C++ 下漏字段会被 -Werror 判成错误）。
+ * console_press / console_release 两个槽位已随语音上行一起下线（nullptr），
+ * 按键层对空指针有判空，不会调。 */
 static const buttons_hooks_t k_btn_hooks = {
     btn_wifi_connected,
     btn_svr_down,
     btn_is_asleep,
+    btn_console_active,
+    nullptr,              // console_press（原"按住说话"起录，已下线）
+    btn_console_key,
+    nullptr,              // console_release（原"松手发送"，已下线）
     ui_board_wake,        // 唤醒请求
     ui_board_next_page,   // 切屏请求
     ui_board_brightness,  // 亮度调整
@@ -210,8 +228,18 @@ static void lvgl_task(void *arg)
         // 绘制要走 SPI、可能几十毫秒，期间 fetch 任务拿不到锁就超时，
         // 那一轮拉到的数据被静默丢弃（还看不出报错，只是屏幕不更新）。
         // 取不到锁（50ms 超时）就跳过这一帧，下一帧 20~50ms 后就来。
-        board_data_t snap;
-        if (board_data_get(&snap)) ui_board_render(&snap);
+        /* 控制台占屏时只刷控制台：看板控件此刻不可见，继续往里写文字
+         * 纯属白烧 SPI 带宽（240x240x2 = 115KB/帧）。
+         *
+         * wb_console_tick() 是唯一碰控制台 LVGL 控件的地方 —— 它由本任务
+         * 驱动，满足"LVGL 只在一个任务里访问"的约定。 */
+        const int64_t now_ms = esp_timer_get_time() / 1000;
+        wb_console_tick(now_ms);
+
+        if (!wb_console_active()) {
+            board_data_t snap;
+            if (board_data_get(&snap)) ui_board_render(&snap);
+        }
         uint32_t wait = lv_timer_handler();
         if (wait < 5) wait = 5;
         /* 上限跟着电源级别走：正常 50ms（约 20fps），轻度 100ms，
@@ -273,6 +301,15 @@ extern "C" void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(300));
     board_display_backlight_set(ui_board_brightness_pct());   // 默认 100%
 
+    /* WorkBuddy 控制台：建 6 个独立 screen + 起 BLE 广播。
+     *
+     * 位置有讲究：
+     *   · 必须在 lv_init() 与 board_display_init() 之后（要建控件）；
+     *   · 必须在 lvgl_task 创建之前 —— 它内部会建 screen，此刻 LVGL 还没有
+     *     第二个访问者，不需要任何锁；
+     *   · 放在按钮任务之前，第一下按键就能被控制台接管。 */
+    wb_console_start();
+
     buttons_start(&k_btn_hooks);
 
     // 提示音。放在按键任务之后、wifi 之前：
@@ -284,6 +321,7 @@ extern "C" void app_main(void)
     // 温度传感器：装不上不影响看板，只是页脚显示 --
     device_report_init();
 
+#ifndef WB_BLE_ONLY
     /* 编译期 BRIDGE_BASE 只当"一次都没配过"时的初值。
      * NVS 里配过就以 NVS 为准 —— 电脑换 IP 在配置页改一下就行，不用重烧。 */
     wifi_mgr_set_default_base(BRIDGE_BASE);
@@ -304,7 +342,34 @@ extern "C" void app_main(void)
      * WiFi，只是数据永远不刷新，静默失效，日志里必须有痕迹。
      * 两个入参是"当前屏号"和"最近按键名"的取值函数，每轮现问。 */
     data_fetch_start(ui_board_page, ui_board_last_btn);
-    if (xTaskCreate(lvgl_task,   "lvgl",   8192, NULL, 4, NULL) != pdPASS) {
+#else
+    /* 只走蓝牙（默认）：以上四件事全部不启动。
+     *
+     * 为什么连 power_save 也不启：它的三档全部围绕"WiFi 轮询间隔"设计
+     * （DEEP 档把 PS 设成 MIN_MODEM 好让 60 秒一次的 HTTP 能回来），
+     * 没有 WiFi 时它只会一直跳过，留着只是多一个空转任务。
+     *
+     * 屏幕这边不靠"连上 WiFi"来判断有没有事可做 —— 控制台开机就占屏，
+     * 未连主机时显示离线态（见 wb_console_start 里的 always-on）。
+     * 否则用户会看到一块永久显示 "--" 的看板，以为设备坏了。 */
+    ESP_LOGW(TAG, "WB_BLE_ONLY：不启动 WiFi/HTTP，控制台只走 BLE");
+#endif
+    /* 栈放 PSRAM：开蓝牙后 libbtdm_app 静态吃掉 19.9KB DRAM，运行时还要
+     * 再分 controller 缓冲，内部 RAM 只剩十几 KB —— 8192 的栈任务在这里
+     * 直接创建失败（实测 "lvgl 任务创建失败 —— 屏幕不会刷新"）。
+     * LVGL 每帧只是调用控件刷新函数，栈深度有限，PSRAM 的额外延迟无感。 */
+    if (xTaskCreateWithCaps(lvgl_task, "lvgl", 8192, NULL, 4, NULL,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAG, "lvgl 任务创建失败 —— 屏幕不会刷新");
     }
+
+    /* 内存基线。这颗板子的瓶颈一直是内部 DRAM（开蓝牙后 libbtdm_app 静态
+     * 吃掉 19.9KB，运行时还要再分 controller 缓冲），语音上行每多一个常驻
+     * 缓冲都要从这里抠。打完这一行，后续每次改动都能直接对比，
+     * 不用等到"任务创建失败"才发现不够。
+     * 最大块单独打：碎片化时"剩余"看着够、实际分不出连续空间。 */
+    ESP_LOGI(TAG, "内存基线：内部剩余 %u B（最大块 %u B）/ PSRAM 剩余 %u B",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }

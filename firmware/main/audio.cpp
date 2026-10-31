@@ -28,6 +28,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "driver/i2s_std.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -71,6 +72,13 @@ static QueueHandle_t     s_q;
 static volatile int      s_volume = AUDIO_VOL_DEF;
 static bool              s_ready;
 
+// I2S TX 的写锁。
+//
+// 有两路会写 TX：audio_task（提示音，异步）和 audio_play_pcm_at（回环自检，
+// 同步阻塞）。同时写会让两段波形在 DMA 里交错，听起来是爆音且两边都不完整。
+// 提示音只有几百毫秒，回环最多几秒，抢锁不会造成可感知的延迟。
+static SemaphoreHandle_t s_lock;
+
 // 播放用的交错立体声缓冲。
 //
 // 在 init 时用 heap_caps_malloc 一次性分配并**永不释放**，而不是每次
@@ -109,6 +117,13 @@ static void play_pcm(const int16_t *pcm, int frames)
     if (!s_ready || !s_buf || !pcm || frames <= 0) return;
     if (frames > AUDIO_FRAMES_MAX) frames = AUDIO_FRAMES_MAX;   // 防御性截断
 
+    // 抢 TX 写锁：回环自检可能正在写同一路 I2S，交错会变成爆音。
+    // 等不到就跳过这次提示音 —— 提示音不能反压业务逻辑。
+    if (s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        ESP_LOGW(TAG, "I2S 忙（回环播放中），跳过本次提示音");
+        return;
+    }
+
     const float vol = s_volume / 100.0f;
 
     // 音量 100% 时省掉乘法循环，直接就是复制 —— 这是唯一会走到的分支
@@ -136,6 +151,71 @@ static void play_pcm(const int16_t *pcm, int frames)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "i2s 写入失败: %s", esp_err_to_name(err));
     }
+    if (s_lock) xSemaphoreGive(s_lock);
+}
+
+// 用任意采样率播放一段单声道 PCM（麦克风回环自检）。
+//
+// 关键点：I2S 时钟必须先 disable 才能改 —— 运行中改 clk 会被驱动拒绝。
+// 播完一定要切回 AUDIO_RATE，否则后面的提示音会按 16k 播，全线降调。
+bool audio_play_pcm_at(const int16_t *pcm, size_t frames, uint32_t rate)
+{
+    if (!s_ready || !s_tx || !s_buf || !pcm || frames == 0 || rate == 0) return false;
+
+    if (s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(3000)) != pdTRUE) {
+        ESP_LOGW(TAG, "回环播放抢锁超时（提示音正在播）");
+        return false;
+    }
+
+    // 1) 切到目标采样率
+    i2s_channel_disable(s_tx);
+    i2s_std_clk_config_t clk = I2S_STD_CLK_DEFAULT_CONFIG(rate);
+    esp_err_t err = i2s_channel_reconfig_std_clock(s_tx, &clk);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "切采样率到 %u 失败: %s", (unsigned)rate, esp_err_to_name(err));
+        i2s_channel_enable(s_tx);          // 至少把通道恢复回来
+        if (s_lock) xSemaphoreGive(s_lock);
+        return false;
+    }
+    i2s_channel_enable(s_tx);
+
+    // 2) 分块展开成立体声写入。每块 1024 帧，2 秒 16k 也就 32 块。
+    const size_t CHUNK = 1024;
+    size_t done = 0;
+    bool ok = true;
+    while (done < frames) {
+        size_t n = frames - done;
+        if (n > CHUNK) n = CHUNK;
+
+        // 固定满音量：这是通路自检。乘上提示音那 20% 之后，
+        // 麦克风本来就弱的信号会低到听不见，容易被误判成硬件坏了。
+        for (size_t i = 0; i < n; i++) {
+            const int16_t s = pcm[done + i];
+            s_buf[i * 2]     = s;
+            s_buf[i * 2 + 1] = s;
+        }
+
+        size_t written = 0;
+        err = i2s_channel_write(s_tx, s_buf, n * 2 * sizeof(int16_t), &written, 3000);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "回环写入失败: %s", esp_err_to_name(err));
+            ok = false;
+            break;
+        }
+        done += n;
+    }
+
+    // 3) 无论成败都切回提示音的采样率
+    i2s_channel_disable(s_tx);
+    i2s_std_clk_config_t back = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_RATE);
+    if (i2s_channel_reconfig_std_clock(s_tx, &back) != ESP_OK) {
+        ESP_LOGW(TAG, "恢复 %dHz 时钟失败，后续提示音可能降调", AUDIO_RATE);
+    }
+    i2s_channel_enable(s_tx);
+
+    if (s_lock) xSemaphoreGive(s_lock);
+    ESP_LOGI(TAG, "回环播放完成：%u 帧 @ %uHz", (unsigned)done, (unsigned)rate);
+    return ok;
 }
 
 static void audio_task(void *arg)
@@ -203,16 +283,28 @@ static void audio_teardown(void)
 
 void audio_init(void)
 {
-    // 播放缓冲放最前面申请：它占 115KB 内部 RAM，万一内存吃紧要第一时间
-    // 暴露出来（下面会判空并关掉整个提示音功能），
-    // 不能等到 I2S 通道都建好了才发现没内存。
-    s_buf = (int16_t *)heap_caps_malloc(AUDIO_FRAMES_MAX * 2 * sizeof(int16_t),
-                                        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    /* 播放缓冲优先放 PSRAM（2026-10-31 改）。
+     *
+     * 原来这里是 MALLOC_CAP_INTERNAL，占 115KB 连续内部 RAM。看板单独跑时
+     * 够用；但加上 BLE 之后（libbtdm_app 静态吃 19.9KB DRAM，controller
+     * 运行时还要再分缓冲），内部 RAM 腾不出这么一整块 —— 分配失败 →
+     * 直接 return → **整个提示音静音**，而屏幕上一点提示都没有。
+     *
+     * S3 的 I2S 走 GDMA，可以读外部 RAM；提示音只有几百毫秒、每次一段，
+     * 对带宽完全不敏感，放 PSRAM 听不出差别。
+     * 仍保留内部 RAM 作为退路（万一 PSRAM 初始化失败）。 */
+    const size_t buf_bytes = (size_t)AUDIO_FRAMES_MAX * 2 * sizeof(int16_t);
+    s_buf = (int16_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const bool in_psram = (s_buf != nullptr);
     if (!s_buf) {
-        ESP_LOGE(TAG, "播放缓冲分配失败（%d 字节），提示音不可用",
-                 (int)(AUDIO_FRAMES_MAX * 2 * sizeof(int16_t)));
+        s_buf = (int16_t *)heap_caps_malloc(buf_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!s_buf) {
+        ESP_LOGE(TAG, "播放缓冲分配失败（%d 字节，PSRAM 与内部 RAM 都试过），提示音不可用",
+                 (int)buf_bytes);
         return;
     }
+    ESP_LOGI(TAG, "播放缓冲 %d 字节 → %s", (int)buf_bytes, in_psram ? "PSRAM" : "内部RAM");
 
     i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     // 没数据时自动输出 0，避免 DMA 循环播放残留样本（听起来是嗡嗡声）
@@ -259,6 +351,12 @@ void audio_init(void)
         ESP_LOGE(TAG, "队列创建失败");
         audio_teardown();
         return;
+    }
+
+    // TX 写锁：提示音（异步任务）和回环自检（同步调用）共用一路 I2S。
+    s_lock = xSemaphoreCreateMutex();
+    if (!s_lock) {
+        ESP_LOGW(TAG, "互斥锁创建失败：提示音与回环可能互相打断（不致命）");
     }
 
     if (xTaskCreate(audio_task, "audio", AUDIO_TASK_STACK, NULL,

@@ -17,13 +17,20 @@ static const char *TAG = "keys";
 
 typedef struct {
     gpio_num_t  pin;
-    const char *name;
+    const char *name;   // 日志用，带引脚号
+    const char *key;    // 控制台语义用，只有键名
 } btn_cfg_t;
 
+/* 本机实测只有一颗按键（BOOT / GPIO0）。
+ *
+ * board_config.h 里的 VOL_UP(GPIO40) / VOL_DOWN(GPIO39) 是照上游
+ * xingzhi-cube-1.54tft 的配置抄过来的，这块板**没有焊这两个键** ——
+ * 2026-10-31 实测按不到任何反应。所以这里只登记 BOOT 一颗。
+ *
+ * 后果：所有交互必须用单键表达（短按 / 长按两种语义），
+ * 控制台的 wb_console.c 按此重排了全部页面的按键表。 */
 static const btn_cfg_t k_btns[] = {
-    { BOARD_BTN_BOOT,     "BOOT(GPIO0)"     },
-    { BOARD_BTN_VOL_UP,   "VOLUP(GPIO40)"   },
-    { BOARD_BTN_VOL_DOWN, "VOLDN(GPIO39)"   },
+    { BOARD_BTN_BOOT, "BOOT(GPIO0)", "OK" },
 };
 #define BTN_NUM (sizeof(k_btns) / sizeof(k_btns[0]))
 
@@ -44,13 +51,19 @@ static void button_init(void)
     io.intr_type    = GPIO_INTR_DISABLE;    // 用轮询，抖动好处理
     ESP_ERROR_CHECK(gpio_config(&io));
 
-    ESP_LOGI(TAG, "按键监听: BOOT=GPIO%d VOLUP=GPIO%d VOLDN=GPIO%d",
-             BOARD_BTN_BOOT, BOARD_BTN_VOL_UP, BOARD_BTN_VOL_DOWN);
+    ESP_LOGI(TAG, "按键监听: BOOT=GPIO%d（本机只有这一颗，无 VOL+/-）",
+             BOARD_BTN_BOOT);
 }
 
 static bool asleep(void)
 {
     return s_hooks && s_hooks->is_asleep && s_hooks->is_asleep();
+}
+
+// 控制台页面正在显示：按键全部让给控制台，不再切屏/调亮度/进配网。
+static bool console_active(void)
+{
+    return s_hooks && s_hooks->console_active && s_hooks->console_active();
 }
 
 static void button_task(void *arg)
@@ -61,7 +74,7 @@ static void button_task(void *arg)
     const int REL  = 10;   // 20ms * 10 = 200ms 松开确认
     // 短按 = 切屏，长按 = 调亮度。按下那一刻不知道用户要干嘛，
     // 所以动作只能等到"按住够久"或"松开"时才分派。
-    const uint32_t LONG_MS = 700;
+    const uint32_t LONG_MS = BTN_LONG_MS;
 
     // WiFi 没连上时，BOOT 的长按改语义：按住 3 秒进配网。
     // 这个状态下**不触发** 700ms 的亮度循环 —— 否则一次按住会先跳一档亮度
@@ -106,7 +119,15 @@ static void button_task(void *arg)
                     uint32_t held = now_ms - down_at[i];
                     bool is_boot = (k_btns[i].pin == BOARD_BTN_BOOT);
 
-                    if (is_boot && !wifi_ok) {
+                    /* 控制台页面优先：它的长按语义只有一种（700ms），
+                     * 不存在"联网时调亮度、断网时配网"的分叉 —— 那个分叉是
+                     * 看板专属的。放在最前面判，免得 BOOT 在断网时被抢去配网。 */
+                    if (console_active()) {
+                        if (held >= LONG_MS) {
+                            fired[i] = true;
+                            if (s_hooks->console_key) s_hooks->console_key(k_btns[i].key, true);
+                        }
+                    } else if (is_boot && !wifi_ok) {
                         // **只有没联网时**，BOOT 长按才让给配网。
                         //
                         // 已联网时 BOOT 保持原语义（700ms 调亮度），按住多久都
@@ -143,8 +164,9 @@ static void button_task(void *arg)
                         // 而且因为 fired 已经被置位，他松手时也不会再翻屏。
                         // VOLUP/VOLDN 在省电下仍然调亮度 —— 那两键唯一语义
                         // 就是调亮度，不存在歧义。
-                        bool vol_key = (k_btns[i].pin == BOARD_BTN_VOL_UP) ||
-                                       (k_btns[i].pin == BOARD_BTN_VOL_DOWN);
+                        // 单键板：没有 VOL 键，vol_key 恒为 false → 长按一律走"唤醒"，
+                        // 亮度循环只在不处于省电时由下面的 step=0 分支处理。
+                        bool vol_key = false;
                         if (asleep() && !vol_key) {
                             if (s_hooks && s_hooks->wake) s_hooks->wake();
                         } else {
@@ -154,9 +176,7 @@ static void button_task(void *arg)
                             // VOL 键也退出省电（用户明确要求）：按 VOL
                             // 这个动作本身就说明"我想看清屏幕"。
                             if (s_hooks && s_hooks->wake) s_hooks->wake();
-                            int step = (k_btns[i].pin == BOARD_BTN_VOL_UP)   ? +1
-                                     : (k_btns[i].pin == BOARD_BTN_VOL_DOWN) ? -1
-                                     : 0;
+                            int step = 0;   // 单键：循环档位（亮→中→暗→亮）
                             if (s_hooks && s_hooks->brightness) {
                                 s_hooks->brightness(k_btns[i].name, step);
                             }
@@ -189,9 +209,24 @@ static void button_task(void *arg)
                      * 省电模式唤醒时同样会响 —— 屏幕刚点亮、背光还是 30%，
                      * 这一声是唯一能确认"按键被收到了"的即时反馈，更重要。 */
                     audio_play(AUDIO_EV_KEY);
+
+                    /* 控制台的"按住说话"从这里起录。**当前固件不用**：
+                     * 语音上行已下线，hooks 里 console_press 是 nullptr，
+                     * 这段判空直接跳过。槽位留着，恢复按住类交互时不用改这里。 */
+                    if (console_active() && s_hooks->console_press) {
+                        s_hooks->console_press();
+                    }
                 }
                 rel[i] = 0;
             } else {                                 // 低→高 = 松开
+                /* 控制台需要"松开了"这个时刻 —— 能拿到它的只有这里。
+                 * 当前固件语音上行已下线，console_release 是 nullptr，
+                 * 判空跳过；槽位保留给将来恢复按住类交互用。 */
+                if (console_active() && s_hooks->console_release) {
+                    const uint32_t held = down_at[i] ? (now_ms - down_at[i]) : 0;
+                    s_hooks->console_release(held);
+                }
+
                 // 短按（没走长按分支）→ 下一屏。
                 // **不能直接调 page_apply**：它要动控件，而 LVGL 不是线程安全的，
                 // 这里只投递请求，由 lvgl_task 在持有 LVGL 上下文时执行。
@@ -202,7 +237,12 @@ static void button_task(void *arg)
                 // 概览页，反而找不到时间 —— 所以他得按第二下才能回去。
                 // 醒来后再按，才按正常语义翻屏。
                 if (down_at[i] && !fired[i]) {
-                    if (asleep()) {
+                    if (console_active()) {
+                        // 控制台：短按一律投给控制台。先唤醒，避免省电黑屏下
+                        // 按了没反应 —— 用户的意图是"我要操作"，不是"我要看时间"。
+                        if (s_hooks && s_hooks->wake) s_hooks->wake();
+                        if (s_hooks->console_key) s_hooks->console_key(k_btns[i].key, false);
+                    } else if (asleep()) {
                         if (s_hooks && s_hooks->wake) s_hooks->wake();
                     } else {
                         if (s_hooks && s_hooks->next_page) s_hooks->next_page();
