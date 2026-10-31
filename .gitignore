@@ -70,22 +70,26 @@ Thumbs.db
 # 原来整目录忽略，导致这个工程从来没进过版本库 —— 一旦删掉就永久找不回。
 # 实际源码只有 5 个文件 115KB（CMakeLists x2 / main.c / sdkconfig / sdkconfig.defaults），
 # 另外 151MB 全是 build/ 里的 obj 和 .a，重编就有，不该占仓库。
-adc-probe/build/
+#
+# 2026-10-31 改：两个探测工程已归入 probes/，路径随之变化。
+# 注意上面第 5 行的 `**/build/` 已能覆盖它们，这里保留显式规则只是
+# 为了让"为什么这个目录的 build 不进库"的意图在文件里看得见。
+probes/adc-probe/build/
 
 # 宠物像素画的预览图，由 tools/gen_pet.py 的思路临时渲染，
 # 素材真身是 pet_frames.c，这张 png 只是给人看的，随时可重生成。
-tools/pet_preview.png
+tools/pet/pet_preview.png
 
 # 宠物造型的调参过程图（8 版迭代的中间产物，共 600KB）。
 # 结论已固化进 gen_pet.py 的注释，过程图没有留存价值。
 tools/petproto/
 
 # 屏显模拟与方案对比图，由 tools/pet_mock_screen.py、pet_opa_compare.py 生成。
-# 只用于验证时肉眼看，不进版本库。
-tools/pet_screen_*.png
-tools/pet_opa_options.png
-tools/pet_compare.png
-tools/pet_done_frames.png
+# 只用于验证时肉眼看，不进版本库。2026-10-31 随脚本一起移到 tools/pet/。
+tools/pet/pet_screen_*.png
+tools/pet/pet_opa_options.png
+tools/pet/pet_compare.png
+tools/pet/pet_done_frames.png
 
 # ================
 # Logs & Archives
@@ -103,7 +107,8 @@ tools/pet_done_frames.png
 # 已得出结论并写进 firmware/main/audio.cpp 注释，不参与正式构建。
 # 2026-10-27 改：源码入库，只忽略 build/。理由同上面的 adc-probe ——
 # 整目录忽略的结果是「删了就找不回」，而源码本身只有 115KB。
-probe-spk/build/
+# 2026-10-31 改：路径随归入 probes/ 而变化。
+probes/probe-spk/build/
 
 # ================
 # Node / Python deps
@@ -118,16 +123,22 @@ __pycache__/
 venv/
 .env
 
-# 提示音调音的中间 wav，全部可由 tools/gen_tone_from_mp3.py 等脚本重生成
+# 提示音调音的中间 wav，全部可由 tools/tones/gen_tones_*.py 重生成。
+# 2026-10-31 改：脚本已归入 tools/tones/，路径同步。
 tools/*_preview.wav
+tools/tones/*_preview.wav
 tools/tone_compare.wav
 tools/done_tone.wav
 
 # ==================
 # 看板服务运行时状态
 # ==================
-# 任务账本（server/sources/ledger.py 生成）。是本机历史数据，不是代码：
+# 任务账本（旧 server 的 sources/ledger.py 生成）。是本机历史数据，不是代码：
 # 换机器重新累积即可，进版本库只会互相覆盖。
+#
+# 2026-10-31：旧 server 端已整体下线（由 host/wb_app.py 的 BLE 直连取代），
+# server/ 目录已删除，现存历史账本备份在 archive/server-state-backup/
+# （该备份是刻意入库的归档，不进这条忽略规则）。
 server/state/
 
 # ==================
