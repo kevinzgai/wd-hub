@@ -3,6 +3,8 @@
 # =======================
 build/
 **/build/
+# C3 构建目录（如 firmware/build-c3）；`**/build/` 只匹配 build，不匹配 build-c3
+build-c3/
 
 # ESP-IDF toolchain (entire ESP-IDF clone - huge)
 toolchain/
