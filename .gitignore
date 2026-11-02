@@ -100,6 +100,33 @@ tools/pet/pet_done_frames.png
 *.zip
 *.7z
 
+# ================
+# 备份 / 临时快照
+# ================
+# 手工留下的 .bak 快照只在本地保底，不属于源码。
+# 2026-11-02 曾误把 host/wb_app.py.bak-20261102-acpfix 提交入库，
+# 补上规则避免再次发生。
+*.bak
+*.bak-*
+*.orig
+*.rej
+
+# ================
+# Android 构建产物
+# ================
+# dist/ 下的 debug APK 改由本地分发，不再进版本库；需要发布时走 Release。
+wbboard/dist/
+*.apk
+*.aab
+
+# ================
+# 归档目录显式忽略
+# ================
+# 这两个目录的内容原本已由 build/ 与点开头文件规则命中，
+# 这里显式声明，避免以后改文件名后被 Git 重新看到。
+archive/one-off-scripts/
+archive/legacy-build-artifacts/
+
 # 语音播报音频（edge-tts 生成，可重新生成）
 .tts/
 
