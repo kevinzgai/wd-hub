@@ -29,6 +29,13 @@
 
 #include "board_data.h"
 
+/* ui_board.cpp 是 C++ 编译的，而 wb_console.c（控制台）是 C ——
+ * 不加 extern "C" 的话，C 侧调用 ui_board_brightness 时链接不到
+ * 被 name mangling 过的符号（报 undefined reference）。 */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* 建屏：创建全部控件、挂上宠物、起闪烁定时器。
  * 必须在 lv_init() + board_display_init() 之后调用一次。 */
 void ui_board_build(void);
@@ -67,6 +74,12 @@ const char *ui_board_last_btn(void);
 /* 请求切到下一屏。由 LVGL 任务落实。 */
 void ui_board_next_page(void);
 
+/* 请求切到上一屏（环形，C3 三键板的短按 UP）。由 LVGL 任务落实。 */
+void ui_board_prev_page(void);
+
+/* 请求回到总览屏（第 0 屏）。C3 三键板的短按 OK / 长按 DOWN 用。 */
+void ui_board_home(void);
+
 /* 请求退出省电模式（并清空闲计时）。由 LVGL 任务落实。 */
 void ui_board_wake(void);
 
@@ -75,3 +88,7 @@ void ui_board_brightness(const char *key, int step);
 
 /* 当前背光档位的百分比（40 / 70 / 100）。开机点亮背光时用。 */
 int ui_board_brightness_pct(void);
+
+#ifdef __cplusplus
+}
+#endif

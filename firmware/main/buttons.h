@@ -63,6 +63,18 @@ typedef struct {
     void (*brightness)(const char *key, int step);  /* step: 0=循环, +1/-1=增减 */
     void (*provision)(void);
     void (*svr_config)(void);
+
+    /* ---- C3 三键板新增（S3 单键板填 nullptr）----
+     *
+     * prev_page / home 只有在三键板上有意义：
+     *   短按 UP   → prev_page（上一屏）
+     *   短按 OK   → home（唤醒/回总览）
+     *   长按 DOWN → home（返回首页/退出当前浮层）
+     *
+     * 放在结构体**末尾**而不是中间，是为了让 S3 那份位置初始化只需
+     * 在尾部补两个 nullptr —— 中间插字段会让后面所有回调静默错位。 */
+    void (*prev_page)(void);
+    void (*home)(void);
 } buttons_hooks_t;
 
 /* 配好引脚并起扫描任务（20ms 一轮）。hooks 必须比任务活得久（用静态变量）。 */

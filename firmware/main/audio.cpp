@@ -326,7 +326,17 @@ void audio_init(void)
     // 引脚来自 board_config.h，已实测确认。
     // din 必须是 UNUSED —— 麦克风脚被偏置在 VDD/2，
     // 一旦被 I2S 当成输入采样会引入噪声，那三个脚也绝不能 gpio_config。
+    //
+    // MCLK：S3 板上 ES8311 用内部 PLL，不需要主时钟，保持 UNUSED；
+    // C3 板（AI Passport）的 codec 必须由 MCU 提供 MCLK（GPIO6），
+    // 所以那里定义了 BOARD_SPK_MCLK。本轮只把时钟接出来，
+    // ES8311 寄存器初始化留到下一轮 —— 没有初始化时 codec 不会出声，
+    // 但 I2S 引脚配置本身不会让功放发出噪声。
+#if defined(BOARD_SPK_MCLK)
+    cfg.gpio_cfg.mclk = BOARD_SPK_MCLK;
+#else
     cfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;
+#endif
     cfg.gpio_cfg.bclk = BOARD_SPK_BCLK;
     cfg.gpio_cfg.ws   = BOARD_SPK_LRCK;
     cfg.gpio_cfg.dout = BOARD_SPK_DOUT;

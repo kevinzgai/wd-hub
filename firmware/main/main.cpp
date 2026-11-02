@@ -156,7 +156,18 @@ static volatile bool s_svrcfg_req = false;
  * 这里刻意只写标志位：LVGL 不是线程安全的，按键任务（优先级 3）如果直接
  * 调 page_apply / lv_label_set_text，会和 lvgl 任务（优先级 4）抢同一个控件树。
  * 原实现就是这个约定，拆出按键扫描后继续保持。 */
-static void btn_provision(void)  { s_prov_req   = true; }
+static void btn_provision(void)
+{
+#ifdef WB_BLE_ONLY
+    /* 只走蓝牙的固件没有初始化 WiFi（见文件末尾 WB_BLE_ONLY 分支），
+     * 此时调 wifi_mgr_start_provision() 会在未 init 的驱动上设模式。
+     * 入口仍然保留 —— 长按 UP 会打这条日志，证明按键链路是通的；
+     * 真正要配网时用 -DWB_BLE_ONLY=0 重新编译。 */
+    ESP_LOGW(TAG, ">>> UP 长按：本固件只走 BLE，未启用 WiFi 配网");
+#else
+    s_prov_req = true;
+#endif
+}
 static void btn_svr_config(void) { s_svrcfg_req = true; }
 
 static bool btn_wifi_connected(void) { return wifi_mgr_state() == WIFI_ST_CONNECTED; }
@@ -189,6 +200,9 @@ static const buttons_hooks_t k_btn_hooks = {
     ui_board_brightness,  // 亮度调整
     btn_provision,
     btn_svr_config,
+    /* C3 三键板新增的两个动作（S3 单键板为 nullptr，按键层判空跳过）。 */
+    ui_board_prev_page,   // 短按 UP → 上一屏
+    ui_board_home,        // 短按 OK / 长按 DOWN → 回总览
 };
 
 // ===========================================================================
@@ -363,9 +377,18 @@ extern "C" void app_main(void)
     /* 栈放 PSRAM：开蓝牙后 libbtdm_app 静态吃掉 19.9KB DRAM，运行时还要
      * 再分 controller 缓冲，内部 RAM 只剩十几 KB —— 8192 的栈任务在这里
      * 直接创建失败（实测 "lvgl 任务创建失败 —— 屏幕不会刷新"）。
-     * LVGL 每帧只是调用控件刷新函数，栈深度有限，PSRAM 的额外延迟无感。 */
+     * LVGL 每帧只是调用控件刷新函数，栈深度有限，PSRAM 的额外延迟无感。
+     *
+     * C3 板没有 PSRAM（仓库 sdkconfig 明确 unset SPIRAM），只能放内部 RAM。
+     * 栈降到 6144：LVGL 的调用深度在 2KB 量级，6KB 留了两倍余量；
+     * 再大就会和 BLE controller 抢同一块 400KB SRAM。 */
+#if CONFIG_IDF_TARGET_ESP32C3
+    if (xTaskCreateWithCaps(lvgl_task, "lvgl", 6144, NULL, 4, NULL,
+                            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
+#else
     if (xTaskCreateWithCaps(lvgl_task, "lvgl", 8192, NULL, 4, NULL,
                             MALLOC_CAP_SPIRAM) != pdPASS) {
+#endif
         ESP_LOGE(TAG, "lvgl 任务创建失败 —— 屏幕不会刷新");
     }
 

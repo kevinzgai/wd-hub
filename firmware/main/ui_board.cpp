@@ -2052,6 +2052,20 @@ void ui_board_next_page(void)
     s_page_req = s_page + 1;
 }
 
+void ui_board_prev_page(void)
+{
+    // 在按键任务里算好非负屏号：lvgl_task 消费时只接受 req >= 0
+    // （负值表示"没有请求"），直接写 s_page - 1 在首页会被丢掉。
+    int n = board_data_nscr();
+    if (n < 1) n = 1;
+    s_page_req = (s_page + n - 1) % n;
+}
+
+void ui_board_home(void)
+{
+    s_page_req = 0;
+}
+
 void ui_board_wake(void)
 {
     s_wake_req = true;

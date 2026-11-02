@@ -29,6 +29,9 @@
 #include "battery.h"
 #include "board_display.h"
 #include "esp_heap_caps.h"
+#ifdef WB_KEYS3
+#include "ui_board.h"        // 长按 OK 复用看板的亮度档位逻辑（只写请求标志）
+#endif
 #include "wb_ble.h"
 #include "wb_core.h"
 #include "wb_proto.h"
@@ -348,6 +351,7 @@ static wb_page_t nav_prev_page(wb_page_t cur)
 
 static void handle_key(const char *key, bool long_press)
 {
+#ifndef WB_KEYS3
     (void)key;   // 单键板：key 恒为 "OK"
 
 #ifdef WB_PREVIEW_DATA
@@ -408,6 +412,85 @@ static void handle_key(const char *key, bool long_press)
         s_dirty = true;
         break;
     }
+#else   // ---------------------------- C3 三键板 ----------------------------
+    const bool ok = (key && strcmp(key, "OK") == 0);
+    const bool up = (key && strcmp(key, "UP") == 0);
+
+#ifdef WB_PREVIEW_DATA
+    if (s_preview_active) {
+        if (long_press) {
+            audio_play(AUDIO_EV_ATTENTION);
+            ESP_LOGI(TAG, "预览试听：等待操作音");
+        } else {
+            // 短按 OK/DOWN 往后翻、短按 UP 往前翻，方便一页页核对排版。
+            s_preview_page = up ? (s_preview_page + 6) % 7
+                                : (s_preview_page + 1) % 7;
+            wb_view_force_page(s_preview_page);
+            s_dirty = true;
+            ESP_LOGI(TAG, "预览页 -> %d", s_preview_page);
+        }
+        return;
+    }
+#endif
+
+    const wb_page_t page = wb_core_page(&s_state);
+
+    switch (page) {
+    case WB_PAGE_APPROVAL:
+        /* 审批页保留原有两种结果（少一个主机就会一直等到超时）：
+         *   短按 OK = 允许，长按 OK = 拒绝。
+         * UP/DOWN 在这一页不做事，避免误触把审批翻过去。 */
+        if (ok) decide_approval(!long_press);
+        break;
+
+    case WB_PAGE_ASK:
+        /* 提问页：短按 OK = 下一选项（原语义），长按 OK = 提交；
+         * 短按 UP/DOWN 在选项之间移动，比只能单向循环更好用。 */
+        if (ok && long_press) {
+            s_state.ask.cursor = wb_view_ask_cursor();
+            submit_ask();
+        } else {
+            wb_view_ask_move(up ? -1 : 1, s_state.ask.n_opts);
+            s_dirty = true;
+        }
+        break;
+
+    case WB_PAGE_STANDBY:
+        /* 待机：任意键唤醒回总览（三键板同样适用）。
+         * 背光 50%→100% 由 wb_console_tick 的 standby 边沿负责。 */
+        ESP_LOGI(TAG, "待机页按键(%s) → 唤醒回总览", key ? key : "?");
+        wb_core_goto_page(&s_state, WB_PAGE_STATUS);
+        s_dirty = true;
+        break;
+
+    case WB_PAGE_RACK:
+    case WB_PAGE_RUN:
+    case WB_PAGE_USAGE:
+    case WB_PAGE_STATUS:
+    default:
+        if (long_press) {
+            if (ok) {
+                /* 长按 OK = 亮度循环。沿用单键板"长按调亮"的已验收语义：
+                 * 只写请求标志，由 LVGL 任务在 poll_input 里落实。 */
+                ui_board_brightness("OK", 0);
+            } else {
+                /* 长按 DOWN（或 UP 已在驱动层被配网吃掉）= 返回首页/退出浮层。 */
+                wb_core_goto_page(&s_state, WB_PAGE_STATUS);
+                s_dirty = true;
+            }
+        } else if (ok) {
+            // 短按 OK：唤醒/回到总览。
+            wb_core_goto_page(&s_state, WB_PAGE_STATUS);
+            s_dirty = true;
+        } else {
+            // 短按 UP = 上一页，短按 DOWN = 下一页（四页环）。
+            wb_core_goto_page(&s_state, up ? nav_prev_page(page)
+                                           : nav_next_page(page));
+            s_dirty = true;
+        }
+        break;
+    }
+#endif  // WB_KEYS3
 }
 
 // ---------------------------------------------------------------------------

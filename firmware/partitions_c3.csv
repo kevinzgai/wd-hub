@@ -1,0 +1,18 @@
+# 上千 AI Passport · ESP32-C3 分区表（8MB Flash，无 OTA）
+#
+# 沿用板上现有布局（只读 dump 得到的原厂分区表，逐项核对过）：
+#   nvs      0x009000 / 0x006000
+#   phy_init 0x00f000 / 0x001000
+#   factory  0x010000 / 0x7f0000   ← 0x10000 + 0x7f0000 = 0x800000（正好 8MB）
+#
+# 为什么不用仓库的 partitions.csv：仓库给 factory 只留 4MB，而我们的
+# 12/16/28px 中文字库合计约 5.9MB，装不进去。板上原厂分区把整片 8MB
+# 都给 factory，正好够用；本轮不裁字库。
+#
+# 这块板没有 OTA 分区（仓库与板上固件都确认无 OTA）—— 刷写走 USB，
+# 没有回滚，改固件前先 read-flash 留一份原始备份。
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x7f0000,

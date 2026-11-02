@@ -1,17 +1,32 @@
+# ---- 板级源文件按芯片型号二选一 ----
+#
+# 同一份应用代码，两块板各有一套"脏活"驱动：
+#   S3（星智 1.54TFT）   : 单颗 BOOT 键 + ADC2 直测电池 + 充电 GPIO
+#   C3（AI Passport）    : 三键 ADC 分压 + CW2017 电量计（I2C）
+# 应用层（ui_board / wb_*）完全不感知差异，接口都收敛在各自头文件里。
+if(IDF_TARGET STREQUAL "esp32c3")
+    set(BOARD_BUTTON_SRC "buttons_adc.cpp")
+    set(BOARD_BATTERY_SRC "battery_cw2017.cpp")
+else()
+    set(BOARD_BUTTON_SRC "buttons.cpp")
+    set(BOARD_BATTERY_SRC "battery.cpp")
+endif()
+message(STATUS "板级驱动: ${BOARD_BUTTON_SRC} / ${BOARD_BATTERY_SRC}")
+
 idf_component_register(
     SRCS
         "main.cpp"
         "board_data.cpp"
         "board_display.cpp"
         "board_json.cpp"
-        "buttons.cpp"
+        "${BOARD_BUTTON_SRC}"
         "data_fetch.cpp"
         "device_report.cpp"
         "pet_view.cpp"
         "text_util.cpp"
         "ui_board.cpp"
         "audio.cpp"
-        "battery.cpp"
+        "${BOARD_BATTERY_SRC}"
         "power_save.cpp"
         "wifi_mgr.cpp"
         # ---- WorkBuddy 控制台（BLE 伴生控制台）----
@@ -44,6 +59,7 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_ledc
         esp_driver_i2s
+        esp_driver_i2c
         esp_driver_tsens
         esp_adc
         esp_lcd
@@ -72,6 +88,14 @@ option(WB_BLE_ONLY "只走蓝牙，不启动 WiFi / HTTP 轮询" ON)
 if(WB_BLE_ONLY)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE WB_BLE_ONLY)
     message(STATUS "WB_BLE_ONLY: 不启动 WiFi，控制台只走 BLE")
+endif()
+
+# C3 三键板：让 wb_console 启用三键语义（短 UP=上一页 / 短 DOWN=下一页 /
+# 短 OK=回总览 / 长 DOWN=退出浮层 / 长 OK=亮度）。
+# S3 单键板不定义这个宏，handle_key 走原来的单键分支，行为一字不改。
+if(IDF_TARGET STREQUAL "esp32c3")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE WB_KEYS3)
+    message(STATUS "WB_KEYS3: 三键语义（UP/DOWN/OK）")
 endif()
 
 # 调试钩子：cmake 传 -DWB_PREVIEW_DATA=1 会让控制台用假数据渲染六页界面，

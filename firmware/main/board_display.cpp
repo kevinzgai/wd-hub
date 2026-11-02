@@ -33,8 +33,20 @@ static esp_lcd_panel_handle_t    s_panel;
 // 屏幕
 // ===========================================================================
 
-// 40 行缓冲 x2，内部 DMA RAM。240*40*2 = 19.2KB x2 = 38.4KB
-#define LCD_BUF_LINES 40
+/* 帧缓冲行数。
+ *
+ * S3：40 行双缓冲（240*40*2 = 19.2KB x2 = 38.4KB，内部 DMA RAM 够用）。
+ * C3：无 PSRAM，SRAM 只有 ~400KB，双缓冲会把内部 RAM 挤爆。
+ *     仓库 espresso 配置用 12 行单缓冲（240*12*2 = 5.6KB），照抄。
+ *     单缓冲的代价是 LVGL 必须等上一次 flush 完成才能复用这块内存，
+ *     320 行屏每帧多几次等待，但 SPI 40MHz 下一行只花 12µs，可接受。 */
+#if CONFIG_IDF_TARGET_ESP32C3
+#define LCD_BUF_LINES   12
+#define LCD_BUF_DOUBLE  0
+#else
+#define LCD_BUF_LINES   40
+#define LCD_BUF_DOUBLE  1
+#endif
 static void *s_buf1;
 static void *s_buf2;
 
@@ -57,16 +69,16 @@ static void backlight_init(void)
     ledc_timer_config_t t = {};
     t.speed_mode      = LEDC_LOW_SPEED_MODE;
     t.duty_resolution = LEDC_TIMER_10_BIT;
-    t.timer_num       = LEDC_TIMER_1;
-    t.freq_hz         = 5000;
+    t.timer_num       = BOARD_BL_LEDC_TIMER;
+    t.freq_hz         = BOARD_BL_FREQ_HZ;
     t.clk_cfg         = LEDC_AUTO_CLK;
     ESP_ERROR_CHECK(ledc_timer_config(&t));
 
     ledc_channel_config_t c = {};
     c.gpio_num   = BOARD_LCD_BL;
     c.speed_mode = LEDC_LOW_SPEED_MODE;
-    c.channel    = LEDC_CHANNEL_1;
-    c.timer_sel  = LEDC_TIMER_1;
+    c.channel    = BOARD_BL_LEDC_CHANNEL;
+    c.timer_sel  = BOARD_BL_LEDC_TIMER;
     c.duty       = 0;
     c.hpoint     = 0;
     ESP_ERROR_CHECK(ledc_channel_config(&c));
@@ -75,8 +87,8 @@ static void backlight_init(void)
 void board_display_backlight_set(uint32_t percent)
 {
     if (percent > 100) percent = 100;
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, (1023 * percent) / 100);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, BOARD_BL_LEDC_CHANNEL, (1023 * percent) / 100);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, BOARD_BL_LEDC_CHANNEL);
 }
 
 void board_display_init(void)
@@ -88,17 +100,17 @@ void board_display_init(void)
     bus.quadwp_io_num   = -1;
     bus.quadhd_io_num   = -1;
     bus.max_transfer_sz = BOARD_LCD_H_RES * LCD_BUF_LINES * sizeof(uint16_t);
-    ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &bus, SPI_DMA_CH_AUTO));
+    ESP_ERROR_CHECK(spi_bus_initialize(BOARD_LCD_SPI_HOST, &bus, SPI_DMA_CH_AUTO));
 
     esp_lcd_panel_io_spi_config_t io_cfg = {};
     io_cfg.cs_gpio_num       = BOARD_LCD_CS;
     io_cfg.dc_gpio_num       = BOARD_LCD_DC;
-    io_cfg.spi_mode          = 3;     // 与官方 board config 一致
+    io_cfg.spi_mode          = BOARD_LCD_SPI_MODE;  // S3=3 / C3=0（见 board_config.h）
     io_cfg.pclk_hz           = BOARD_LCD_PIXEL_CLK;
     io_cfg.trans_queue_depth = 10;
     io_cfg.lcd_cmd_bits      = 8;
     io_cfg.lcd_param_bits    = 8;
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI3_HOST,
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BOARD_LCD_SPI_HOST,
                                              &io_cfg, &s_panel_io));
 
     // LVGL 显示对象要先建，回调里要用到
@@ -107,11 +119,16 @@ void board_display_init(void)
 
     size_t buf_bytes = BOARD_LCD_H_RES * LCD_BUF_LINES * sizeof(uint16_t);
     s_buf1 = heap_caps_malloc(buf_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+#if LCD_BUF_DOUBLE
     s_buf2 = heap_caps_malloc(buf_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (!s_buf1 || !s_buf2) {
-        ESP_LOGE(TAG, "帧缓冲分配失败");
+#else
+    if (!s_buf1) {
+#endif
+        ESP_LOGE(TAG, "帧缓冲分配失败（%u 字节）", (unsigned)buf_bytes);
         abort();
     }
+    // C3 单缓冲：第二个参数传 NULL，LVGL 9 会退化成"一块缓冲轮转"。
     lv_display_set_buffers(s_disp, s_buf1, s_buf2, buf_bytes,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
 
