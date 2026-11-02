@@ -105,6 +105,12 @@ typedef struct {
     int n_sess;
     wb_sess_t sess[WB_MAX_SESS];
 
+    /* status_list.t —— 主机本地墙钟(epoch 秒，已按主机时区平移)。
+     * 设备没有 RTC 电池、纯 BLE 也拿不到 NTP，待机页的大号时间只能由主机
+     * 每 2s 随状态帧带下来。旧固件忽略这个键；旧主机不带它时设备显示
+     * 「待机」而不是瞎猜一个时间。 */
+    int64_t clock_s;
+
     double remain, total;            // 积分
 
     int approval_id;                 // approval.id

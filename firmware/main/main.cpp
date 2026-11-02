@@ -253,6 +253,10 @@ static void lvgl_task(void *arg)
          * 深睡屏是待机屏（像素眼睛 + 28px 时钟），眼睛本来就只有 20fps
          * 的眨眼动作、时钟一分钟才跳一次，2fps 完全够用 —— 再高纯属白烧。 */
         uint32_t max_wait = power_save_lvgl_max_wait_ms();
+        /* 控制台待机页（大眼睛）只需要约 10fps：把 20fps 的 50ms 上限放宽到
+         * 100ms，配合 wb_console_tick() 的背光 50%，一起降低待机功耗。
+         * 正常页仍回到 50ms；旧看板的 100/500ms 档位不受影响（取更长的那个）。 */
+        if (wb_console_standby_active() && max_wait < 100) max_wait = 100;
         if (wait > max_wait) wait = max_wait;
         vTaskDelay(pdMS_TO_TICKS(wait));
     }
@@ -311,6 +315,8 @@ extern "C" void app_main(void)
     wb_console_start();
 
     buttons_start(&k_btn_hooks);
+
+
 
     // 提示音。放在按键任务之后、wifi 之前：
     // I2S 初始化只依赖 GPIO，与网络无关；早开的好处是第一次

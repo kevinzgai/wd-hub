@@ -10,6 +10,7 @@
 # 用法：
 #   双击运行
 #   WEB_PORT=9090 ./启动主机端.command     改 Web UI 端口（默认 8080）
+#   WB_HOST=0.0.0.0 ./启动主机端.command    放开监听，同一局域网手机可访问（默认 127.0.0.1）
 #   ./启动主机端.command --stop            停止已在运行的服务
 
 cd "$(dirname "$0")" || exit 1
@@ -84,7 +85,7 @@ echo "正在启动（Web UI: http://127.0.0.1:$WEB_PORT）"
 # 注意不能用 `python ... | tee`：管道会把 $! 变成 tee 的 PID，
 # 后面 kill -0 检测的就不是 python 了，进程死了也看不出来。
 # 这里用进程替换让 python 本体保持为后台作业。
-"$PY" -u wb_app.py --tray --web-port "$WEB_PORT" --open-browser \
+"$PY" -u wb_app.py --tray --web-host "${WB_HOST:-127.0.0.1}" --web-port "$WEB_PORT" --open-browser \
     > >(tee -a "$LOG_FILE") 2>&1 &
 new_pid=$!
 echo "$new_pid" > "$PID_FILE"

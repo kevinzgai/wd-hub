@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- 看板是深色界面，主题底色直接写死，省掉 splash 依赖 -->
+    <style name="AppTheme" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">#22D3EE</item>
+        <item name="colorPrimaryDark">#0B0E13</item>
+        <item name="colorAccent">#22D3EE</item>
+        <item name="android:windowBackground">@drawable/app_bg</item>
+        <item name="android:statusBarColor">#0B0E13</item>
+        <item name="android:navigationBarColor">#0B0E13</item>
+    </style>
+
+    <style name="AppTheme.NoActionBar" parent="AppTheme">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
+    <style name="AppTheme.NoActionBarLaunch" parent="AppTheme">
+        <item name="android:windowBackground">@drawable/app_bg</item>
+    </style>
+</resources>

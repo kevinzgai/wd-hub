@@ -117,6 +117,23 @@ WEB_PORT=9090 ./host/启动主机端.command # 改 Web UI 端口（默认 8080�
 主机端自带一个网页控制台（`http://127.0.0.1:8080`），可以看日志、推测试帧、改提示音音量。
 它和设备的屏共用同一份数据源。
 
+**用手机/别的设备看（可选）**：把 Web 控制台监听放开到局域网，手机连同一 WiFi 就能访问
+`http://<本机IP>:8080`（浏览器或 `wbboard/` 打包的 APK 均可）：
+
+```bash
+# Windows（项目 venv，含 bleak/pystray；必须用它，别用裸 py 否则 daemon 起不来）
+cd host
+./.venv/Scripts/python.exe wb_app.py --web-host 0.0.0.0 --web-port 8080
+
+# macOS（便捷脚本已支持 WB_HOST，一行放开监听；端口仍默认 8080）
+WB_HOST=0.0.0.0 ./host/启动主机端.command
+```
+
+启动日志会打印「手机端填 http://<局域网IP>:8080」。注意放开 `0.0.0.0` 后，
+控制台无鉴权，同网段任何设备都能访问 —— 家用 WiFi 无妨，公共/公司网络慎开。
+想随时改地址而不重打包，用 `wbboard/dist/wbboard-debug.apk`（原生 WebView 壳，
+内置地址配置页，长按返回键可改地址）。
+
 ## 硬件
 
 | 项目 | 规格 |
@@ -299,8 +316,12 @@ python tools/tones/gen_tones_from_wav.py <素材.wav>
 | `scripts/` | 自检、截图、串口读取 |
 | `docs/` | 需求文档与图片资源 |
 | `reference/` | 上游板卡参考资料（不进构建） |
-| `artifacts/` | 生成物（`token-dashboard.html`），可随时重新生成 |
-| `archive/` | **归档区**：已废弃的旧 WiFi/HTTP 实现（`README-legacy-http.md`、`legacy-entrypoints/`）、已下线的语音工具、旧 server 状态备份 |
+| `toolchain/` | 本地工具链 / 辅助脚本 |
+| `video/` | 视频素材与预览产物 |
+| `wbboard/` | **Android 壳**：将主机端 Web 控制台打包成 APK（原生 WebView），APK 产物在 `wbboard/dist/`，工程说明见 `wbboard/README.md` |
+| `archive/` | **归档区**：已废弃的旧 WiFi/HTTP 实现（`README-legacy-http.md`、`legacy-entrypoints/`）、已下线的语音工具、旧 server 状态备份，以及 2026-11-02 汇总的一次性脚本（`one-off-scripts/`）、旧 server 残留（`legacy-server/`）、probe 构建产物（`legacy-build-artifacts/`） |
+
+> `artifacts/`（旧 `token-dashboard.html` 生成物）此前已在工作区移除，若需产出按 `tools/pet/` 重新生成。
 
 ## 归档说明
 
@@ -312,6 +333,9 @@ python tools/tones/gen_tones_from_wav.py <素材.wav>
 | `archive/legacy-entrypoints/` | 旧启动脚本 `start-board.sh` / `.bat`、`configure.py`（写 WiFi/bridge 兜底值） |
 | `archive/retired-tools/` | 语音上行工具（语音功能已下线，`WB_CAP_VOICE_UP` 不再声明） |
 | `archive/server-state-backup/` | 旧 server 的 `task_ledger.json` 数据备份 |
+| `archive/one-off-scripts/` | 2026-11-02 从顶层归并的一次性构建/调试脚本与补丁（git 已忽略的历史残留） |
+| `archive/legacy-server/` | 旧 WiFi server 下线的残留目录（`server/`，含 `__pycache__` + 任务账本） |
+| `archive/legacy-build-artifacts/` | 顶层探针工程的 `build/` 构建产物（`probe-spk/`、`adc-probe/`，源码在 `probes/` 下） |
 
 旧 server 源码（`server/`，FastAPI + 5 个数据源）已从工作区删除，
 **完整保留在 git 历史**中（`git log -- server/` 可查，15 个文件）。

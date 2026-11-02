@@ -27,6 +27,7 @@
 
 #include "audio.h"
 #include "battery.h"
+#include "board_display.h"
 #include "esp_heap_caps.h"
 #include "wb_ble.h"
 #include "wb_core.h"
@@ -74,6 +75,7 @@ static int  s_preview_page;     // 预览模式当前停在第几屏（0..6）
 #endif
 static int64_t s_last_linked_ms;
 static int64_t s_last_active_ms;
+static bool s_standby_dimmed;   // 背光当前是否已经按待机档调暗
 
 // ---------------------------------------------------------------------------
 // 投递
@@ -209,6 +211,11 @@ static void handle_frame(const char *frame, size_t len, int64_t now)
     wb_tick_t side;
     const bool redraw = wb_core_apply(&s_state, &ev, now, &side);
     if (side.beep) beep_play(side.beep_kind);
+    if (side.standby_changed && !s_state.standby_page) {
+        /* 这条日志是"待机时被新任务叫醒"的验收入口：主机不连时看不到画面变化，
+         * 只能靠它确认判定链路（status/approval/ask 帧 → 清待机 → 恢复背光）。 */
+        ESP_LOGI(TAG, "检测到新任务/新会话 → 退出待机");
+    }
 
     switch (ev.type) {
     case WB_EV_APPROVAL:
@@ -503,6 +510,22 @@ void wb_console_tick(int64_t now_ms)
 {
     if (!s_ready) return;
 
+    /* 待机亮度：只跟随 standby_page 的边沿，避免每帧重复写 LEDC。
+     * 待机 50%（用户要求），唤醒回正常 100%（控制台目前没有别的用户档位）。
+     * 这里由 LVGL 任务调用，和主循环里的 50%→10fps 降帧一起构成"屏幕侧低功耗"。 */
+    const bool standby = s_state.standby_page;
+    if (standby != s_standby_dimmed) {
+        s_standby_dimmed = standby;
+        board_display_backlight_set(standby ? 50 : 100);
+        /* 与背光同一个边沿切换 BLE 档位：
+         *   待机 200~250ms interval → 激活 30~50ms interval。
+         * 唤醒时先恢复到"正常"档再刷页面，审批/按键回传不会带着省电参数跑。 */
+        wb_ble_set_power_mode(standby);
+        ESP_LOGI(TAG, "背光 → %u%%（%s）", standby ? 50 : 100,
+                 standby ? "待机" : "正常");
+    }
+    wb_ble_poll();
+
     if (s_state.linked && !s_state.offline) {
         s_last_linked_ms = now_ms;
         s_last_active_ms = now_ms;
@@ -528,6 +551,11 @@ void wb_console_tick(int64_t now_ms)
 }
 
 bool wb_console_active(void) { return s_owns_keys; }
+
+bool wb_console_standby_active(void)
+{
+    return s_ready && s_state.standby_page;
+}
 
 void wb_console_toggle_skin(void)
 {

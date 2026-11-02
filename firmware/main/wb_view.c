@@ -27,8 +27,6 @@
 #include "esp_log.h"
 #include "lvgl.h"
 
-#include "wb_eyes.h"
-
 // 由 tools/gen_charset.py + lv_font_conv 生成的既有字库(看板同款)。
 LV_FONT_DECLARE(font_cn_12);
 LV_FONT_DECLARE(font_cn_16);
@@ -128,9 +126,10 @@ typedef struct {
     lv_obj_t *ask_opt[WB_OPT_MAX];
     lv_obj_t *ask_hint;
 
-    // STANDBY（大眼睛待机页）
-    lv_obj_t *sb_idle;       // "已空闲 3 分 12 秒"
-    lv_obj_t *sb_link;       // ● 在线 / ● 离线
+    // STANDBY（待机钟面）
+    lv_obj_t *sb_clock;      // 28px 大号 "21:34"
+    lv_obj_t *sb_date;       // 16px "11月02日 周日"
+    lv_obj_t *sb_status;     // 16px "无人打扰 · 在线" / "● 离线"
 } wb_view_t;
 
 static wb_view_t s_ui;
@@ -655,51 +654,56 @@ static void build_ask(lv_obj_t *scr)
 }
 
 // ---------------------------------------------------------------------------
-// PAGE 6 · STANDBY（大眼睛待机页）
+// PAGE 6 · STANDBY（待机钟面）
 // ---------------------------------------------------------------------------
 //
-// 声音/眼睛的原型来自旧看板（ui_board 的休眠屏）：空转时屏上只剩
-// "两只眼睛 + 时间 + 还在线"。现在移植到控制台，触发条件换成
-// "本地空闲满 3 分钟"（wb_core_tick 里算，见 WB_IDLE_TO_STANDBY_MS）。
+// 触发条件仍是"本地空闲满 3 分钟"（wb_core_tick，见 WB_IDLE_TO_STANDBY_MS）。
+// 2026-11-02 重做：原实现是两只逐像素眼睛 + 两行 12px 暗字，用户实测
+// "待机页是空白" —— 眼睛画布建在别的 screen 上（wb_eyes 是全局单例，
+// ui_board 先 build 就会把画布留在看板页），剩下的 dark 小字在 50% 背光下
+// 几乎看不见。新版砍掉动画画布，改成纯文字钟面：
 //
-// 为什么不做成第 6 个"导航页"（短按能翻到）：用户确认的方案是**空闲自动切**。
-// 单键板只有短按/长按两种手势，导航环已经从 3 页长到 4 页会让"翻三下回到原点"
-// 这条心智失效；而待机页本来就是"没人在用时才出现"的东西。
+//        ┌──────────────────────┐  240x240，四周 12px 安全区
+//        │                      │
+//        │        21:34         │  ← 28px，y=44，近白（主视觉）
+//        │     11月02日 周日     │  ← 16px，y=96，青色
+//        │    无人打扰 · 在线    │  ← 16px，y=130，绿色
+//        │                      │
+//        │     按任意键唤醒      │  ← 12px，y=212，亮灰蓝
+//        └──────────────────────┘
 //
-// 布局（240x240），和原休眠屏一致：
-//        ┌──────────────────┐
-//        │  ╱╲        ╱╲    │  ← 眉毛
-//        │ ◡  ◡      ◡  ◡   │  ← 眼白（画布 y=22..104）
-//        │     已空闲 12 分  │  ← 12px，y=140
-//        │      ● 在线      │  ← 12px，y=196
-//        └──────────────────┘
+// 省电：没有任何定时动画；refresh_standby 只在"分钟/日期/链路"变化时
+// set_text（内部 strcmp 拦重复），所以待机时基本不产生重绘。
 //
-// ⚠ 这里**不建页头页脚**（build_top/build_bottom）：待机页整屏只留眼睛和
-// 两行小字，页头那个页码徽标 + 电池条会让"待机"看起来还在工作。
-// refresh_chrome() 会往 s_ui.link_lbl[STANDBY] 写链路胶囊 —— 那个数组按
-// PAGE_COUNT 定长，待机页对应槽位存在但**没有控件**（NULL 检查在 set_text
-// 里），所以不会崩，也不会画出东西。
+// ⚠ 这里**不建页头页脚**：页头页码徽标 + 电池条会让"待机"看起来还在工作。
+// refresh_chrome() 对 STANDBY 的 link/batt 槽位逐字段判空，NULL 安全。
 static void build_standby(lv_obj_t *scr)
 {
     const wb_palette_t *c = pal();
 
-    // 眼睛：逐像素画布，位置/尺寸在 wb_eyes.h 里（与旧看板完全相同）。
-    // 建失败不致命 —— 待机页会退化成"只有两行字"的纯文字页。
-    if (!wb_eyes_build(scr)) {
-        ESP_LOGW("wb-view", "眼睛画布没建起来，待机页退化为纯文字");
-    }
+    /* 28px 大号时间。font_cn_28 只含 UI 232 字 + ASCII 0x20-0x7E：
+     * "0-9" 和 ":" 都在范围内；未校时显示的「待机」两个字也在这 232 字里
+     * （不能往这里写任意中文，否则会是豆腐块）。 */
+    s_ui.sb_clock = mk_text(scr, &font_cn_28, c->ink, 0, 44, SCR_W);
+    lv_obj_set_style_text_align(s_ui.sb_clock, LV_TEXT_ALIGN_CENTER, 0);
+    set_text(s_ui.sb_clock, "待机");
 
-    // 空闲时长。y=140：眼睛画布到 104，28px 时钟原有位置让给这两行小字 ——
-    // 待机页显示"已空闲多久"比显示"现在几点"更有信息量（时间在这块板上
-    // 本来就没有可靠来源：纯 BLE 模式拿不到 NTP，RTC 也没有电池）。
-    s_ui.sb_idle = mk_text(scr, &font_cn_12, c->dim, 5, 140, 230);
-    lv_obj_set_style_text_align(s_ui.sb_idle, LV_TEXT_ALIGN_CENTER, 0);
-    set_text(s_ui.sb_idle, "");
+    /* 日期：16px（3828 字字库，含 月/日/周/一…日）。 */
+    s_ui.sb_date = mk_text(scr, &font_cn_16, c->cyan, 0, 96, SCR_W);
+    lv_obj_set_style_text_align(s_ui.sb_date, LV_TEXT_ALIGN_CENTER, 0);
+    set_text(s_ui.sb_date, "");
 
-    // 链路状态。待机页也不能丢掉"在线/离线" —— 断链时人会以为设备睡了。
-    s_ui.sb_link = mk_text(scr, &font_cn_12, c->green, 5, 196, 230);
-    lv_obj_set_style_text_align(s_ui.sb_link, LV_TEXT_ALIGN_CENTER, 0);
-    set_text(s_ui.sb_link, "");
+    /* 状态。空闲时不会同时有审批/提问/RUNNING，所以平时是"无人打扰"；
+     * 断链时优先报离线（和总览页的语义一致，不把故障藏起来）。 */
+    s_ui.sb_status = mk_text(scr, &font_cn_16, c->green, 0, 130, SCR_W);
+    lv_obj_set_style_text_align(s_ui.sb_status, LV_TEXT_ALIGN_CENTER, 0);
+    set_text(s_ui.sb_status, "无人打扰 · 在线");
+
+    /* 底部唤醒提示。12px 但比 c->dim 亮一档：50% 背光下仍读得清，
+     * 又不跟主时间抢视线。不做分格/边框 —— 那会看起来像三个按钮。 */
+    lv_obj_t *hint = mk_text(scr, &font_cn_12, 0xAFC6E0, 0, 212, SCR_W);
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
+    set_text(hint, "按任意键唤醒");
 }
 
 // ---------------------------------------------------------------------------
@@ -735,10 +739,10 @@ void wb_view_teardown(void)
     // 先把显示切回看板屏,再删控件 —— 删正在显示的 screen 会让 LVGL 访问悬空指针。
     if (s_prev_screen && s_active) lv_screen_load(s_prev_screen);
 
-    /* 眼睛必须先释放再删 screen：它的定时器每 50ms 会碰画布和缓冲。
-     * 直接删 screen 的话，画布随父容器一起没了，但定时器还在跑，
-     * 下一帧 lv_timer_handler 就是野指针（切外观时必然触发）。 */
-    wb_eyes_free();
+    /* 不要在这里调 wb_eyes_free()：wb_eyes 是 ui_board 与 wb_view 共用的
+     * 全局单例，待机页自从改成纯文字钟面就不再建它。若这里仍然 free，
+     * 会把 ui_board 休眠屏上的画布一起删掉（切换外观时看板黑屏）。
+     * 谁 build 谁 free —— 现在只有 ui_board 拥有它。 */
 
     for (int p = 0; p < PAGE_COUNT; p++) {
         if (s_ui.scr[p]) {
@@ -764,10 +768,8 @@ void wb_view_set_active(bool on)
         s_active = true;
         s_loaded = (wb_page_t)-1;      // 强制下一帧 load
     } else {
-        // 退屏时必须停眼睛：否则它会继续 50ms 一帧地算并 invalidate
-        // 一个已经不在显示的画布。下一次进来 s_loaded 会被重置成 -1，
-        // wb_view_refresh 会重新走 enter 分支。
-        wb_eyes_leave();
+        /* 待机页已无动画（眼睛属于 ui_board 的休眠屏，本模块不再碰它），
+         * 退屏时不需要停任何定时器。下一帧重新进控制台会自然 load 页面。 */
         s_active = false;
         if (s_prev_screen) lv_screen_load(s_prev_screen);
     }
@@ -1142,33 +1144,63 @@ static void refresh_usage(const wb_state_t *st)
     }
 }
 
+/* 把"本地 epoch 秒"折算成公历年月日（Howard Hinnant 的 days_from_civil
+ * 逆算法，只用到整数加减乘除，不依赖 libc 的 gmtime —— ESP-IDF 的
+ * newlib 时区表不可靠，而且我们拿到的是已经按主机时区平移过的秒数）。 */
+static void civil_date_from_days(int64_t z, int *pm, int *pd)
+{
+    z += 719468;
+    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const int64_t doe = z - era * 146097;
+    const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const int64_t mp = (5 * doy + 2) / 153;
+    const int64_t d = doy - (153 * mp + 2) / 5 + 1;
+    const int64_t m = mp + (mp < 10 ? 3 : -9);
+    *pm = (int)m;
+    *pd = (int)d;
+}
+
 static void refresh_standby(const wb_state_t *st, int64_t now_ms)
 {
     const wb_palette_t *c = pal();
-    char buf[48];
+    char buf[32];
 
-    /* 空闲时长：从 idle_since_ms 算起。st->idle_since_ms < 0（当前不空闲，
-     * 例如刚被唤醒还没更新）时显示一句提示而不是负数。 */
-    if (st->idle_since_ms > 0) {
-        const int64_t d = (now_ms - st->idle_since_ms) / 1000;
-        const int sec = d > 0 ? (int)d : 0;
-        if (sec >= 3600) {
-            snprintf(buf, sizeof(buf), "已空闲 %d 时 %d 分",
-                     sec / 3600, (sec % 3600) / 60);
-        } else if (sec >= 60) {
-            snprintf(buf, sizeof(buf), "已空闲 %d 分 %d 秒", sec / 60, sec % 60);
-        } else {
-            snprintf(buf, sizeof(buf), "已空闲 %d 秒", sec);
-        }
-        set_text(s_ui.sb_idle, buf);
+    /* 大号时间：clock_local_s 是主机最近一次校时的"本地 epoch 秒"，
+     * 加上设备自己的单调时钟增量。每 2s 一帧状态都会重新校准，所以
+     * 不会累积漂移；主机没带时间（旧主机/还没连上）时显示「待机」。 */
+    if (st->clock_local_s > 0) {
+        const int64_t local_s = st->clock_local_s +
+                                (now_ms - st->clock_sync_ms) / 1000;
+        const int sod = (int)(local_s % 86400);
+        snprintf(buf, sizeof(buf), "%02d:%02d", sod / 3600, (sod % 3600) / 60);
+        set_text(s_ui.sb_clock, buf);
+
+        const int64_t days = local_s / 86400;
+        int mm, dd;
+        civil_date_from_days(days, &mm, &dd);
+        /* 1970-01-01 是周四，所以 (days + 4) % 7 正好以周日为 0。 */
+        static const char *const k_week[] = {
+            "周日", "周一", "周二", "周三", "周四", "周五", "周六"
+        };
+        const int wd = (int)((days + 4) % 7);
+        snprintf(buf, sizeof(buf), "%d月%02d日 %s", mm, dd, k_week[wd]);
+        set_text(s_ui.sb_date, buf);
     } else {
-        set_text(s_ui.sb_idle, "按任意键唤醒");
+        set_text(s_ui.sb_clock, "待机");
+        set_text(s_ui.sb_date, "");
     }
 
+    /* 状态只在文字真的变化时才改颜色：lv_obj_set_style_text_color 即使
+     * 值相同也可能触发一次 invalidate，而待机页整屏不该被 10fps 无谓重绘。 */
     const bool linked = st->linked && !st->offline;
-    set_text(s_ui.sb_link, linked ? "● 在线" : "● 离线");
-    lv_obj_set_style_text_color(s_ui.sb_link,
-                                lv_color_hex(linked ? c->green : c->red), 0);
+    const char *status = linked ? "无人打扰 · 在线" : "● 离线";
+    const char *cur = lv_label_get_text(s_ui.sb_status);
+    if (!cur || strcmp(cur, status) != 0) {
+        lv_label_set_text(s_ui.sb_status, status);
+        lv_obj_set_style_text_color(s_ui.sb_status,
+                                    lv_color_hex(linked ? c->green : c->red), 0);
+    }
 }
 
 void wb_view_refresh(const wb_state_t *st, int64_t now_ms)
@@ -1185,12 +1217,8 @@ void wb_view_refresh(const wb_state_t *st, int64_t now_ms)
     }
 
     if (page != s_loaded) {
-        /* 眼睛动画只在待机页跑。进的时候 reset（从闭眼开始睁，像被叫醒），
-         * 出的时候立刻 pause —— 它每 50ms 重算一次画布并 invalidate，
-         * 留在后台空转等于白烧 SPI 带宽。 */
-        if (page == WB_PAGE_STANDBY) wb_eyes_enter();
-        else if (s_loaded == WB_PAGE_STANDBY) wb_eyes_leave();
-
+        /* 切页时直接 load 已建好的 screen：待机页与其它页在 wb_view_build()
+         * 里一次性建好，进出待机不重建 → 不闪屏、不会丢控件状态。 */
         lv_screen_load(s_ui.scr[page]);
         s_loaded = page;
     }

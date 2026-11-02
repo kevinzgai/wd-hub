@@ -30,6 +30,10 @@ void wb_console_tick(int64_t now_ms);
 // 控制台当前是否占用屏幕与按键（按键任务每轮现问，不缓存）。
 bool wb_console_active(void);
 
+// 当前是否停在待机页。主循环据此把 LVGL 帧率从 20fps 降到约 10fps
+// （背光 50% 由 wb_console_tick 自己按待机页边沿切换）。
+bool wb_console_standby_active(void);
+
 // 按键任务投递（key: "OK" / "UP" / "DOWN"）。只入队，不阻塞。
 void wb_console_key(const char *key, bool long_press);
 

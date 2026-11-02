@@ -23,6 +23,15 @@ esp_err_t wb_ble_start(wb_ble_frame_cb_t on_frame);
 
 bool wb_ble_connected(void);
 
+// 待机/激活时协商 BLE 连接参数。只改 connection interval，
+// slave latency 固定为 0，避免"省电把唤醒拖慢"。
+// 未连接时只记录目标档位，连接建立后自动套用。
+void wb_ble_set_power_mode(bool low_power);
+
+// 由 UI 主循环周期调用。激活后若主机把连接间隔仍留在待机档，
+// 这里会做有限次重试，避免"退出待机但射频还停在 200ms"。
+void wb_ble_poll(void);
+
 // 发一帧(自动按 MTU 切片 notify)。链路未连接时返回 false。
 bool wb_ble_send(const char *data, size_t len);
 

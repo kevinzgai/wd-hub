@@ -15,6 +15,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
@@ -52,12 +53,45 @@ static uint16_t s_tx_handle;
 static uint8_t s_addr_type;
 static volatile bool s_hello_pending;
 static bool s_inited;
+static bool s_low_power;              // 待机档：更慢的连接间隔
+static int s_active_retry_left;       // 激活后恢复快参数的剩余重试次数
+static int64_t s_active_retry_at_us;  // 下一次重试时间
 static SemaphoreHandle_t s_tx_lock;   // 串行化 notify 切片，见 wb_ble_send
+
+// 连接参数单位：interval 1.25ms，supervision timeout 10ms。
+// 正常档 30~50ms：审批/按键回传要快。
+// 待机档 200~250ms：射频唤醒次数约降到 1/4~1/5；latency 固定 0，
+// 主机 2s 一次的 status 帧最多多等 250ms，不会因为省电把"新任务唤醒"拖慢。
+#define WB_CONN_ITVL_ACTIVE_MIN 24
+#define WB_CONN_ITVL_ACTIVE_MAX 40
+#define WB_CONN_ITVL_LOW_MIN    160
+#define WB_CONN_ITVL_LOW_MAX    200
+#define WB_CONN_TIMEOUT_ACTIVE  400   // 4s
+#define WB_CONN_TIMEOUT_LOW     600   // 6s
+#define WB_CONN_ITVL_FAST_MAX   80    // <=100ms 视为已恢复正常档
 
 static char s_rx[WB_RX_BUF];
 static size_t s_rx_len;
 
 static int gap_event(struct ble_gap_event *event, void *arg);
+
+// 把"当前档位"写给控制器。Windows 主机可能拒绝或取自己的最小值，
+// 因此每次实际生效后都在 CONN_UPDATE 事件里打印真实参数，便于验收。
+static void apply_conn_params(const char *why)
+{
+    if (s_conn == WB_NO_CONN) return;
+
+    struct ble_gap_upd_params params = {0};
+    params.itvl_min = s_low_power ? WB_CONN_ITVL_LOW_MIN : WB_CONN_ITVL_ACTIVE_MIN;
+    params.itvl_max = s_low_power ? WB_CONN_ITVL_LOW_MAX : WB_CONN_ITVL_ACTIVE_MAX;
+    params.latency = 0;
+    params.supervision_timeout = s_low_power ? WB_CONN_TIMEOUT_LOW : WB_CONN_TIMEOUT_ACTIVE;
+
+    const int rc = ble_gap_update_params(s_conn, &params);
+    ESP_LOGI(TAG, "请求连接参数(%s): itvl %u-%u(1.25ms) latency 0 timeout %u(10ms) rc=%d",
+             why, (unsigned)params.itvl_min, (unsigned)params.itvl_max,
+             (unsigned)params.supervision_timeout, rc);
+}
 
 static void advertise(void)
 {
@@ -200,6 +234,14 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_conn = event->connect.conn_handle;
             s_rx_len = 0;
             ESP_LOGI(TAG, "主机已连接 conn=%u", (unsigned)s_conn);
+            struct ble_gap_conn_desc desc;
+            if (ble_gap_conn_find(s_conn, &desc) == 0) {
+                ESP_LOGI(TAG, "初始连接参数: itvl=%u(1.25ms) latency=%u timeout=%u(10ms)",
+                         (unsigned)desc.conn_itvl, (unsigned)desc.conn_latency,
+                         (unsigned)desc.supervision_timeout);
+            }
+            /* 连上就套当前档位：待机中重连时直接省电，避免先按主机默认跑一段。 */
+            apply_conn_params(s_low_power ? "重连-待机" : "连接-正常");
         } else {
             // 连接失败(主机中途放弃等):立即回到可被发现状态。
             ESP_LOGW(TAG, "连接失败 status=%d,重新广播", event->connect.status);
@@ -225,6 +267,18 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_MTU:
         ESP_LOGI(TAG, "MTU 协商为 %u", event->mtu.value);
         return 0;
+
+    case BLE_GAP_EVENT_CONN_UPDATE: {
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(event->conn_update.conn_handle, &desc) == 0) {
+            ESP_LOGI(TAG, "连接参数已生效: itvl=%u(1.25ms, 约%ums) latency=%u timeout=%u(10ms)",
+                     (unsigned)desc.conn_itvl, (unsigned)(desc.conn_itvl * 5 / 4),
+                     (unsigned)desc.conn_latency, (unsigned)desc.supervision_timeout);
+        } else {
+            ESP_LOGW(TAG, "连接参数更新完成但读不到 desc");
+        }
+        return 0;
+    }
 
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (event->subscribe.attr_handle == s_tx_handle && event->subscribe.cur_notify) {
@@ -264,6 +318,12 @@ esp_err_t wb_ble_start(wb_ble_frame_cb_t on_frame)
 {
     if (s_inited) return ESP_ERR_INVALID_STATE;
     s_on_frame = on_frame;
+
+#if CONFIG_BT_CTRL_MODEM_SLEEP
+    ESP_LOGI(TAG, "控制器 modem sleep 已启用（sleep mode=%d）", CONFIG_BT_CTRL_SLEEP_MODE_EFF);
+#else
+    ESP_LOGW(TAG, "控制器 modem sleep 未启用");
+#endif
 
     s_tx_lock = xSemaphoreCreateMutex();
     if (!s_tx_lock) {
@@ -311,6 +371,41 @@ esp_err_t wb_ble_start(wb_ble_frame_cb_t on_frame)
 bool wb_ble_connected(void)
 {
     return s_conn != WB_NO_CONN;
+}
+
+void wb_ble_set_power_mode(bool low_power)
+{
+    if (s_low_power == low_power) return;
+    s_low_power = low_power;
+    if (low_power) {
+        s_active_retry_left = 0;
+    } else {
+        /* Windows 有时会把外设请求的"变快"忽略掉（实测待机 247ms 的
+         * 请求被接受，但激活后的 30~50ms 请求不生效）。这里留 3 次
+         * 1s 间隔重试，等主机下一次 LL 窗口再谈。 */
+        s_active_retry_left = 3;
+        s_active_retry_at_us = esp_timer_get_time() + 1000000;
+    }
+    apply_conn_params(low_power ? "待机" : "激活");
+}
+
+void wb_ble_poll(void)
+{
+    if (s_conn == WB_NO_CONN || s_low_power || s_active_retry_left <= 0) return;
+    if (esp_timer_get_time() < s_active_retry_at_us) return;
+
+    struct ble_gap_conn_desc desc;
+    if (ble_gap_conn_find(s_conn, &desc) != 0) return;
+    if (desc.conn_itvl <= WB_CONN_ITVL_FAST_MAX) {
+        s_active_retry_left = 0;
+        return;
+    }
+
+    s_active_retry_left--;
+    s_active_retry_at_us = esp_timer_get_time() + 1000000;
+    ESP_LOGW(TAG, "激活后连接间隔仍为 %u(1.25ms)，重试 %d 次",
+             (unsigned)desc.conn_itvl, s_active_retry_left);
+    apply_conn_params("激活-重试");
 }
 
 bool wb_ble_take_hello(void)

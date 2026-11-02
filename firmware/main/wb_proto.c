@@ -67,6 +67,9 @@ static bool decode_usage(const wb_json_t *j, int root, wb_ev_t *ev)
 static bool decode_status(const wb_json_t *j, int root, wb_ev_t *ev)
 {
     ev->count = wb_json_int(j, wb_json_obj_get(j, root, "count"), 0);
+    // 主机本地墙钟（见 wb_proto.h 的 clock_s 注释）。缺键/旧主机为 0，
+    // 由 wb_core 判定是否可信，这里不做范围校验。
+    ev->clock_s = (int64_t)wb_json_num(j, wb_json_obj_get(j, root, "t"), 0.0);
     const int tasks = wb_json_obj_get(j, root, "tasks");
     ev->n_sess = 0;
     if (!wb_json_is_arr(j, tasks)) return true;   // 空列表是合法的

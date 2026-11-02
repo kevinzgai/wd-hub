@@ -40,6 +40,19 @@ git show <commit>:server/api_server.py # 取出某个版本的文件
 git checkout <commit> -- server/      # 整体恢复到工作区
 ```
 
+> 2026-11-02 整理目录时，磁盘上残留了一个 `server/` 目录（旧 server 下线的
+> `__pycache__` + `state/task_ledger.json` 账本，无代码引用、git 未跟踪），
+> 已整体移入 `legacy-server/`。其账本在 `server-state-backup/` 另有备份。
+
+## 2026-11-02 目录整理新增
+
+| 路径 | 是什么 | 为何保留 |
+|---|---|---|
+| `legacy-server/server/` | 旧 WiFi server 下线的残留（`__pycache__` + 任务账本），已确认无代码引用 | 与"旧 server 已下线"的归档语义归并，账本历史不丢失 |
+| `legacy-build-artifacts/probe-spk/` | 喇叭探针的 `build/` 构建产物（源码在 `probes/probe-spk/`） | 构建产物可重编，归档后 `probes/` 保持纯净 |
+| `legacy-build-artifacts/adc-probe/` | 电池 ADC 探针的 `build/` 构建产物（源码在 `probes/adc-probe/`） | 同上 |
+| `one-off-scripts/` | 顶层散落的 26 个一次性脚本/补丁（`.build_stages.py`、`.mn.*.patch`、`.h*.txt` 等，git 已忽略） | 属 10 月 27 日的分批构建调试产物，归档可追溯但不再占顶层 |
+
 ## 什么该放这里
 
 - 架构变更后不再参与构建/运行的东西

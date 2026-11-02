@@ -135,6 +135,17 @@ typedef struct {
     bool standby_page;       // 当前停在待机页
     int64_t idle_since_ms;   // 空闲起点；<0 表示"现在不空闲"
 
+    /* 待机页大号时间用的主机墙钟快照。
+     *
+     * 设备自身没有可靠时间源：纯 BLE 不联网取不到 NTP，RTC 也没有电池，
+     * 所以由主机在 status_list 里带 "t"（主机本地 epoch 秒）。收到后记下
+     * "那一刻设备 uptime 是多少"，之后用设备自己的单调时钟往前推 ——
+     * 这样主机 2s 一帧的间隔不会让秒针抖，断链后也能继续走。
+     *
+     * clock_local_s <= 0 = 还没校时（旧主机/刚开机），界面显示「待机」。 */
+    int64_t clock_local_s;
+    int64_t clock_sync_ms;
+
     /* 今日 token 消耗（第 4 个导航页）。
      *
      * 数据来自主机的 usage 帧（30s 一跳，不是 status 的 2s）——

@@ -11,6 +11,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* 初始化 SPI 总线、ST7789 面板、LVGL 显示对象和 DMA 帧缓冲。
  *
  * ⚠ 必须在 lv_init() 之后调用 —— 内部要调 lv_display_create /
@@ -22,3 +26,7 @@ void board_display_init(void);
 
 /* 设置背光亮度（0..100，越界按 100 处理）。 */
 void board_display_backlight_set(uint32_t percent);
+
+#ifdef __cplusplus
+}
+#endif

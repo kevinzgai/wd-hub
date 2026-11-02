@@ -4,7 +4,7 @@
 
 运行 `python wb_app.py` 即完成：
   * 拉起 daemon：BLE 连接 Workbuddy BOX + 状态推流 + 周期积分 + 审批遥控内核（TCP IPC :48765）
-  * 启动内置 Web UI：浏览器打开 http://127.0.0.1:8000
+  * 启动内置 Web UI：浏览器打开 http://127.0.0.1:8080
        - 设备连接状态 + daemon 启停按钮
        - 数据看板（会话列表 + 积分余额/使用率）
        - 实时日志面板
@@ -14,7 +14,7 @@
 用法：
   python wb_app.py                    # 启动 daemon + Web UI（默认）
   python wb_app.py --mac CC:..:E6     # 指定设备地址（否则扫描）
-  python wb_app.py --web-port 8080    # 覆盖 Web 端口（默认 8000）
+  python wb_app.py --web-port 8080    # 覆盖 Web 端口（默认 8080）
   python wb_app.py --credit-interval 0# 禁用周期积分
   python wb_app.py --no-daemon        # 只起 Web UI，不自动启动 daemon
 """
@@ -25,6 +25,7 @@ import asyncio
 import json
 import os
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -1145,9 +1146,15 @@ def _local_listen_port_pid() -> dict[int, int]:
                     continue
         return port_pid
     try:
+        # Windows 中文系统下 netstat 走 CREATE_NO_WINDOW 时会输出 GBK（表头
+        # "活动连接/协议…"），而进程环境 PYTHONUTF8=1 时 text=True 按 UTF-8
+        # 解码会失败，读线程报 UnicodeDecodeError 并让 stdout 变成 None。
+        # errors="replace" 保证按 ASCII 的 TCP 行仍能正常解析；stdout or ""
+        # 兜住任何解码异常，避免 None.splitlines() 把整个 /api/wb-live 打挂。
         out = subprocess.run(["netstat", "-ano", "-p", "tcp"],
                              capture_output=True, text=True, timeout=8,
-                             creationflags=SUB_NO_WINDOW).stdout
+                             creationflags=SUB_NO_WINDOW,
+                             encoding="utf-8", errors="replace").stdout or ""
     except Exception:
         return {}
     for line in out.splitlines():
@@ -1368,7 +1375,13 @@ def wb_rest(port: int, path: str, secret: str, method: str = "GET",
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", "replace")
+        # 有些 worker 端口会返回 400 且 body 迟迟不结束，e.read() 超时会抛
+        # TimeoutError —— 它发生在 except 块内，下面那层 except 接不住，会
+        # 直接冒到 /api/wb-live。读 body 再兜一层，坏端口只算这一条失败。
+        try:
+            return e.code, e.read().decode("utf-8", "replace")
+        except Exception:
+            return e.code, ""
     except Exception as e:
         return None, str(e)
 
@@ -1457,7 +1470,13 @@ def _wb_http(port: int, path: str, secret: str, method: str = "GET",
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", "replace")
+        # 有些 worker 端口会返回 400 且 body 迟迟不结束，e.read() 超时会抛
+        # TimeoutError —— 它发生在 except 块内，下面那层 except 接不住，会
+        # 直接冒到 /api/wb-live。读 body 再兜一层，坏端口只算这一条失败。
+        try:
+            return e.code, e.read().decode("utf-8", "replace")
+        except Exception:
+            return e.code, ""
     except Exception as e:
         return None, str(e)
 
@@ -4460,6 +4479,13 @@ class UnifiedDaemon:
         # 缩水闸门量的帧比实发帧少 11~13B，470~480B 的"合规"帧实发 481~493B
         # 越线，日志每 2s 刷一条「帧超长」而缩水逻辑形同虚设（2026-09-30 修复）。
         st["ts"] = int(time.time() - self._start_time)
+        # 待机页大号时间的数据源。设备没有 RTC 电池、纯 BLE 也拿不到 NTP，
+        # 只能用主机墙钟：time.timezone 是"本地时间相对 UTC 的秒差（西为正）"，
+        # epoch - timezone 就是"把 UTC 秒数平移到本地墙钟"的秒数，设备拿到后
+        # 用 %86400 / 日历换算即可，不需要知道时区规则。
+        # 单独用 "t" 而不复写 ts：ts 是主机 uptime，别的工具可能在看；
+        # 老固件对未知键直接忽略，因此这条是向后兼容的新增字段（约 15B）。
+        st["t"] = int(time.time() - time.timezone)
         oversize = self._shrink_status(st)
         if oversize > BLE_FRAME_MAX:
             # 压到极限仍超长：整帧跳过，避免每 2s 一次注定被设备拒收的写。
@@ -7150,7 +7176,15 @@ async function refreshWbLive(){
     }
     if($('wbCliTip')) $('wbCliTip').textContent = !d.cli ? '未找到 WorkBuddy CLI'
       : (gw.online ? '网关在线' : 'CLI 兜底需登录');
-  }catch(e){}
+  }catch(e){
+    // 接口失败必须显式回写，否则占位文案「检测中…」会一直挂在那儿。
+    const st = $('gwState');
+    if(st){ st.className = 'chipst er'; st.textContent = '读取失败'; }
+    const box = $('portList');
+    if(box) box.innerHTML = '<div class="port empty">状态读取失败 · 请点刷新重试</div>';
+    const el = $('wbLiveBadge');
+    if(el){ el.className = 'chipst er'; el.textContent = '网关状态读取失败'; }
+  }
 }
 
 function wbShow(res){
@@ -7310,6 +7344,8 @@ renderLog();
 setInterval(refreshStatus, 2000);
 setInterval(refreshLog, 2000);
 setInterval(tickUptime, 1000);
+// 网关/端口状态每 10s 自刷新：后端异常时由 catch 写成「读取失败」而不是停在「检测中…」。
+setInterval(refreshWbLive, 10000);
 </script>
 </body>
 </html>
@@ -7474,7 +7510,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 class WebServer:
     def __init__(self, st: AppState, controller: DaemonController,
-                 host: str = "127.0.0.1", port: int = 8000) -> None:
+                 host: str = "127.0.0.1", port: int = 8080) -> None:
         self._st = st
         self._controller = controller
         self._host = host
@@ -7787,11 +7823,23 @@ def _macos_ble_precheck() -> str:
             "   首次会弹出「Terminal 想要使用蓝牙」，点「允许」即可。")
 
 
+def _lan_ip() -> str:
+    """取本机局域网 IP，用来提示手机端该填哪个地址。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("223.5.5.5", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="WorkBuddy 控制台（daemon + 本地 Web UI）")
     parser.add_argument("--mac", help="设备 BLE 地址（否则扫描）")
     parser.add_argument("--port", type=int, default=IPC_PORT, help="IPC 审批端口（默认 48765）")
-    parser.add_argument("--web-port", type=int, default=8000, help="Web UI 端口（默认 8000）")
+    parser.add_argument("--web-port", type=int, default=8080, help="Web UI 端口（默认 8080）")
+    parser.add_argument("--web-host", default="127.0.0.1",
+                        help="Web UI 监听地址（默认 127.0.0.1 仅本机；手机访问填 0.0.0.0）")
     parser.add_argument("--credit-interval", type=float, default=CREDIT_INTERVAL,
                         help="周期积分推送秒数（0=禁用）")
     parser.add_argument("--no-daemon", action="store_true", help="只起 Web UI，不自动启动 daemon")
@@ -7854,7 +7902,7 @@ def main() -> int:
             return 2
 
     try:
-        web = WebServer(st, controller, port=args.web_port)
+        web = WebServer(st, controller, host=args.web_host, port=args.web_port)
         web.start()
     except OSError as exc:
         print(f"Web UI 启动失败（端口 {args.web_port} 可能被占用）: {exc}", file=sys.stderr)
@@ -7877,6 +7925,8 @@ def main() -> int:
             st.log("[app] daemon 已在运行")
 
     st.log(f"[app] 浏览器打开 http://127.0.0.1:{args.web_port} 查看控制台")
+    if args.web_host in ("0.0.0.0", "::", ""):
+        st.log(f"[app] 手机端填 http://{_lan_ip()}:{args.web_port}（需同一局域网）")
 
     if args.tray:
         if not _ensure_pystray():

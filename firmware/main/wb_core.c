@@ -56,6 +56,18 @@ int wb_core_hidden_sessions(const wb_state_t *st)
     return 0;
 }
 
+/* 待机页被"新任务/新会话/审批/提问"叫醒：恢复正常的页面选择与空闲计时。
+ * 背光恢复由 wb_console_tick() 根据 standby_page 的边沿统一处理。 */
+static void wake_from_standby(wb_state_t *st, wb_tick_t *out)
+{
+    if (!st->standby_page) return;
+    st->standby_page = false;
+    st->idle_since_ms = -1;
+    out->standby_changed = true;
+    out->page_changed = true;
+    out->redraw = true;
+}
+
 static void maybe_beep(wb_state_t *st, wb_beep_kind_t kind, int64_t now_ms, wb_tick_t *out)
 {
     if (st->beep_vol <= 0) return;   // 静音档:不出声,但事件本身仍然记录
@@ -81,9 +93,49 @@ bool wb_core_apply(wb_state_t *st, const wb_ev_t *ev, int64_t now_ms, wb_tick_t 
         }
 
         const int n = ev->n_sess < WB_MAX_SESS ? ev->n_sess : WB_MAX_SESS;
+
+        /* 待机时判断"是否有新任务/新活跃会话"：
+         *   1) 从没有 RUNNING 变成有 RUNNING；
+         *   2) 列表里出现了旧列表没有的 name+model（主机不传 sid，
+         *      设备只能靠这两个字段做身份指纹）。
+         * 新会话只在非 COMPLETED 时算"活跃"，避免旧会话被最近活动
+         * 顶进前三条时误唤醒。
+         *
+         * 注意必须在新数据覆盖 st->sess 之前比较。 */
+        const bool was_standby = st->standby_page;
+        const int prev_running = wb_core_running_count(st);
+        int now_running = 0;
+        bool new_active = false;
+        for (int i = 0; i < n; i++) {
+            const bool running = strcmp(ev->sess[i].state, "RUNNING") == 0;
+            if (running) now_running++;
+            if (!running && strcmp(ev->sess[i].state, "COMPLETED") == 0) continue;
+            bool seen = false;
+            for (int j = 0; j < prev_n; j++) {
+                if (strcmp(ev->sess[i].name, st->sess[j].name) == 0 &&
+                    strcmp(ev->sess[i].model, st->sess[j].model) == 0) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) new_active = true;
+        }
+
         for (int i = 0; i < n; i++) st->sess[i] = ev->sess[i];
         st->n_sess = n;
         st->count = ev->count;
+
+        /* 主机墙钟校时。阈值 1.5e9 ≈ 2017-07，用来把"老主机误发的 uptime
+         * 秒数"挡在外面（那只有几千到几百万）。每帧都刷新基准，等于用
+         * 主机时间持续校准设备单调时钟，避免长时间待机后慢慢漂走。 */
+        if (ev->clock_s >= 1500000000LL) {
+            st->clock_local_s = ev->clock_s;
+            st->clock_sync_ms = now_ms;
+        }
+
+        if (was_standby && (new_active || (prev_running == 0 && now_running > 0))) {
+            wake_from_standby(st, side);
+        }
 
         // 任务跑完:同一序号上从 RUNNING 变成 COMPLETED/IDLE 即提示一声。
         for (int i = 0; i < n && i < prev_n; i++) {
@@ -120,6 +172,7 @@ bool wb_core_apply(wb_state_t *st, const wb_ev_t *ev, int64_t now_ms, wb_tick_t 
             st->appr.deadline_ms = now_ms + WB_APPROVAL_TTL_MS;
             maybe_beep(st, WB_BEEP_APPROVAL, now_ms, side);
         }
+        wake_from_standby(st, side);
         redraw = true;
         break;
 
@@ -159,6 +212,7 @@ bool wb_core_apply(wb_state_t *st, const wb_ev_t *ev, int64_t now_ms, wb_tick_t 
                 maybe_beep(st, WB_BEEP_ASK, now_ms, side);
             }
         }
+        wake_from_standby(st, side);
         redraw = true;
         break;
 
@@ -339,6 +393,17 @@ void wb_core_goto_page(wb_state_t *st, wb_page_t page)
      * 短按只是在改 rack/run 标志，而 standby_page 还压在上面，
      * wb_core_page() 继续返回 STANDBY —— 表现就是"按了没反应"。 */
     st->standby_page = false;
+    /* 唤醒/翻页必须同时把空闲计时清零。
+     *
+     * 漏了这一句的后果（实测回归）：待机页按键后 standby_page 刚被清掉，
+     * 控制台任务同一轮紧接着调 wb_core_tick()，此时 idle_since_ms 还停在
+     * 3 分钟前的时刻，tick 立刻判定"仍然空闲超时"又把 standby_page 置回 true。
+     * LVGL 任务根本看不到这次唤醒边沿 —— 背光留在 50%、页面退回大眼睛，
+     * 用户看到的就是"待机时按键毫无反应"。
+     *
+     * 置 -1 后下一次 tick 会从当前时刻重新开始空闲计时，
+     * 与 wake_from_standby() 的做法保持一致。 */
+    st->idle_since_ms = -1;
 
     /* 压住自动切页。三页里只有运行页是"自动切页的目标"，
      * 翻到总览/会话列表时若不压，tick 下一轮（≤100ms）就会因为

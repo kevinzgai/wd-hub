@@ -153,6 +153,11 @@ int main(void)
         printf("      -> %s\n", pg(wb_core_page(&s)));
         ck(wb_core_page(&s) == WB_PAGE_STATUS, "按键唤醒回总览");
         ck(!s.standby_page, "待机标志已清（不能压在上面导致按了没反应）");
+        /* 只清 standby 标志还不够：控制台任务在同一轮紧接着调 wb_core_tick()，
+         * 若空闲计时没一并清零，tick 会判定"仍然空闲超时"立刻把待机页压回去，
+         * 唤醒边沿被吃掉 —— 真机表现就是"待机时按键没反应"。 */
+        wb_core_tick(&s, now + 1, &t);
+        ck(!s.standby_page, "唤醒后不会被下一轮 tick 压回待机页");
     }
 
     printf("\n失败数: %d\n", fails);
