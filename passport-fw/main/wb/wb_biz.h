@@ -38,6 +38,7 @@ typedef struct {
     bool ask;
     int ask_id;
     int ask_ans;       // 0 = 只读
+    int ask_multi;
     int n_opts;
     char text[WB_TEXT_LEN];
     char opt[WB_OPT_MAX][WB_OPT_LEN];
@@ -45,6 +46,7 @@ typedef struct {
     wb_page_t page;
     int sel;           // 总览：会话下标；审批：0=允许 1=拒绝；提问：选项下标
     bool busy;         // 有 RUNNING 会话或待处理审批/提问
+    int beep_vol;      // 主机 cfg.beep_vol，<=0 表示静音
 } wb_view_t;
 
 typedef void (*wb_biz_change_cb_t)(void);
@@ -64,6 +66,9 @@ void wb_biz_set_connected(bool connected);
 void wb_biz_move(int delta);
 void wb_biz_confirm(void);
 void wb_biz_back(void);
+
+// 主机 cfg.beep_test：取走一次性的“测试提示音”请求。
+bool wb_biz_take_test_beep(void);
 
 // 上行帧。
 bool wb_biz_send_hello(void);

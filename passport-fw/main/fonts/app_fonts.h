@@ -27,6 +27,10 @@ LV_FONT_DECLARE(pomodoro_digits_48);
 LV_FONT_DECLARE(vocab_font_16);
 // 背单词应用的启动器卡片标题(20px,仅「背单词」三字,回退 ui_font_20)。
 LV_FONT_DECLARE(vocab_title_20);
+// WB 看板 V2 专用：12px（ASCII + buddy 全字符集，供模型/消息/提示等动态文案）
+// 与 28px（状态主字/审批问句/离线/时钟数字）。生成参数见文件头 Opts。
+LV_FONT_DECLARE(wb_font_12);
+LV_FONT_DECLARE(wb_font_28);
 
 #define APP_FONT_BODY  (&radio_font)
 #define APP_FONT_TITLE (&radio_font_title)

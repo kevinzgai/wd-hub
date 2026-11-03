@@ -30,6 +30,8 @@ idf_component_register(
         "fonts/vocab_font_16.c"
         "fonts/vocab_title_20.c"
         "fonts/home_font_12.c"
+        "fonts/wb_font_12.c"
+        "fonts/wb_font_28.c"
         "apps/radio/app_radio.cc"
         "apps/radio/radio_catalog.cc"
         "apps/radio/radio_display_settings.cc"
@@ -71,6 +73,7 @@ idf_component_register(
         "wb/wb_link.c"
         "wb/wb_biz.c"
         "wb/wb_power.c"
+        "wb/wb_audio.c"
         "wb/wb_ui.cc"
     INCLUDE_DIRS
         "."

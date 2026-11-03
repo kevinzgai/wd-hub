@@ -20,7 +20,10 @@
 static const char *TAG = "wb_biz";
 
 #define WB_QUEUE_DEPTH 4
-#define WB_TASK_STACK  4096
+// 4096 -> 8192：handle_frame 的 wb_ev_t 局部变量 + newlib vfprintf 在
+// “帧解析失败”这条 ESP_LOGW 上会越界（实测 Stack protection fault，
+// Detected in task "wb_task"，MEPC 落在 _vfprintf_r）。
+#define WB_TASK_STACK  8192
 #define WB_TASK_PRIO   4
 #define WB_APPROVAL_ID_NONE (-1)
 
@@ -38,6 +41,7 @@ static wb_view_t s_view;
 static int s_last_n_sess;
 static bool s_last_running[WB_MAX_SESS];
 static unsigned s_wake_bits;
+static bool s_test_beep;
 static int s_answered_approval_id = WB_APPROVAL_ID_NONE;
 static bool s_approval_auto = true;   // 长按 DOWN 返回总览后不再自动弹回审批页
 
@@ -121,6 +125,7 @@ static void apply_ask_locked(const wb_ev_t *ev)
     s_view.ask = true;
     s_view.ask_id = ev->ask_id;
     s_view.ask_ans = ev->ask_ans;
+    s_view.ask_multi = ev->ask_multi;
     s_view.n_opts = ev->n_opts;
     snprintf(s_view.text, sizeof(s_view.text), "%s", ev->text);
     for (int i = 0; i < ev->n_opts; ++i)
@@ -172,8 +177,13 @@ static void handle_frame(const wb_frame_msg_t *msg)
         apply_ask_end_locked(ev.ask_id);
         changed = true;
         break;
-    case WB_EV_CREDIT:
     case WB_EV_CFG:
+        // 主机音量设置：<=0 静音；beep_test 只请求一次试听，不改界面。
+        s_view.beep_vol = ev.beep_vol;
+        if (ev.beep_test) s_test_beep = true;
+        changed = true;
+        break;
+    case WB_EV_CREDIT:
     case WB_EV_MSG:
         changed = true;   // 仅 ACK，不改界面
         break;
@@ -223,6 +233,7 @@ bool wb_biz_start(wb_biz_change_cb_t on_change)
 
     memset(&s_view, 0, sizeof(s_view));
     s_view.page = WB_PAGE_OVERVIEW;
+    s_view.beep_vol = 100;   // 与 S3 的 BEEP_VOL_DEFAULT 对齐，连上后以 cfg 覆盖
     s_answered_approval_id = WB_APPROVAL_ID_NONE;
 
     s_mutex = xSemaphoreCreateMutex();
@@ -261,6 +272,15 @@ unsigned wb_biz_take_wake(void)
     s_wake_bits = 0;
     view_unlock();
     return bits;
+}
+
+bool wb_biz_take_test_beep(void)
+{
+    view_lock();
+    const bool pending = s_test_beep;
+    s_test_beep = false;
+    view_unlock();
+    return pending;
 }
 
 void wb_biz_set_connected(bool connected)
