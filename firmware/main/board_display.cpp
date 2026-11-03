@@ -172,4 +172,11 @@ void board_display_init(void)
     // 两次调用的净效果都是"背光处于关闭状态"。
     backlight_init();
     board_display_backlight_set(0);
+
+    // 初始化结果日志：上面全是 ESP_ERROR_CHECK，能走到这里就说明
+    // SPI/面板/复位/上显全部成功。上板时不再需要靠"没报错"去猜。
+    ESP_LOGI(TAG, "显示就绪: ST7789 %dx%d, SPI host=%d mode=%d %dMHz, RST=%d, BL=%d",
+             BOARD_LCD_H_RES, BOARD_LCD_V_RES, (int)BOARD_LCD_SPI_HOST,
+             BOARD_LCD_SPI_MODE, (int)(BOARD_LCD_PIXEL_CLK / 1000000),
+             (int)BOARD_LCD_RST, (int)BOARD_LCD_BL);
 }

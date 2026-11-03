@@ -768,9 +768,18 @@ void wb_console_start(void)
     /* 栈放 PSRAM：开蓝牙后内部 RAM 只剩十几 KB，8192×2 的看板任务已经
      * 起不来了（实测 "lvgl 任务创建失败"）。控制台任务只做 JSON 解析和
      * 状态机推进，对栈访问延迟不敏感，放 PSRAM 最划算。
-     * S3 的 Octal PSRAM @80MHz 带宽足够，代价可以忽略。 */
+     * S3 的 Octal PSRAM @80MHz 带宽足够，代价可以忽略。
+     *
+     * C3 没有 PSRAM：MALLOC_CAP_SPIRAM 永远分配失败，控制台起不来
+     * （实测 "任务创建失败，控制台不可用"）。改放内部 RAM —— 6KB 栈
+     * 在 C3 启动后 ~170KB 余量里够用。 */
+#if CONFIG_IDF_TARGET_ESP32C3
+    const uint32_t stack_caps = MALLOC_CAP_INTERNAL;
+#else
+    const uint32_t stack_caps = MALLOC_CAP_SPIRAM;
+#endif
     if (xTaskCreateWithCaps(console_task, "wb_console", TASK_STACK, NULL, TASK_PRIO, NULL,
-                            MALLOC_CAP_SPIRAM) != pdPASS) {
+                            stack_caps) != pdPASS) {
         ESP_LOGE(TAG, "任务创建失败，控制台不可用");
         return;
     }

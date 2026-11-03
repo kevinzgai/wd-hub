@@ -91,7 +91,15 @@ static SemaphoreHandle_t s_lock;
 // 长度按**最长的一段**算：ATTENTION 233ms 目前最长，留足余量到 1.2 秒，
 // 以后加更长的采样子也不用改这里。1.2s × 24000 × 2ch × 2B = 115KB。
 // 内部 RAM 够（8MB PSRAM 用不上，DMA 要求内部），实测分配成功。
+//
+// C3 例外：无 PSRAM，内部 RAM 最大连续块约 112KB，115KB 装不下
+// （实测 "播放缓冲分配失败"）。压到 400ms（24000×0.4×2×2 = 38.4KB），
+// 相对最长 233ms 仍有 1.7 倍余量。
+#if CONFIG_IDF_TARGET_ESP32C3
+#define AUDIO_MS_MAX     400
+#else
 #define AUDIO_MS_MAX     1200
+#endif
 #define AUDIO_FRAMES_MAX (AUDIO_RATE * AUDIO_MS_MAX / 1000)
 static int16_t *s_buf;
 

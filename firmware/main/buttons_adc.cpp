@@ -60,6 +60,7 @@ static const buttons_hooks_t *s_hooks = NULL;
 static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t         s_cali;
 static int64_t                   s_ignore_until_us;
+static int                       s_last_mv;   // TEMP-VERIFY: 上板验收用，验证完删除
 
 // 键序号（与 s_key_name 下标一致）。-1 = 没有键被按住。
 enum { KEY_UP = 0, KEY_DOWN = 1, KEY_OK = 2, KEY_NONE = -1 };
@@ -124,6 +125,7 @@ static int read_key(void)
     int raw = 0, mv = 0;
     if (adc_oneshot_read(s_adc, BOARD_BTN_ADC_CH, &raw) != ESP_OK) return KEY_NONE;
     if (adc_cali_raw_to_voltage(s_cali, raw, &mv) != ESP_OK) return KEY_NONE;
+    s_last_mv = mv;   // TEMP-VERIFY
 
     // 1000~2500mV 是死区：既不是有效按键，也没到松开门槛。
     // 按"未按键"处理，避免手松开途中被误判成某个键。
@@ -254,6 +256,8 @@ static void button_task(void *arg)
                 held     = cand;
                 down_at  = now_ms;
                 fired    = false;
+                // TEMP-VERIFY: 打印实际电压档，用于核对分压阈值
+                ESP_LOGI(TAG, "BTN %s 按下 %dmV", s_key_name[cand], s_last_mv);
                 /* 反馈音打在"按下确认"这一刻，不是松手时 ——
                  * 所有动作都要等松手或按满 800ms 才知道，声音挂松手会像延迟。 */
                 audio_play(AUDIO_EV_KEY);
@@ -262,11 +266,19 @@ static void button_task(void *arg)
             // 按住中：先判长按（不等松手，否则按 2 秒才调一次亮度，手感很差）
             if (!fired && (now_ms - down_at) >= BTN_ADC_LONG_MS) {
                 fired = true;
+                // TEMP-VERIFY
+                ESP_LOGI(TAG, "BTN %s 长按 %ums", s_key_name[held],
+                         (unsigned)(now_ms - down_at));
                 on_long(held);
             }
             // 再判松开：必须回到"无键"状态并稳定 REL 次。
             if (cand == KEY_NONE && cand_cnt >= REL) {
-                if (!fired) on_short(held);
+                if (!fired) {
+                    // TEMP-VERIFY
+                    ESP_LOGI(TAG, "BTN %s 短按 %ums", s_key_name[held],
+                             (unsigned)(now_ms - down_at));
+                    on_short(held);
+                }
                 held = KEY_NONE;
                 fired = false;
             }
