@@ -5,7 +5,8 @@
 //   * 通道：ES8311 + 单喇叭，16kHz / 16bit / 单声道入参；
 //   * 缓冲：400ms 立体声展开缓冲（25.6KB，内部 RAM），不碰 PSRAM；
 //   * 队列：深度 4，满了就丢，绝不反压 LVGL / BLE；
-//   * 音量：固定 20%（与 S3 相同），主机 cfg.beep_vol 只当静音开关用。
+//   * 音量：PCM 保持满幅，增益只由 codec 档位承担（见 WB_AUDIO_VOLUME），
+//     主机 cfg.beep_vol 只当静音开关用。
 #include "wb_audio.h"
 
 #include "bsp_audio.h"
@@ -23,7 +24,14 @@
 
 static const char *TAG = "wb_audio";
 
-#define WB_AUDIO_VOLUME      20     // 与 S3 AUDIO_VOL_DEF 一致
+// 修复“提示音完全听不见”（2026-11-03 实测）：
+//   原实现是 20% codec 档位 × PCM 再乘 20% 软件增益。BSP 的音量曲线是
+//   0%→-50dB、80%→-10dB，20% 档位落点 -42dB，再叠加 -14dB 软件衰减，
+//   合计约 -56dB，等于静音（长音 100% 档实测能听见，证明 codec/功放/喇叭正常）。
+//   现在把 20% 软件衰减去掉、codec 档位交给 100%，响度由系统主音量（默认 80%）
+//   决定：主音量 80% 时有效 80% ≈ -6dB，与 S3 AUDIO_VOL_DEF(20% ≈ -14dB) 同向、
+//   略响一档，保证 700ms 的 ATTENTION 在环境噪声下也能听见。
+#define WB_AUDIO_VOLUME      100
 #define WB_AUDIO_CHUNK_MS    400    // 内部 RAM 红线下的上限（C3 最大连续块约 114KB）
 #define WB_AUDIO_FRAMES_MAX  (WB_TONE_RATE * WB_AUDIO_CHUNK_MS / 1000)
 #define WB_AUDIO_BUF_BYTES   (WB_AUDIO_FRAMES_MAX * 2 * sizeof(int16_t))  // 25,600B
@@ -98,11 +106,9 @@ static bool play_one(wb_sfx_t sfx)
         size_t n = frames - offset;
         if (n > WB_AUDIO_FRAMES_MAX) n = WB_AUDIO_FRAMES_MAX;
         for (size_t i = 0; i < n; ++i) {
-            int32_t v = (int32_t)((float)pcm[offset + i] * (WB_AUDIO_VOLUME / 100.0f));
-            if (v > 32767) v = 32767;
-            if (v < -32768) v = -32768;
-            s_buf[i * 2] = (int16_t)v;
-            s_buf[i * 2 + 1] = (int16_t)v;
+            const int16_t v = pcm[offset + i];   // 满幅写入，增益交给 codec 档位
+            s_buf[i * 2] = v;
+            s_buf[i * 2 + 1] = v;
         }
         if (bsp_audio_write(s_buf, n * 2 * sizeof(int16_t)) != ESP_OK) {
             s_failures++;
