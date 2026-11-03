@@ -47,6 +47,12 @@ typedef struct {
     int sel;           // 总览：会话下标；审批：0=允许 1=拒绝；提问：选项下标
     bool busy;         // 有 RUNNING 会话或待处理审批/提问
     int beep_vol;      // 主机 cfg.beep_vol，<=0 表示静音
+
+    // 额度页数据：来自 credit 帧（{"remain":x,"total":y}）。
+    bool have_credit;
+    double credit_remain;
+    double credit_total;
+    int64_t credit_at; // 收到 credit 帧时的主机墙钟（epoch 秒），0 = 未知
 } wb_view_t;
 
 typedef void (*wb_biz_change_cb_t)(void);

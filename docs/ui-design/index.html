@@ -219,6 +219,16 @@
   .v2 .low-pct{font-size:28px;line-height:34px;font-weight:700;color:var(--red)}
   .v2 .low-title{font-size:16px;line-height:22px;font-weight:700}
   .v2 .low-note{max-width:200px;text-align:center;font-size:12px;line-height:17px;color:var(--dim)}
+  .v2 .quota{flex:1;display:flex;flex-direction:column;justify-content:flex-start;gap:2px;
+    border-left:6px solid var(--cyan);padding-left:14px}
+  .v2 .qkick{font-size:12px;line-height:16px;color:var(--dim);letter-spacing:1px}
+  .v2 .qbig{font-size:28px;line-height:34px;font-weight:700;color:var(--cyan);letter-spacing:1px}
+  .v2 .qsub{font-size:12px;line-height:16px;color:var(--dim)}
+  /* 12 格消耗条：12×12 + 11×4 = 188，和固件里的点阵一一对应。 */
+  .v2 .qbar{display:flex;gap:4px;margin-top:14px}
+  .v2 .qbar i{width:12px;height:12px;background:#4A4A4A;border-radius:2px}
+  .v2 .qbar i.on{background:var(--cyan)}
+  .v2 .qnote{font-size:12px;line-height:16px;color:var(--dim);margin-top:12px}
 
   /* =========================================================
      V3 · 仪表盘
@@ -615,8 +625,8 @@
   </div>
   <div class="vnote">
     <div class="cell"><h4>定位</h4><p>把 240×320 当成一块“状态牌”。不追求同时看很多条，而追求 1 米外也能读出当前任务和状态。适合挂在墙边或工位边缘。</p></div>
-    <div class="cell"><h4>信息层级</h4><ul><li>L1 状态 28px 薄荷色</li><li>L2 会话名 16px 两行</li><li>L3 模型 12px 灰</li><li>底部 3 段进度表示第几条</li></ul></div>
-    <div class="cell"><h4>三键</h4><ul><li>UP：上一条</li><li>DOWN：下一条</li><li>OK：打开待办（无待办显示“无待办”）；长按 OK 关机</li></ul></div>
+    <div class="cell"><h4>信息层级</h4><ul><li>L1 状态 28px 薄荷色</li><li>L2 会话名 16px 两行</li><li>L3 模型 12px 灰</li><li>底部 3 段进度表示第几条</li><li>额度页：28px 余额 + 12 格消耗条</li></ul></div>
+    <div class="cell"><h4>三键</h4><ul><li>UP：上一条；长按 UP：查看额度</li><li>DOWN：下一条</li><li>OK：打开待办（无待办显示“无待办”）；长按 OK 关机</li><li>额度页：UP / OK / 长按 DOWN 返回总览</li></ul></div>
     <div class="cell"><h4>配色 / 背光</h4>
       <p>正文 #FFFFFF / #0E0E0E = <b>19.3:1</b>；次要 #A8A8A8 = <b>8.1:1</b>；薄荷 <b>11.9:1</b>；红 #FF7070 = <b>7.2:1</b>；黑字压薄荷 <b>13.0:1</b>。</p>
       <div class="swatches"><span class="sw" style="background:#000000"></span><span class="sw" style="background:#0E0E0E"></span><span class="sw" style="background:#2A2A2A"></span><span class="sw" style="background:#FFFFFF"></span><span class="sw" style="background:#A8A8A8"></span><span class="sw" style="background:#4AE3B5"></span><span class="sw" style="background:#FFB020"></span><span class="sw" style="background:#FF7070"></span></div>
@@ -641,7 +651,7 @@
           <div class="next">下一条 · 支付回调超时排查</div>
         </div>
         <div class="ft">
-          <div class="key"><div class="kk">UP</div><div class="ka">上一条</div></div>
+          <div class="key"><div class="kk">UP/长按UP</div><div class="ka">上一条·额度</div></div>
           <div class="key"><div class="kk">OK</div><div class="ka">打开待办</div></div>
           <div class="key"><div class="kk">DOWN</div><div class="ka">下一条</div></div>
         </div>
@@ -757,6 +767,29 @@
         </div>
       </div></div></div>
       <div class="shot-cap">低电页没有多余信息：电池图形、28px 百分比、一句行动建议，三键只做返回/关闭。</div>
+    </div>
+
+    <!-- V2 额度 / 遥测 -->
+    <div class="shot">
+      <div class="shot-label"><b>07 · 额度 / 遥测</b><span>总览长按 UP 进入</span></div>
+      <div class="phone"><div class="screen v2"><div class="safe">
+        <div class="hd"><div class="idx2">额度</div><div class="sp"></div><div class="hm">遥测</div></div>
+        <div class="body">
+          <div class="quota">
+            <div class="qkick">剩余额度</div>
+            <div class="qbig">8,420</div>
+            <div class="qsub">总量 10,000 · 已用 16%</div>
+            <div class="qbar"><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="qnote">已同步 14:32</div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP</div><div class="ka">返回总览</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">返回总览</div></div>
+          <div class="key"><div class="kk">长按DOWN</div><div class="ka">返回总览</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">顶栏沿用总览的连接点 + 电量；余额来自 credit 帧（remain / total），12 格按已用比例点亮。未收到 total 时显示“额度未知”，断连显示缓存值并标注上次同步时间。</div>
     </div>
   </div>
 </section>

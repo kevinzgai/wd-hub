@@ -185,6 +185,13 @@ static void handle_frame(const wb_frame_msg_t *msg)
         changed = true;
         break;
     case WB_EV_CREDIT:
+        // 额度页数据：留住最近一次 credit 帧；同步时间取最近一次主机墙钟。
+        s_view.credit_remain = ev.remain;
+        s_view.credit_total = ev.total;
+        s_view.credit_at = s_view.clock_s;
+        s_view.have_credit = true;
+        changed = true;
+        break;
     case WB_EV_MSG:
         changed = true;   // 仅 ACK，不改界面
         break;

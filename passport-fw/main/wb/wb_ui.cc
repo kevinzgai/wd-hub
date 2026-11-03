@@ -60,11 +60,12 @@ enum Screen {
     SCR_STANDBY,
     SCR_OFFLINE,
     SCR_LOW,
+    SCR_CREDIT,
     SCR_COUNT,
 };
 
 const char *const k_screen_name[SCR_COUNT] = {
-    "overview", "approval", "ask", "standby", "offline", "low_battery",
+    "overview", "approval", "ask", "standby", "offline", "low_battery", "credit",
 };
 
 // 顶栏状态簇：连接点 + 电量图形 + 电量百分比（每屏常驻）。
@@ -134,6 +135,15 @@ struct UiState {
     lv_obj_t *lb_title;
     lv_obj_t *lb_note;
 
+    // 额度 / 遥测（长按 UP 从总览进入，只读）。
+    lv_obj_t *cr_idx;
+    lv_obj_t *cr_tag;
+    lv_obj_t *cr_kick;
+    lv_obj_t *cr_big;
+    lv_obj_t *cr_sub;
+    lv_obj_t *cr_bar[12];
+    lv_obj_t *cr_note;
+
     // 三键键位栏：0..2 = UP / OK / DOWN。
     lv_obj_t *key_kk[SCR_COUNT][3];
     lv_obj_t *key_ka[SCR_COUNT][3];
@@ -143,6 +153,7 @@ struct UiState {
 
     bool offline_dismissed;
     bool low_dismissed;
+    bool credit_open;      // 额度页是否由长按 UP 打开
     int soc;               // <0 = 尚未读到
 
     int last_sel;
@@ -225,6 +236,11 @@ void set_text(lv_obj_t *label, const char *value)
 void set_color(lv_obj_t *obj, uint32_t color)
 {
     if (obj) ui_pixel_bg_color(obj, color);
+}
+
+void set_text_color(lv_obj_t *label, uint32_t color)
+{
+    if (label) ui_pixel_text_color(label, color);
 }
 
 // 顶栏右侧状态簇：连接点 + 电池框 + 电量百分比。
@@ -497,6 +513,39 @@ void build_low_battery(void)
     set_keys(SCR_LOW, "UP/DOWN", "屏蔽", "OK", "返回总览", "长按OK", "关机");
 }
 
+void build_credit(void)
+{
+    lv_obj_t *scr = screen_new();
+    s_ui.scr[SCR_CREDIT] = scr;
+    build_header(scr, SCR_CREDIT, &s_ui.cr_idx, &s_ui.cr_tag, "额度", "遥测");
+
+    // 与总览同一套 6px 薄荷竖轨。
+    panel(scr, SAFE_L, 44, 6, 194, C_MINT, 0);
+
+    s_ui.cr_kick = text(scr, &wb_font_12, C_DIM, FOCUS_X, 52, 196, 15,
+                        LV_TEXT_ALIGN_LEFT, 1);
+    set_text(s_ui.cr_kick, "剩余额度");
+
+    s_ui.cr_big = text(scr, &wb_font_28, C_MINT, FOCUS_X, 70, 196, 34,
+                       LV_TEXT_ALIGN_LEFT, 1);
+    set_text(s_ui.cr_big, "额度未知");
+
+    s_ui.cr_sub = text(scr, &wb_font_12, C_DIM, FOCUS_X, 112, 196, 15,
+                       LV_TEXT_ALIGN_LEFT);
+    set_text(s_ui.cr_sub, "等待主机下发额度");
+
+    // 12 格消耗条：12×12 + 11×4 = 188，落在 32..220 的安全区内。
+    for (int i = 0; i < 12; ++i)
+        s_ui.cr_bar[i] = panel(scr, FOCUS_X + i * 16, 148, 12, 12, C_SEG_IDLE, 2);
+
+    s_ui.cr_note = text(scr, &wb_font_12, C_DIM, FOCUS_X, 180, 196, 15,
+                        LV_TEXT_ALIGN_LEFT);
+    set_text(s_ui.cr_note, "未同步");
+
+    build_footer(scr, SCR_CREDIT);
+    set_keys(SCR_CREDIT, "UP", "返回总览", "OK", "返回总览", "长按DOWN", "返回总览");
+}
+
 // ---------------- 数据 → 文本 ----------------
 
 void format_hm(int64_t clock_s, char *out, size_t cap)
@@ -509,6 +558,22 @@ void format_hm(int64_t clock_s, char *out, size_t cap)
     struct tm tmv;
     gmtime_r(&t, &tmv);   // t 已是主机本地墙钟，不能再套本地时区
     snprintf(out, cap, "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+}
+
+// 千分位整数：额度数字用（8420 → 8,420）。
+void fmt_num(char *out, size_t cap, double value)
+{
+    long long n = (long long)(value + 0.5);
+    if (n < 0) n = 0;
+    char raw[24];
+    snprintf(raw, sizeof(raw), "%lld", n);
+    size_t len = strlen(raw);
+    size_t j = 0;
+    for (size_t i = 0; i < len && j + 1 < cap; ++i) {
+        if (i > 0 && (len - i) % 3 == 0) out[j++] = ',';
+        out[j++] = raw[i];
+    }
+    out[j] = '\0';
 }
 
 const char *sess_name(const wb_view_t *v, int i)
@@ -618,7 +683,7 @@ void update_overview(const wb_view_t *v)
         snprintf(buf, sizeof(buf), "%s", sel == 0 ? "仅 1 条会话" : "已是最后一条");
     set_text(s_ui.ov_next, buf);
 
-    set_keys(SCR_OVERVIEW, "UP", "上一条", "OK", (v->approval || v->ask) ? "打开待办" : "无待办", "DOWN", "下一条");
+    set_keys(SCR_OVERVIEW, "UP/长按UP", "上一条·额度", "OK", (v->approval || v->ask) ? "打开待办" : "无待办", "DOWN", "下一条");
 
     if (sel != s_ui.last_sel || n != s_ui.last_n ||
         (token && (!s_ui.last_token_set || strcmp(token, s_ui.last_token) != 0))) {
@@ -765,6 +830,54 @@ void update_low_battery(int soc)
     lv_obj_set_width(s_ui.lb_fill, fill_w);
 }
 
+void update_credit(const wb_view_t *v)
+{
+    // 主机没给 total 时不能拿 0 当“已用完”，统一显示额度未知。
+    if (!v->have_credit || v->credit_total <= 0.0) {
+        set_text(s_ui.cr_big, "额度未知");
+        set_text_color(s_ui.cr_big, C_DIM);
+        set_text(s_ui.cr_sub, v->connected ? "等待主机下发额度" : "离线 · 尚未收到额度");
+        for (int i = 0; i < 12; ++i) set_color(s_ui.cr_bar[i], C_SEG_IDLE);
+        set_text(s_ui.cr_note, v->connected ? "未同步" : "离线 · 无缓存");
+        return;
+    }
+
+    char rem[24], tot[24];
+    fmt_num(rem, sizeof(rem), v->credit_remain);
+    fmt_num(tot, sizeof(tot), v->credit_total);
+
+    double used = v->credit_total - v->credit_remain;
+    if (used < 0.0) used = 0.0;
+    int pct = (int)(used * 100.0 / v->credit_total + 0.5);
+    if (pct > 100) pct = 100;
+
+    set_text(s_ui.cr_big, rem);
+    set_text_color(s_ui.cr_big, C_MINT);
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "总量 %s · 已用 %d%%", tot, pct);
+    set_text(s_ui.cr_sub, buf);
+
+    int lit = (int)(used * 12.0 / v->credit_total + 0.5);
+    if (used > 0.0 && lit == 0) lit = 1;   // 用了但不足半格，也点亮一格
+    uint32_t bar_color = pct >= 95 ? C_RED : (pct >= 80 ? C_ORANGE : C_MINT);
+    for (int i = 0; i < 12; ++i)
+        set_color(s_ui.cr_bar[i], i < lit ? bar_color : C_SEG_IDLE);
+
+    char note[48];
+    if (v->credit_at > 0) {
+        char hm[8];
+        format_hm(v->credit_at, hm, sizeof(hm));
+        if (v->connected)
+            snprintf(note, sizeof(note), "已同步 %s", hm);
+        else
+            snprintf(note, sizeof(note), "离线 · 上次同步 %s", hm);
+    } else {
+        snprintf(note, sizeof(note), "%s", v->connected ? "已同步" : "离线 · 缓存值");
+    }
+    set_text(s_ui.cr_note, note);
+}
+
 }  // namespace
 
 // ---------------- 对外接口 ----------------
@@ -785,6 +898,7 @@ void wb_ui_init(void)
     build_standby();
     build_offline();
     build_low_battery();
+    build_credit();
     s_ui.inited = true;
 }
 
@@ -810,6 +924,29 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
 {
     if (!s_ui.inited) return false;
     (void)key;
+
+    // 额度页：短按 UP/OK、长按 DOWN 返回总览；长按 OK 仍交给底座关机。
+    if (s_ui.screen == SCR_CREDIT) {
+        if (long_press) {
+            if (key == WB_UI_KEY_OK) return false;
+            if (key == WB_UI_KEY_DOWN) {
+                s_ui.credit_open = false;
+                return true;
+            }
+            return true;   // 长按 UP 不动作
+        }
+        if (key == WB_UI_KEY_UP || key == WB_UI_KEY_OK) {
+            s_ui.credit_open = false;
+            return true;
+        }
+        return true;       // 短按 DOWN 不动作
+    }
+
+    // 总览长按 UP：打开额度页（短按 UP 仍是上一条）。
+    if (s_ui.screen == SCR_OVERVIEW && long_press && key == WB_UI_KEY_UP) {
+        s_ui.credit_open = true;
+        return true;
+    }
 
     // 离线覆盖页：任意短按先回到缓存总览；长按 DOWN 等价“返回”。
     if (s_ui.screen == SCR_OFFLINE) {
@@ -850,6 +987,8 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
     if (!s_ui.inited || !v) return;
 
     if (v->connected) s_ui.offline_dismissed = false;
+    if (v->page != WB_PAGE_OVERVIEW) s_ui.credit_open = false;
+    if (standby) s_ui.credit_open = false;
 
     const bool low = (s_ui.soc >= 0 && s_ui.soc <= LOW_BATTERY_SOC && !s_ui.low_dismissed);
     const bool offline = (!v->connected && !s_ui.offline_dismissed);
@@ -865,7 +1004,7 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
         switch (v->page) {
         case WB_PAGE_APPROVAL: target = SCR_APPROVAL; break;
         case WB_PAGE_ASK: target = SCR_ASK; break;
-        default: target = SCR_OVERVIEW; break;
+        default: target = s_ui.credit_open ? SCR_CREDIT : SCR_OVERVIEW; break;
         }
     }
 
@@ -888,6 +1027,7 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
     case SCR_LOW: update_low_battery(s_ui.soc); break;
     case SCR_APPROVAL: update_approval(v); break;
     case SCR_ASK: update_ask(v); break;
+    case SCR_CREDIT: update_credit(v); break;
     default: update_overview(v); break;
     }
 }
