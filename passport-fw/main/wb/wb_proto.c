@@ -28,14 +28,14 @@ static int64_t json_i64(const cJSON *root, const char *key, int64_t def)
     return cJSON_IsNumber(it) ? (int64_t)it->valuedouble : def;
 }
 
-static bool decode_status(const cJSON *root, wb_ev_t *ev)
+static void decode_status(const cJSON *root, wb_ev_t *ev)
 {
     ev->count = json_int(root, "count", 0);
     ev->clock_s = json_i64(root, "t", 0);
 
     const cJSON *tasks = cJSON_GetObjectItemCaseSensitive(root, "tasks");
     ev->n_sess = 0;
-    if (!cJSON_IsArray(tasks)) return true;   // 空列表合法
+    if (!cJSON_IsArray(tasks)) return;   // 空列表合法
 
     const int total = cJSON_GetArraySize(tasks);
     for (int i = 0; i < total && ev->n_sess < WB_MAX_SESS; ++i) {
@@ -47,17 +47,14 @@ static bool decode_status(const cJSON *root, wb_ev_t *ev)
         copy_str(cJSON_GetObjectItemCaseSensitive(it, "model"), s->model, sizeof(s->model));
         copy_str(cJSON_GetObjectItemCaseSensitive(it, "name"), s->name, sizeof(s->name));
         copy_str(cJSON_GetObjectItemCaseSensitive(it, "msg"), s->msg, sizeof(s->msg));
-        s->credit = cJSON_GetObjectItemCaseSensitive(it, "credit") &&
-                    cJSON_IsNumber(cJSON_GetObjectItemCaseSensitive(it, "credit"))
-                        ? cJSON_GetObjectItemCaseSensitive(it, "credit")->valuedouble
-                        : 0.0;
+        const cJSON *credit = cJSON_GetObjectItemCaseSensitive(it, "credit");
+        s->credit = cJSON_IsNumber(credit) ? credit->valuedouble : 0.0;
         if (s->state[0] == '\0') snprintf(s->state, sizeof(s->state), "IDLE");
         ev->n_sess++;
     }
-    return true;
 }
 
-static bool decode_ask(const cJSON *root, wb_ev_t *ev)
+static void decode_ask(const cJSON *root, wb_ev_t *ev)
 {
     ev->ask_id = json_int(root, "id", 0);
     ev->ask_ans = json_int(root, "ans", 0);
@@ -73,7 +70,6 @@ static bool decode_ask(const cJSON *root, wb_ev_t *ev)
         ev->n_opts++;
     }
     if (ev->n_opts == 0) ev->ask_ans = 0;   // 没有选项就按只读处理
-    return true;
 }
 
 bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev)
@@ -111,7 +107,7 @@ bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev)
     const char *t = type->valuestring;
     if (strcmp(t, "status_list") == 0) {
         ev->type = WB_EV_STATUS;
-        ok = decode_status(root, ev);
+        decode_status(root, ev);
     } else if (strcmp(t, "approval") == 0) {
         ev->type = WB_EV_APPROVAL;
         ev->approval_id = json_int(root, "id", 0);
@@ -119,7 +115,7 @@ bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev)
         copy_str(cJSON_GetObjectItemCaseSensitive(root, "hint"), ev->hint, sizeof(ev->hint));
     } else if (strcmp(t, "ask") == 0) {
         ev->type = WB_EV_ASK;
-        ok = decode_ask(root, ev);
+        decode_ask(root, ev);
     } else if (strcmp(t, "ask_end") == 0) {
         ev->type = WB_EV_ASK_END;
         ev->ask_id = json_int(root, "id", 0);

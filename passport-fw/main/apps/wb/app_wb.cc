@@ -191,6 +191,13 @@ void beep_key()
     wb_audio_play(WB_SFX_KEY);
 }
 
+wb_ui_key_t ui_key_of(uint8_t btn)
+{
+    return btn == BSP_BTN_UP ? WB_UI_KEY_UP
+         : btn == BSP_BTN_DOWN ? WB_UI_KEY_DOWN
+                               : WB_UI_KEY_OK;
+}
+
 void wb_on_key(uint8_t btn, app_btn_event_t event, uint16_t mv)
 {
     (void)mv;
@@ -217,9 +224,7 @@ void wb_on_key(uint8_t btn, app_btn_event_t event, uint16_t mv)
         wb_audio_set_standby(false);
         wb_view_t view;
         wb_biz_snapshot(&view);
-        const wb_ui_key_t ui_key = btn == BSP_BTN_UP ? WB_UI_KEY_UP
-                                  : btn == BSP_BTN_DOWN ? WB_UI_KEY_DOWN
-                                                        : WB_UI_KEY_OK;
+        const wb_ui_key_t ui_key = ui_key_of(btn);
         if (wb_ui_key(ui_key, false)) {
             beep_key();
             request_redraw();
@@ -247,9 +252,7 @@ void wb_on_key(uint8_t btn, app_btn_event_t event, uint16_t mv)
         wb_audio_set_standby(false);
         wb_view_t view;
         wb_biz_snapshot(&view);
-        const wb_ui_key_t ui_key = btn == BSP_BTN_UP ? WB_UI_KEY_UP
-                                  : btn == BSP_BTN_DOWN ? WB_UI_KEY_DOWN
-                                                        : WB_UI_KEY_OK;
+        const wb_ui_key_t ui_key = ui_key_of(btn);
         if (wb_ui_key(ui_key, true)) {
             beep_key();
             request_redraw();

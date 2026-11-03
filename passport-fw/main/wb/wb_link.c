@@ -48,7 +48,6 @@ static uint8_t s_addr_type;
 static bool s_inited;
 static volatile bool s_hello_pending;
 static volatile bool s_conn_changed;
-static volatile bool s_conn_now;
 static bool s_low_power;
 
 static int s_active_retry_left;
@@ -221,7 +220,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_conn_changed = true;
         if (event->connect.status == 0) {
             s_conn = event->connect.conn_handle;
-            s_conn_now = true;
             s_rx_len = 0;
             ESP_LOGI(TAG, "主机已连接 conn=%u", (unsigned)s_conn);
             struct ble_gap_conn_desc desc;
@@ -234,7 +232,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         } else {
             ESP_LOGW(TAG, "连接失败 status=%d，重新广播", event->connect.status);
             s_conn = WB_NO_CONN;
-            s_conn_now = false;
             advertise();
         }
         return 0;
@@ -243,7 +240,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         ESP_LOGW(TAG, "断开 reason=%d(0x%x)，立即重启广播", event->disconnect.reason,
                  event->disconnect.reason);
         s_conn = WB_NO_CONN;
-        s_conn_now = false;
         s_conn_changed = true;
         s_rx_len = 0;
         advertise();
@@ -284,7 +280,6 @@ static void on_reset(int reason)
 {
     ESP_LOGE(TAG, "NimBLE 复位 reason=%d", reason);
     s_conn = WB_NO_CONN;
-    s_conn_now = false;
     s_conn_changed = true;
 }
 
@@ -397,7 +392,7 @@ bool wb_link_take_conn_change(bool *connected)
 {
     if (!s_conn_changed) return false;
     s_conn_changed = false;
-    if (connected) *connected = s_conn_now;
+    if (connected) *connected = (s_conn != WB_NO_CONN);
     return true;
 }
 
@@ -407,7 +402,6 @@ bool wb_link_send(const char *data, size_t len)
 
     const uint16_t mtu = ble_att_mtu(s_conn);
     size_t chunk = (mtu > 3) ? (size_t)(mtu - 3) : 20;
-    if (chunk == 0) chunk = 20;
 
     if (s_tx_lock && xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
         ESP_LOGW(TAG, "发送锁超时，丢弃本帧（%uB）", (unsigned)len);

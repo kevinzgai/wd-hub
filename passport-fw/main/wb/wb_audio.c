@@ -39,9 +39,12 @@ static const char *TAG = "wb_audio";
 #define WB_AUDIO_TASK_STACK  3072
 #define WB_AUDIO_TASK_PRIO   3      // 与 S3 同级：低于 LVGL(4) 和 BLE 收帧任务
 
+// 低电提示的回差：<=15% 触发，回到 >18% 才解锁（避免在阈值附近反复响）。
+#define WB_BATT_LOW_ON       15
+#define WB_BATT_LOW_OFF      18
+
 static QueueHandle_t s_queue;
 static SemaphoreHandle_t s_done;
-static TaskHandle_t s_task;
 static int16_t *s_buf;
 static volatile bool s_ready;
 static volatile bool s_stop;
@@ -56,6 +59,14 @@ static volatile unsigned s_requests, s_played, s_dropped, s_muted, s_failures;
 // ---------------------------------------------------------------------------
 // codec
 // ---------------------------------------------------------------------------
+// 初始化失败与 deinit 共用：只释放已分配的资源，重复调用安全。
+static void release_resources(void)
+{
+    if (s_queue) { vQueueDelete(s_queue); s_queue = NULL; }
+    if (s_done) { vSemaphoreDelete(s_done); s_done = NULL; }
+    if (s_buf) { heap_caps_free(s_buf); s_buf = NULL; }
+}
+
 static bool codec_ensure(void)
 {
     if (bsp_audio_get_master_volume() == 0) {
@@ -169,10 +180,7 @@ bool wb_audio_init(void)
     s_done = xSemaphoreCreateBinary();
     if (!s_queue || !s_done) {
         ESP_LOGE(TAG, "队列/完成信号量创建失败");
-        if (s_queue) { vQueueDelete(s_queue); s_queue = NULL; }
-        if (s_done) { vSemaphoreDelete(s_done); s_done = NULL; }
-        heap_caps_free(s_buf);
-        s_buf = NULL;
+        release_resources();
         return false;
     }
 
@@ -182,15 +190,10 @@ bool wb_audio_init(void)
     s_codec_open = false;
     s_ready = true;
     if (xTaskCreate(audio_task, "wb_audio", WB_AUDIO_TASK_STACK, NULL,
-                    WB_AUDIO_TASK_PRIO, &s_task) != pdPASS) {
+                    WB_AUDIO_TASK_PRIO, NULL) != pdPASS) {
         ESP_LOGE(TAG, "播放任务创建失败");
         s_ready = false;
-        vQueueDelete(s_queue);
-        vSemaphoreDelete(s_done);
-        s_queue = NULL;
-        s_done = NULL;
-        heap_caps_free(s_buf);
-        s_buf = NULL;
+        release_resources();
         return false;
     }
 
@@ -216,13 +219,7 @@ void wb_audio_deinit(void)
         bsp_audio_deinit();
         s_codec_open = false;
     }
-    vQueueDelete(s_queue);
-    vSemaphoreDelete(s_done);
-    heap_caps_free(s_buf);
-    s_queue = NULL;
-    s_done = NULL;
-    s_buf = NULL;
-    s_task = NULL;
+    release_resources();
     ESP_LOGI(TAG, "提示音已释放: requests=%u played=%u dropped=%u muted=%u failures=%u",
              s_requests, s_played, s_dropped, s_muted, s_failures);
 }
@@ -256,12 +253,12 @@ void wb_audio_set_host_mute(bool mute)
 void wb_audio_low_battery(int soc)
 {
     if (soc < 0) return;
-    if (soc > 18) {          // 回差：充到 19% 才允许再次提醒
+    if (soc > WB_BATT_LOW_OFF) {     // 回差：充到 19% 才允许再次提醒
         s_low_active = false;
         s_low_pending = false;
         return;
     }
-    if (soc <= 15 && !s_low_active) {
+    if (soc <= WB_BATT_LOW_ON && !s_low_active) {
         s_low_active = true;
         if (s_standby) {
             s_low_pending = true;

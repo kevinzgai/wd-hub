@@ -26,8 +26,7 @@ static const char *TAG = "wb_power";
 static wb_power_ui_cb_t s_ui_cb;
 static volatile bool s_standby;
 static volatile bool s_busy;
-static volatile bool s_ui_wake_pending;
-static volatile bool s_refr_restore_pending;
+static volatile bool s_resume_pending;   // 退出待机后待 tick 恢复页面与渲染周期
 static volatile bool s_inited;
 
 // 秒级时间戳，32 位无符号相减可自然跨过 49 天回绕。
@@ -98,8 +97,7 @@ void wb_power_init(wb_power_ui_cb_t on_ui_mode)
     s_ui_cb = on_ui_mode;
     s_standby = false;
     s_busy = false;
-    s_ui_wake_pending = false;
-    s_refr_restore_pending = false;
+    s_resume_pending = false;
     idle_reset();
     s_inited = true;
 }
@@ -111,8 +109,7 @@ void wb_power_note_activity(void)
     if (s_standby) {
         apply_power_state(false);
         // 页面切换与渲染周期恢复交给下一个 tick，避免跨线程操作 LVGL。
-        s_ui_wake_pending = true;
-        s_refr_restore_pending = true;
+        s_resume_pending = true;
     }
 }
 
@@ -141,13 +138,9 @@ void wb_power_tick(void)
 {
     if (!s_inited) return;
 
-    if (s_refr_restore_pending) {
-        s_refr_restore_pending = false;
+    if (s_resume_pending) {
+        s_resume_pending = false;
         set_refresh_slowed(false);
-    }
-
-    if (s_ui_wake_pending) {
-        s_ui_wake_pending = false;
         if (s_ui_cb) s_ui_cb(false);
     }
 

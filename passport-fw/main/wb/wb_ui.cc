@@ -39,6 +39,7 @@ constexpr int FOOTER_H = 34;
 constexpr int KEY_W[3] = {82, 58, 72};
 constexpr int KEY_GAP = 2;
 constexpr int FOCUS_X = 32;                             // 12 + 6px 轨 + 14 padding
+constexpr int LOW_BATTERY_SOC = 15;                     // 低于该值显示低电覆盖页
 
 // V2 调色板（与设计稿一一对应）。
 constexpr uint32_t C_BG = 0x000000;
@@ -748,7 +749,7 @@ void wb_ui_set_battery(int soc)
 {
     if (soc < 0) return;
     s_ui.soc = soc;
-    if (soc > 15) s_ui.low_dismissed = false;   // 充电恢复后，下次低电重新提醒
+    if (soc > LOW_BATTERY_SOC) s_ui.low_dismissed = false;   // 充电恢复后，下次低电重新提醒
 }
 
 bool wb_ui_key(wb_ui_key_t key, bool long_press)
@@ -786,7 +787,7 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
         return true;
     }
 
-    if (s_ui.screen == SCR_STANDBY) return false;
+    // 其余页面（含待机）由业务层处理按键。
     return false;
 }
 
@@ -796,7 +797,7 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
 
     if (v->connected) s_ui.offline_dismissed = false;
 
-    const bool low = (s_ui.soc >= 0 && s_ui.soc <= 15 && !s_ui.low_dismissed);
+    const bool low = (s_ui.soc >= 0 && s_ui.soc <= LOW_BATTERY_SOC && !s_ui.low_dismissed);
     const bool offline = (!v->connected && !s_ui.offline_dismissed);
 
     int target = SCR_OVERVIEW;

@@ -80,16 +80,17 @@ static void apply_status_locked(const wb_ev_t *ev)
 
     /* 新任务：会话条数变多。主机 status 帧的 tasks 是“当前活跃会话”，
      * 新增一条即代表新任务起步，这是最可靠的唤醒信号。 */
-    if (ev->n_sess > s_last_n_sess) wake |= WB_WAKE_TASK;
+    const int prev_n = s_last_n_sess;
+    if (ev->n_sess > prev_n) wake |= WB_WAKE_TASK;
 
+    // 一次遍历同时完成“唤醒判定 + 记录本次 running”，避免重复 is_running。
     for (int i = 0; i < ev->n_sess; ++i) {
         const bool running = is_running(&ev->sess[i]);
-        if (running && !(i < s_last_n_sess && s_last_running[i])) wake |= WB_WAKE_ACTIVE;
+        if (running && !(i < prev_n && s_last_running[i])) wake |= WB_WAKE_ACTIVE;
+        s_last_running[i] = running;
     }
-
+    for (int i = ev->n_sess; i < WB_MAX_SESS; ++i) s_last_running[i] = false;
     s_last_n_sess = ev->n_sess;
-    for (int i = 0; i < WB_MAX_SESS; ++i)
-        s_last_running[i] = i < ev->n_sess && is_running(&ev->sess[i]);
 
     s_view.have_status = true;
     s_view.n_sess = ev->n_sess;
@@ -327,6 +328,7 @@ void wb_biz_confirm(void)
     int id = 0;
     int index = 0;
     const char *key = NULL;
+    bool answered_ask = false;
     bool changed = false;
 
     view_lock();
@@ -353,7 +355,7 @@ void wb_biz_confirm(void)
         if (s_view.ask_ans != 0 && s_view.n_opts > 0) {
             id = s_view.ask_id;
             index = s_view.sel;
-            n = wb_proto_enc_ask_index(out, sizeof(out), id, index);
+            answered_ask = true;
             s_view.ask = false;
             s_view.page = WB_PAGE_OVERVIEW;
             recompute_busy_locked();
@@ -362,10 +364,12 @@ void wb_biz_confirm(void)
     }
     view_unlock();
 
+    // 编码统一放在锁外：编码是纯函数，锁只保护状态读写。
     if (key) {
         n = wb_proto_enc_key(out, sizeof(out), id, key);
         ESP_LOGI(TAG, "审批作答 id=%d key=%s", id, key);
-    } else if (n > 0) {
+    } else if (answered_ask) {
+        n = wb_proto_enc_ask_index(out, sizeof(out), id, index);
         ESP_LOGI(TAG, "提问作答 id=%d index=%d", id, index);
     } else if (!changed) {
         return;
