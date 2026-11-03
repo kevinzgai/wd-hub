@@ -67,8 +67,17 @@ const char *const k_screen_name[SCR_COUNT] = {
     "overview", "approval", "ask", "standby", "offline", "low_battery",
 };
 
+// 顶栏状态簇：连接点 + 电量图形 + 电量百分比（每屏常驻）。
+struct BatUi {
+    lv_obj_t *dot;
+    lv_obj_t *shell;
+    lv_obj_t *fill;
+    lv_obj_t *pct;
+};
+
 struct UiState {
     lv_obj_t *scr[SCR_COUNT];
+    BatUi bat[SCR_COUNT];
 
     // 总览：一条会话 + 3 段进度轨（与 WB_MAX_SESS 对齐）。
     lv_obj_t *ov_idx;
@@ -218,15 +227,51 @@ void set_color(lv_obj_t *obj, uint32_t color)
     if (obj) ui_pixel_bg_color(obj, color);
 }
 
-void build_header(lv_obj_t *scr, lv_obj_t **left, lv_obj_t **right, const char *l,
-                  const char *r)
+// 顶栏右侧状态簇：连接点 + 电池框 + 电量百分比。
+void build_status_cluster(lv_obj_t *scr, int scr_idx, bool with_dot)
 {
-    *left = text(scr, &wb_font_12, C_DIM, SAFE_L, HEADER_Y + 1, 140, 15,
+    BatUi &b = s_ui.bat[scr_idx];
+    if (with_dot) b.dot = panel(scr, 178, 14, 6, 6, C_SEG_IDLE, 3);
+    b.shell = panel(scr, 184, 13, 14, 8, C_BG, 2);
+    all_rule(b.shell, C_LINE, 1, 2);
+    b.fill = panel(scr, 185, 14, 1, 6, C_SEG_IDLE, 1);
+    panel(scr, 198, 15, 2, 4, C_LINE, 1);   // 电池正极
+    b.pct = text(scr, &wb_font_12, C_DIM, 201, 11, 27, 15, LV_TEXT_ALIGN_RIGHT);
+    set_text(b.pct, "--%");
+}
+
+void update_status_cluster(int scr_idx, bool connected, int soc)
+{
+    BatUi &b = s_ui.bat[scr_idx];
+    if (b.dot) set_color(b.dot, connected ? C_MINT : C_SEG_IDLE);
+    if (b.pct) {
+        if (soc < 0) {
+            set_text(b.pct, "--%");
+            lv_obj_set_width(b.fill, 1);
+            set_color(b.fill, C_SEG_IDLE);
+        } else {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d%%", soc);
+            set_text(b.pct, buf);
+            int w = 10 * (soc > 100 ? 100 : soc) / 100;
+            if (w < 1) w = 1;
+            lv_obj_set_width(b.fill, w);
+            set_color(b.fill, soc <= LOW_BATTERY_SOC ? C_RED
+                                  : (soc <= 30 ? C_ORANGE : C_GREEN));
+        }
+    }
+}
+
+void build_header(lv_obj_t *scr, int scr_idx, lv_obj_t **left, lv_obj_t **right,
+                  const char *l, const char *r)
+{
+    *left = text(scr, &wb_font_12, C_DIM, SAFE_L, HEADER_Y + 1, 100, 15,
                  LV_TEXT_ALIGN_LEFT, 2);
-    *right = text(scr, &wb_font_12, C_DIM, SCREEN_W - SAFE_R - 96, HEADER_Y + 1, 96, 15,
+    *right = text(scr, &wb_font_12, C_DIM, 112, HEADER_Y + 1, 62, 15,
                   LV_TEXT_ALIGN_RIGHT);
     set_text(*left, l);
     set_text(*right, r);
+    build_status_cluster(scr, scr_idx, true);
 }
 
 // 三键键位栏：左轨 2px，上排动作键名（12px 灰），下排当前动作（12px 白）。
@@ -261,7 +306,7 @@ void build_overview(void)
 {
     lv_obj_t *scr = screen_new();
     s_ui.scr[SCR_OVERVIEW] = scr;
-    build_header(scr, &s_ui.ov_idx, &s_ui.ov_tag, "00 / 00", "会话");
+    build_header(scr, SCR_OVERVIEW, &s_ui.ov_idx, &s_ui.ov_tag, "00 / 00", "会话");
 
     // 6px 薄荷竖轨：整屏卡片化的唯一焦点语言。
     panel(scr, SAFE_L, 44, 6, 194, C_MINT, 0);
@@ -290,7 +335,7 @@ void build_approval(void)
 {
     lv_obj_t *scr = screen_new();
     s_ui.scr[SCR_APPROVAL] = scr;
-    build_header(scr, &s_ui.ap_idx, &s_ui.ap_tag, "审批", "待处理");
+    build_header(scr, SCR_APPROVAL, &s_ui.ap_idx, &s_ui.ap_tag, "审批", "待处理");
 
     s_ui.ap_bigq = text(scr, &wb_font_28, C_RED, SAFE_L, 46, CONTENT_W, 34,
                         LV_TEXT_ALIGN_LEFT);
@@ -323,7 +368,7 @@ void build_ask(void)
 {
     lv_obj_t *scr = screen_new();
     s_ui.scr[SCR_ASK] = scr;
-    build_header(scr, &s_ui.aq_idx, &s_ui.aq_tag, "提问", "1 / 1");
+    build_header(scr, SCR_ASK, &s_ui.aq_idx, &s_ui.aq_tag, "提问", "1 / 1");
 
     s_ui.aq_kick = text(scr, &wb_font_12, C_DIM, SAFE_L, 46, CONTENT_W, 15,
                         LV_TEXT_ALIGN_LEFT, 1);
@@ -356,9 +401,10 @@ void build_standby(void)
     s_ui.scr[SCR_STANDBY] = scr;
 
     s_ui.sb_dot = panel(scr, SAFE_L, 17, 6, 6, C_MINT, 3);
-    s_ui.sb_top = text(scr, &wb_font_12, C_DIM, SAFE_L + 12, 10, 196, 15,
+    s_ui.sb_top = text(scr, &wb_font_12, C_DIM, SAFE_L + 12, 10, 150, 15,
                        LV_TEXT_ALIGN_LEFT);
     set_text(s_ui.sb_top, "无人打扰 · 在线");
+    build_status_cluster(scr, SCR_STANDBY, false);
 
     panel(scr, 98, 120, 44, 4, C_MINT, 2);
 
@@ -390,7 +436,7 @@ void build_offline(void)
 {
     lv_obj_t *scr = screen_new();
     s_ui.scr[SCR_OFFLINE] = scr;
-    build_header(scr, &s_ui.of_idx, &s_ui.of_tag, "离线", "自动重连");
+    build_header(scr, SCR_OFFLINE, &s_ui.of_idx, &s_ui.of_tag, "离线", "自动重连");
 
     lv_obj_t *ring = frame(scr, 91, 54, 58, 58);
     all_rule(ring, C_RED, 2, LV_RADIUS_CIRCLE);
@@ -425,7 +471,7 @@ void build_low_battery(void)
 {
     lv_obj_t *scr = screen_new();
     s_ui.scr[SCR_LOW] = scr;
-    build_header(scr, &s_ui.lb_idx, &s_ui.lb_tag, "电量", "0%");
+    build_header(scr, SCR_LOW, &s_ui.lb_idx, &s_ui.lb_tag, "电量", "0%");
 
     lv_obj_t *shell = panel(scr, 66, 58, 100, 44, C_BG, 6);
     all_rule(shell, C_RED, 3, 6);
@@ -504,7 +550,7 @@ void state_display(const char *token, const char **zh, uint32_t *color)
 
 void update_overview(const wb_view_t *v)
 {
-    char buf[96];
+    char buf[160];
     const int n = v->n_sess;
     int sel = v->sel;
     if (n > 0) {
@@ -536,14 +582,22 @@ void update_overview(const wb_view_t *v)
 
     if (n > 0) {
         const wb_sess_t *s = &v->sess[sel];
+        // 协议已带每条会话的积分消耗，补在模型行尾（无数据时不占位）。
+        char tail[32];
+        if (s->credit > 0.0) {
+            int tenths = (int)(s->credit * 10.0);
+            snprintf(tail, sizeof(tail), " · %d.%d 分", tenths / 10, tenths % 10);
+        } else {
+            tail[0] = '\0';
+        }
         if (s->model[0] && s->msg[0])
-            snprintf(buf, sizeof(buf), "%s · %s", s->model, s->msg);
+            snprintf(buf, sizeof(buf), "%s · %s%s", s->model, s->msg, tail);
         else if (s->model[0])
-            snprintf(buf, sizeof(buf), "%s", s->model);
+            snprintf(buf, sizeof(buf), "%s%s", s->model, tail);
         else if (s->msg[0])
-            snprintf(buf, sizeof(buf), "%s", s->msg);
+            snprintf(buf, sizeof(buf), "%s%s", s->msg, tail);
         else
-            snprintf(buf, sizeof(buf), "等待会话信息");
+            snprintf(buf, sizeof(buf), "等待会话信息%s", tail);
     } else {
         snprintf(buf, sizeof(buf), "%s",
                  v->connected ? "等待主机下发状态" : "等待连接主机");
@@ -823,6 +877,10 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
         s_ui.last_n = -1;
         s_ui.last_token_set = false;
     }
+
+    // 顶栏连接点 + 电量在所有屏幕常驻，随每次快照刷新。
+    for (int i = 0; i < SCR_COUNT; ++i)
+        update_status_cluster(i, v->connected, s_ui.soc);
 
     switch (target) {
     case SCR_STANDBY: update_standby(v); break;
