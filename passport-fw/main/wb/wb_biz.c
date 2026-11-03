@@ -385,18 +385,28 @@ void wb_biz_back(void)
 
     char out[96];
     size_t n = 0;
-    int ask_id = 0;
+    const char *key = NULL;
+    int id = 0;
     bool changed = false;
 
     view_lock();
-    if (s_view.page == WB_PAGE_APPROVAL) {
+    if (s_view.page == WB_PAGE_APPROVAL && s_view.approval) {
+        // 长按 DOWN = 明确拒绝，与短按 OK 选中拒绝同一条上行。
+        id = s_view.approval_id;
+        key = "down";
+        s_view.approval = false;
+        s_answered_approval_id = id;
+        s_view.page = WB_PAGE_OVERVIEW;
+        recompute_busy_locked();
+        changed = true;
+    } else if (s_view.page == WB_PAGE_APPROVAL) {
         s_view.page = WB_PAGE_OVERVIEW;
         s_approval_auto = false;   // 用户主动返回，不自动弹回
         changed = true;
     } else if (s_view.page == WB_PAGE_ASK && s_view.ask) {
         // 主机约定：长按 DOWN 用 key 帧 + approval_id=ask.id + "skip"。
-        ask_id = s_view.ask_id;
-        n = wb_proto_enc_key(out, sizeof(out), ask_id, "skip");
+        id = s_view.ask_id;
+        key = "skip";
         s_view.ask = false;
         s_view.page = WB_PAGE_OVERVIEW;
         recompute_busy_locked();
@@ -404,7 +414,16 @@ void wb_biz_back(void)
     }
     view_unlock();
 
-    if (n > 0 && !wb_link_send(out, n)) ESP_LOGW(TAG, "skip 发送失败（未连接？）");
+    if (key) {
+        n = wb_proto_enc_key(out, sizeof(out), id, key);
+        if (strcmp(key, "skip") == 0) {
+            ESP_LOGI(TAG, "跳过提问 id=%d", id);
+            if (!wb_link_send(out, n)) ESP_LOGW(TAG, "skip 发送失败（未连接？）");
+        } else {
+            ESP_LOGI(TAG, "长按拒绝审批 id=%d", id);
+            if (!wb_link_send(out, n)) ESP_LOGW(TAG, "拒绝发送失败（未连接？）");
+        }
+    }
     if (changed) notify_change();
 }
 

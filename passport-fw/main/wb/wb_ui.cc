@@ -2,7 +2,7 @@
 //
 // 设计稿：docs/ui-design/index.html 的 V2 列。
 //   · 纯黑底 + 薄荷色单轨焦点；一屏一条会话。
-//   · 28px 状态主字，底部 6 段进度轨表示“第几条 / 共几条”。
+//   · 28px 状态主字，底部 3 段进度轨表示“第几条 / 共几条”。
 //   · 六屏：会话总览 / 审批 / 提问 / 待机 / 离线 / 低电量。
 //   · 每屏底部保留三键键位栏。
 //
@@ -70,14 +70,14 @@ const char *const k_screen_name[SCR_COUNT] = {
 struct UiState {
     lv_obj_t *scr[SCR_COUNT];
 
-    // 总览：一条会话 + 6 段进度轨。
+    // 总览：一条会话 + 3 段进度轨（与 WB_MAX_SESS 对齐）。
     lv_obj_t *ov_idx;
     lv_obj_t *ov_tag;
     lv_obj_t *ov_kick;
     lv_obj_t *ov_state;
     lv_obj_t *ov_name;
     lv_obj_t *ov_model;
-    lv_obj_t *ov_seg[6];
+    lv_obj_t *ov_seg[WB_MAX_SESS];
     lv_obj_t *ov_next;
 
     // 审批。
@@ -276,8 +276,9 @@ void build_overview(void)
     s_ui.ov_model = text(scr, &wb_font_12, C_DIM, FOCUS_X, 164, 196, 15,
                          LV_TEXT_ALIGN_LEFT);
 
-    for (int i = 0; i < 6; ++i)
-        s_ui.ov_seg[i] = panel(scr, 39 + i * 28, 242, 22, 4, C_SEG_IDLE, 2);
+    // 3 段进度轨居中：3×22 + 2×6 = 78，起点 (240-78)/2 = 81。
+    for (int i = 0; i < WB_MAX_SESS; ++i)
+        s_ui.ov_seg[i] = panel(scr, 81 + i * 28, 242, 22, 4, C_SEG_IDLE, 2);
 
     s_ui.ov_next = text(scr, &wb_font_12, C_DIM, SAFE_L, 251, CONTENT_W, 15,
                         LV_TEXT_ALIGN_CENTER);
@@ -312,8 +313,8 @@ void build_approval(void)
         s_ui.ap_act_txt[i] = text(s_ui.ap_act[i], &buddy_font_16, C_DIM, 12, 6, 192, 20,
                                   LV_TEXT_ALIGN_LEFT);
     }
-    set_text(s_ui.ap_act_txt[0], "OK  允许执行");
-    set_text(s_ui.ap_act_txt[1], "长按 DOWN  拒绝");
+    set_text(s_ui.ap_act_txt[0], "允许执行 · OK 确认");
+    set_text(s_ui.ap_act_txt[1], "直接拒绝 · 长按 DOWN");
 
     build_footer(scr, SCR_APPROVAL);
 }
@@ -382,7 +383,7 @@ void build_standby(void)
     set_text(s_ui.sb_sub, "长按 OK 2s 提示 · 5s 关机");
 
     build_footer(scr, SCR_STANDBY);
-    set_keys(SCR_STANDBY, "UP", "唤醒", "OK", "唤醒", "DOWN", "唤醒");
+    set_keys(SCR_STANDBY, "UP", "唤醒", "OK", "唤醒", "长按OK", "关机");
 }
 
 void build_offline(void)
@@ -444,7 +445,7 @@ void build_low_battery(void)
     s_ui.lb_note = text(scr, &wb_font_12, C_DIM, SAFE_L, 184, CONTENT_W, 32,
                         LV_TEXT_ALIGN_CENTER);
     lv_label_set_long_mode(s_ui.lb_note, LV_LABEL_LONG_WRAP);
-    set_text(s_ui.lb_note, "低于 15% 时显示本页。\n连接保持，充电后自动恢复。");
+    set_text(s_ui.lb_note, "长按 DOWN 关闭提醒\n连接保持，充电后自动恢复。");
 
     build_footer(scr, SCR_LOW);
     set_keys(SCR_LOW, "UP/DOWN", "屏蔽", "OK", "返回总览", "长按OK", "关机");
@@ -549,7 +550,7 @@ void update_overview(const wb_view_t *v)
     }
     set_text(s_ui.ov_model, buf);
 
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < WB_MAX_SESS; ++i) {
         uint32_t c = C_LINE;
         if (i < n) c = (i == sel) ? C_MINT : C_SEG_IDLE;
         set_color(s_ui.ov_seg[i], c);
@@ -563,8 +564,7 @@ void update_overview(const wb_view_t *v)
         snprintf(buf, sizeof(buf), "%s", sel == 0 ? "仅 1 条会话" : "已是最后一条");
     set_text(s_ui.ov_next, buf);
 
-    const char *ok = (v->approval || v->ask) ? "打开待办" : "无操作";
-    set_keys(SCR_OVERVIEW, "UP", "上一条", "OK", ok, "DOWN", "下一条");
+    set_keys(SCR_OVERVIEW, "UP", "上一条", "OK", (v->approval || v->ask) ? "打开待办" : "无待办", "DOWN", "下一条");
 
     if (sel != s_ui.last_sel || n != s_ui.last_n ||
         (token && (!s_ui.last_token_set || strcmp(token, s_ui.last_token) != 0))) {
@@ -599,7 +599,7 @@ void update_approval(const wb_view_t *v)
     all_rule(d, allow ? C_LINE : C_RED, 2, 4);
     ui_pixel_text_color(s_ui.ap_act_txt[1], allow ? C_DIM : C_RED);
 
-    set_keys(SCR_APPROVAL, "UP/DOWN", "切换", "OK", "确认", "长按DOWN", "返回");
+    set_keys(SCR_APPROVAL, "UP/DOWN", "选择", "OK", "确认", "长按DOWN", "拒绝");
 }
 
 void update_ask(const wb_view_t *v)
@@ -691,7 +691,7 @@ void update_offline(const wb_view_t *v)
     snprintf(buf, sizeof(buf), "最后同步 %s · 缓存 %d 条\n检查主机蓝牙与 daemon",
              hm, v->n_sess);
     set_text(s_ui.of_note, buf);
-    set_keys(SCR_OFFLINE, "UP", "翻缓存", "OK", "回总览", "长按DOWN", "返回");
+    set_keys(SCR_OFFLINE, "UP", "查看缓存", "OK", "回总览", "长按OK", "关机");
 }
 
 void update_low_battery(int soc)

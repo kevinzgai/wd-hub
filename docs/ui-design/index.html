@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Passport 看板 · 240×320 四版设计稿</title>
+<style>
+  /* ============ 文档外壳（不是设备界面） ============ */
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:#0d1117;color:#dbe4ee;
+    font-family:"Microsoft YaHei","PingFang SC","Noto Sans SC",system-ui,sans-serif;
+    font-size:14px;line-height:1.65;
+  }
+  a{color:#6fd3f5;text-decoration:none}
+  .topbar{position:sticky;top:0;z-index:20;background:rgba(10,14,19,.94);border-bottom:2px solid #26313d;backdrop-filter:blur(10px)}
+  .tb-in{max-width:1520px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .brand{font-size:16px;font-weight:700;color:#fff;letter-spacing:.5px}
+  .brand small{font-size:12px;font-weight:400;color:#8fa1b5;margin-left:8px;letter-spacing:1px}
+  .tools{display:flex;align-items:center;gap:6px;margin-left:auto;flex-wrap:wrap}
+  .btn{appearance:none;border:2px solid #354252;background:#171f28;color:#c9d5e1;font:inherit;font-size:12px;line-height:1;padding:7px 11px;border-radius:6px;cursor:pointer}
+  .btn:hover{border-color:#4a5d72;color:#fff}
+  .btn[aria-pressed="true"]{border-color:#35c8ec;background:#0e2532;color:#35c8ec}
+  main{max-width:1520px;margin:0 auto;padding:0 20px 60px}
+  h1{font-size:28px;line-height:1.3;margin:28px 0 8px;color:#fff;letter-spacing:1px}
+  .lede{max-width:980px;color:#aab8c8;font-size:14px;margin:0 0 22px}
+  .spec-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:18px 0 26px}
+  .spec{border:2px solid #26313d;background:#131a22;border-radius:10px;padding:12px 14px}
+  .spec h3{margin:0 0 4px;font-size:13px;color:#fff;letter-spacing:.5px}
+  .spec p{margin:0;font-size:13px;color:#9fb0c2}
+  .spec b{color:#e8f2ff}
+  .matrix{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 30px;background:#131a22;border:2px solid #26313d}
+  .matrix th,.matrix td{padding:8px 10px;border-bottom:2px solid #202b36;text-align:left;vertical-align:top}
+  .matrix th{background:#18212b;color:#9fb0c2;font-size:12px;letter-spacing:.5px}
+  .matrix td:first-child{color:#fff;font-weight:700;white-space:nowrap}
+  .matrix .yes{color:#45e0a0;font-weight:700;text-align:center}
+
+  /* ============ 版本区块 ============ */
+  .version{padding-top:18px;margin-top:26px;border-top:2px solid #26313d}
+  .vhead{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
+  .vnum{font-size:30px;line-height:1;font-weight:800;letter-spacing:1px}
+  .vtitle{font-size:22px;line-height:1.35;font-weight:700;color:#fff;margin:0}
+  .vsub{font-size:13px;color:#9fb0c2;margin:2px 0 0}
+  .vtags{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+  .tag{font-size:11px;line-height:1;padding:5px 8px;border:2px solid #2c3846;border-radius:20px;color:#a9b9c9}
+  .vnote{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin:16px 0 6px}
+  .vnote .cell{border:2px solid #26313d;background:#121920;border-radius:8px;padding:10px 12px}
+  .vnote h4{margin:0 0 4px;font-size:12px;color:#8fa4b8;letter-spacing:1px;font-weight:700}
+  .vnote p,.vnote ul{margin:0;font-size:12.5px;color:#b6c4d3}
+  .vnote ul{padding-left:16px}
+  .vnote li{margin:2px 0}
+  .swatches{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .sw{width:24px;height:24px;border:2px solid #33404e;border-radius:4px}
+  .shots{display:flex;flex-wrap:wrap;gap:28px 20px;margin-top:18px;align-items:flex-start}
+  .shot{width:calc(240px * var(--z));flex:none}
+  .shot-label{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:12px;color:#8fa1b5;margin-bottom:6px;letter-spacing:.5px}
+  .shot-label b{color:#e8f2ff;font-size:12px}
+  .phone{width:calc(240px * var(--z));height:calc(320px * var(--z));border-radius:10px;overflow:hidden;
+    box-shadow:0 0 0 2px #2b3541,0 16px 34px rgba(0,0,0,.45);background:#000}
+  .screen{width:240px;height:320px;transform:scale(var(--z));transform-origin:top left;overflow:hidden;position:relative;
+    font-family:"Microsoft YaHei","PingFang SC","Noto Sans SC",system-ui,sans-serif;text-rendering:geometricPrecision}
+  .shot-cap{font-size:11px;line-height:1.5;color:#7d8fa2;margin-top:6px;min-height:32px}
+  :root{--z:2}
+  body.dim .screen{filter:brightness(.5)}
+  .dim-tip{display:none;font-size:11px;color:#ffb454;border:2px solid #5a4020;background:#241a0c;padding:4px 8px;border-radius:6px}
+  body.dim .dim-tip{display:inline-block}
+
+  /* ============ 设备通用排版 ============ */
+  .safe{position:absolute;left:12px;right:12px;top:10px;bottom:12px;display:flex;flex-direction:column;gap:6px}
+  .hd{flex:none;height:30px;display:flex;align-items:center;gap:8px}
+  .body{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px}
+  .ft{flex:none;height:34px;display:grid;grid-template-columns:1fr .8fr 1.25fr;gap:2px}
+  .key{display:flex;flex-direction:column;justify-content:center;gap:1px;padding:0 2px;border-left:2px solid var(--line);min-width:0}
+  .key:first-child{border-left:0}
+  .kk{font-size:12px;line-height:14px;color:var(--dim);letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ka{font-size:12px;line-height:14px;color:var(--ink);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sp{flex:1}
+  .hm{font-size:12px;line-height:16px;color:var(--dim);white-space:nowrap}
+  .dot{display:inline-block;width:6px;height:6px;background:var(--green);margin-right:4px;vertical-align:1px}
+  .batt{width:22px;height:10px;border:2px solid var(--line);border-radius:2px;padding:1px;display:inline-block}
+  .batt i{display:block;height:100%;background:var(--green);border-radius:1px}
+  .mono{font-family:"Cascadia Mono",Consolas,"Courier New",monospace}
+
+  /* =========================================================
+     V1 · 卡片台（深色高密度）
+     ========================================================= */
+  .v1{--bg:#070D17;--panel:#0C1626;--sel:#12253C;--line:#24405F;--ink:#E8F2FF;--dim:#9FB6D4;
+      --cyan:#35C8EC;--green:#45E0A0;--orange:#FFB454;--red:#FF7A80;background:var(--bg);color:var(--ink)}
+  .v1 .ht{font-size:16px;line-height:20px;font-weight:700;letter-spacing:.5px}
+  .v1 .link{display:flex;align-items:center;font-size:12px;line-height:16px;color:var(--green);white-space:nowrap}
+  .v1 .list{display:flex;flex-direction:column;gap:6px;flex:none}
+  .v1 .card{height:46px;flex:none;position:relative;display:flex;align-items:center;gap:8px;
+    padding:3px 8px 3px 12px;border:2px solid var(--line);border-radius:6px;background:var(--panel)}
+  .v1 .rail{position:absolute;left:0;top:0;bottom:0;width:4px;background:transparent}
+  .v1 .card.sel{border-color:var(--cyan);background:var(--sel)}
+  .v1 .card.sel .rail{background:var(--cyan)}
+  .v1 .cmain{flex:1;min-width:0}
+  .v1 .cname{font-size:16px;line-height:20px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v1 .cmeta{display:flex;align-items:center;gap:8px;margin-top:2px;font-size:12px;line-height:14px;color:var(--dim)}
+  .v1 .state{display:inline-flex;align-items:center;gap:4px;font-weight:700;white-space:nowrap}
+  .v1 .sq{width:6px;height:6px;display:inline-block;background:currentColor}
+  .v1 .model{flex:1;min-width:0;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .v1 .idx{flex:none;font-size:12px;color:var(--dim)}
+  .v1 .run{color:var(--cyan)}.v1 .need{color:var(--orange)}.v1 .done{color:var(--green)}.v1 .err{color:var(--red)}.v1 .idle{color:var(--dim)}
+  .v1 .more{flex:none;height:18px;display:flex;align-items:center;justify-content:space-between;
+    font-size:12px;line-height:16px;color:var(--dim);padding:0 4px}
+  .v1 .toolcard{flex:none;height:42px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    border:2px solid var(--red);border-radius:6px;background:var(--panel)}
+  .v1 .tlbl{font-size:12px;color:var(--dim);flex:none}
+  .v1 .toolname{font-size:16px;line-height:20px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .v1 .risk{flex:none;background:var(--red);color:var(--bg);font-size:12px;line-height:1;font-weight:700;padding:4px 8px;border-radius:4px}
+  .v1 .cmd{flex:1;min-height:0;overflow:hidden;padding:5px 10px;border:2px solid var(--line);border-radius:6px;background:var(--panel)}
+  .v1 .lbl{font-size:12px;line-height:14px;color:var(--dim);margin-bottom:3px}
+  .v1 .cmd .txt{font-size:12px;line-height:17px;color:var(--ink);word-break:break-all;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden}
+  .v1 .acts{flex:none;display:flex;flex-direction:column;gap:6px}
+  .v1 .act{height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-radius:6px;font-size:16px;line-height:20px;font-weight:700}
+  .v1 .act .k{font-size:12px;line-height:14px;letter-spacing:.5px}
+  .v1 .act.ok{background:var(--green);border:2px solid var(--green);color:var(--bg)}
+  .v1 .act.no{background:var(--panel);border:2px solid var(--red);color:var(--red)}
+  .v1 .qcard{flex:none;height:84px;padding:5px 10px;border:2px solid var(--orange);border-radius:6px;background:var(--panel);overflow:hidden}
+  .v1 .qlabel{font-size:12px;line-height:14px;color:var(--orange);font-weight:700}
+  .v1 .qtext{font-size:16px;line-height:19px;font-weight:700;margin-top:2px;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+  .v1 .opts{display:flex;flex-direction:column;gap:3px;flex:none}
+  .v1 .opt{height:26px;display:flex;align-items:center;gap:6px;padding:0 8px;border:2px solid var(--line);border-radius:4px;
+    background:var(--panel);font-size:16px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v1 .opt .n{flex:none;width:12px;font-size:12px;color:var(--dim)}
+  .v1 .opt.sel{background:var(--cyan);border-color:var(--cyan);color:var(--bg);font-weight:700}
+  .v1 .opt.sel .n{color:var(--bg)}
+  .v1 .sb-top{flex:none;height:22px;display:flex;align-items:center;justify-content:space-between;font-size:12px;line-height:16px;color:var(--dim)}
+  .v1 .sb-center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+  .v1 .sb-bar{width:40px;height:4px;background:var(--cyan);border-radius:2px}
+  .v1 .sb-clock{font-size:28px;line-height:34px;font-weight:700;letter-spacing:4px;color:var(--ink)}
+  .v1 .sb-date{font-size:16px;line-height:22px;color:var(--cyan)}
+  .v1 .sb-status{font-size:16px;line-height:22px;color:var(--green);font-weight:700}
+  .v1 .sb-hint{flex:none;text-align:center;font-size:12px;line-height:17px;color:var(--dim)}
+  .v1 .off-main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}
+  .v1 .off-ic{width:48px;height:48px;border:2px solid var(--red);border-radius:50%;position:relative}
+  .v1 .off-ic:before,.v1 .off-ic:after{content:"";position:absolute;left:50%;top:50%;width:24px;height:4px;background:var(--red);transform:translate(-50%,-50%) rotate(45deg)}
+  .v1 .off-ic:after{transform:translate(-50%,-50%) rotate(-45deg)}
+  .v1 .off-title{font-size:28px;line-height:34px;font-weight:700;color:var(--red)}
+  .v1 .off-sub{font-size:16px;line-height:22px;font-weight:700}
+  .v1 .off-note{font-size:12px;line-height:16px;color:var(--dim);text-align:center}
+  .v1 .cache{flex:none;height:60px;padding:6px 10px;border:2px solid var(--line);border-radius:6px;background:var(--panel)}
+  .v1 .cache .lbl{margin-bottom:2px}
+  .v1 .cache .big{font-size:16px;line-height:20px;font-weight:700}
+  .v1 .cache .sub{font-size:12px;line-height:14px;color:var(--dim);margin-top:2px}
+  .v1 .low{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px}
+  .v1 .battbig{width:100px;height:44px;border:3px solid var(--red);border-radius:6px;position:relative;padding:4px}
+  .v1 .battbig:after{content:"";position:absolute;right:-9px;top:11px;width:5px;height:14px;background:var(--red);border-radius:0 2px 2px 0}
+  .v1 .battbig i{display:block;width:12%;height:100%;background:var(--red);border-radius:2px}
+  .v1 .low-pct{font-size:28px;line-height:34px;font-weight:700;color:var(--red)}
+  .v1 .low-title{font-size:16px;line-height:22px;font-weight:700}
+  .v1 .low-note{max-width:200px;text-align:center;font-size:12px;line-height:17px;color:var(--dim)}
+
+  /* =========================================================
+     V2 · 极简大字流（单条）
+     ========================================================= */
+  .v2{--bg:#000000;--panel:#0E0E0E;--line:#2A2A2A;--ink:#FFFFFF;--dim:#A8A8A8;
+      --cyan:#4AE3B5;--green:#7BE495;--orange:#FFB020;--red:#FF7070;background:#000;color:#fff}
+  .v2 .hd{height:28px}
+  .v2 .idx2{font-size:12px;line-height:16px;color:var(--dim);letter-spacing:2px}
+  .v2 .hm{font-size:12px;line-height:16px;color:var(--dim);letter-spacing:1px}
+  .v2 .focus{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;gap:6px;
+    border-left:6px solid var(--cyan);padding-left:14px}
+  .v2 .fkick{font-size:12px;line-height:16px;color:var(--dim);letter-spacing:1px}
+  .v2 .fstate{font-size:28px;line-height:34px;font-weight:700;color:var(--cyan)}
+  .v2 .fbar{width:36px;height:4px;background:var(--cyan);border-radius:2px}
+  .v2 .fname{font-size:16px;line-height:22px;font-weight:700;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  .v2 .fmodel{font-size:12px;line-height:16px;color:var(--dim)}
+  .v2 .seg{flex:none;height:4px;display:flex;gap:6px;justify-content:center}
+  .v2 .seg i{width:22px;height:4px;background:#4A4A4A;border-radius:2px}
+  .v2 .seg i.on{background:var(--cyan)}
+  .v2 .next{flex:none;font-size:12px;line-height:16px;color:var(--dim);text-align:center}
+  .v2 .bigq{flex:none;font-size:28px;line-height:34px;font-weight:700;color:var(--red)}
+  .v2 .toolrow{flex:none;display:flex;align-items:center;gap:8px;font-size:16px;line-height:20px;font-weight:700}
+  .v2 .toolrow .t12{font-size:12px;line-height:16px;color:var(--dim);font-weight:400;margin-left:auto}
+  .v2 .cmd{flex:1;min-height:0;overflow:hidden;padding:4px 8px;border-left:4px solid var(--red);background:var(--panel)}
+  .v2 .cmd .txt{font-size:12px;line-height:17px;color:var(--ink);word-break:break-all;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden}
+  .v2 .acts{flex:none;display:flex;flex-direction:column;gap:6px}
+  .v2 .act{height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-radius:4px;font-size:16px;line-height:20px;font-weight:700}
+  .v2 .act .k{font-size:12px;line-height:14px;letter-spacing:.5px}
+  .v2 .act.ok{background:var(--cyan);color:#000;border:2px solid var(--cyan)}
+  .v2 .act.no{background:transparent;color:var(--red);border:2px solid var(--red)}
+  .v2 .qblock{flex:none;height:68px;overflow:hidden}
+  .v2 .kicker{font-size:12px;line-height:16px;color:var(--dim);letter-spacing:1px}
+  .v2 .qtext{font-size:16px;line-height:20px;font-weight:700;margin-top:2px;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  .v2 .opts{flex:none;display:flex;flex-direction:column;gap:4px}
+  .v2 .opt{height:27px;display:flex;align-items:center;gap:8px;padding:0 8px;border-left:6px solid var(--line);
+    font-size:16px;line-height:20px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v2 .opt .n{flex:none;font-size:12px;color:var(--dim)}
+  .v2 .opt.sel{border-left-color:var(--cyan);color:var(--ink);font-weight:700}
+  .v2 .opt.sel .n{color:var(--cyan)}
+  .v2 .hint{flex:none;font-size:12px;line-height:16px;color:var(--dim)}
+  .v2 .sb-top{flex:none;height:20px;display:flex;align-items:center;font-size:12px;line-height:16px;color:var(--dim)}
+  .v2 .sb-center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+  .v2 .sb-bar{width:44px;height:4px;background:var(--cyan);border-radius:2px}
+  .v2 .sb-clock{font-size:28px;line-height:34px;font-weight:700;letter-spacing:6px;color:#fff}
+  .v2 .sb-date{font-size:16px;line-height:22px;color:var(--cyan)}
+  .v2 .sb-note{font-size:16px;line-height:22px;color:var(--dim)}
+  .v2 .sb-hint{flex:none;text-align:center;font-size:16px;line-height:22px;color:var(--ink);font-weight:700}
+  .v2 .sb-hint span{display:block;font-size:12px;line-height:16px;color:var(--dim);font-weight:400;margin-top:2px}
+  .v2 .off{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+  .v2 .off-ic{width:58px;height:58px;border:2px solid var(--red);border-radius:50%;position:relative}
+  .v2 .off-ic:before,.v2 .off-ic:after{content:"";position:absolute;left:50%;top:50%;width:30px;height:4px;background:var(--red);transform:translate(-50%,-50%) rotate(45deg)}
+  .v2 .off-ic:after{transform:translate(-50%,-50%) rotate(-45deg)}
+  .v2 .off-title{font-size:28px;line-height:34px;font-weight:700;color:var(--red)}
+  .v2 .off-sub{font-size:16px;line-height:22px;font-weight:700}
+  .v2 .off-note{font-size:12px;line-height:17px;color:var(--dim);text-align:center}
+  .v2 .low{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+  .v2 .battbig{width:100px;height:44px;border:3px solid var(--red);border-radius:6px;position:relative;padding:4px}
+  .v2 .battbig:after{content:"";position:absolute;right:-9px;top:11px;width:5px;height:14px;background:var(--red);border-radius:0 2px 2px 0}
+  .v2 .battbig i{display:block;width:12%;height:100%;background:var(--red);border-radius:2px}
+  .v2 .low-pct{font-size:28px;line-height:34px;font-weight:700;color:var(--red)}
+  .v2 .low-title{font-size:16px;line-height:22px;font-weight:700}
+  .v2 .low-note{max-width:200px;text-align:center;font-size:12px;line-height:17px;color:var(--dim)}
+
+  /* =========================================================
+     V3 · 仪表盘
+     ========================================================= */
+  .v3{--bg:#081016;--panel:#0F1C24;--line:#1E3A48;--ink:#F2F8FB;--dim:#A0BCC9;
+      --cyan:#4FD1FF;--green:#6EE7A8;--orange:#FFC24B;--red:#FF8585;background:var(--bg);color:var(--ink)}
+  .v3 .dash-hd{flex:none;height:46px;display:flex;align-items:center;gap:8px}
+  .v3 .dash-hd.compact{height:38px}
+  .v3 .dash-clock{font-size:28px;line-height:34px;font-weight:700;letter-spacing:2px}
+  .v3 .dash-side{flex:1;text-align:right;font-size:12px;line-height:16px;color:var(--dim);min-width:0}
+  .v3 .dash-date{color:var(--cyan);white-space:nowrap}
+  .v3 .dash-link{white-space:nowrap;margin-top:1px}
+  .v3 .kpis{flex:none;height:58px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+  .v3 .kpi{display:flex;flex-direction:column;justify-content:center;padding:3px 6px;border:2px solid var(--line);border-radius:6px;background:var(--panel)}
+  .v3 .kpi b{font-size:28px;line-height:30px;font-weight:700}
+  .v3 .kpi span{font-size:12px;line-height:14px;color:var(--dim);white-space:nowrap}
+  .v3 .rows{flex:1;min-height:0;display:flex;flex-direction:column;gap:3px}
+  .v3 .row{flex:none;height:29px;display:flex;align-items:center;gap:8px;padding:0 8px;
+    border:2px solid var(--line);border-left-width:4px;border-radius:4px;background:var(--panel)}
+  .v3 .row.sel{border-color:var(--cyan);border-left-color:var(--cyan);background:#12262F}
+  .v3 .rdot{flex:none;width:6px;height:6px;background:var(--dim)}
+  .v3 .rname{flex:1;min-width:0;font-size:16px;line-height:20px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v3 .rstate{flex:none;font-size:12px;line-height:16px;font-weight:700}
+  .v3 .more{flex:none;height:16px;display:flex;align-items:center;justify-content:space-between;font-size:12px;line-height:16px;color:var(--dim);padding:0 2px}
+  .v3 .alert{flex:none;height:28px;display:flex;align-items:center;gap:6px;padding:0 8px;border-radius:4px;
+    background:var(--red);color:var(--bg);font-size:16px;line-height:20px;font-weight:700}
+  .v3 .alert .t12{font-size:12px;line-height:14px;margin-left:auto}
+  .v3 .cmd{flex:1;min-height:0;overflow:hidden;padding:5px 8px;border:2px solid var(--line);border-left:4px solid var(--red);border-radius:4px;background:var(--panel)}
+  .v3 .lbl{font-size:12px;line-height:14px;color:var(--dim);margin-bottom:3px}
+  .v3 .cmd .txt{font-size:12px;line-height:17px;color:var(--ink);word-break:break-all;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}
+  .v3 .acts{flex:none;display:flex;flex-direction:column;gap:6px}
+  .v3 .act{height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;border-radius:4px;font-size:16px;line-height:20px;font-weight:700}
+  .v3 .act .k{font-size:12px;line-height:14px}
+  .v3 .act.ok{background:var(--green);color:var(--bg);border:2px solid var(--green)}
+  .v3 .act.no{background:var(--panel);color:var(--red);border:2px solid var(--red)}
+  .v3 .qbox{flex:none;height:68px;overflow:hidden;padding:4px 8px;border:2px solid var(--line);border-left:4px solid var(--orange);border-radius:4px;background:var(--panel)}
+  .v3 .qbox .qtext{font-size:16px;line-height:20px;font-weight:700;margin-top:1px;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  .v3 .opts{flex:none;display:flex;flex-direction:column;gap:4px}
+  .v3 .opt{height:27px;display:flex;align-items:center;gap:8px;padding:0 8px;border:2px solid var(--line);border-radius:4px;
+    background:var(--panel);font-size:16px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v3 .opt .n{flex:none;font-size:12px;color:var(--dim)}
+  .v3 .opt.sel{background:var(--cyan);border-color:var(--cyan);color:var(--bg);font-weight:700}
+  .v3 .opt.sel .n{color:var(--bg)}
+  .v3 .hint{flex:none;font-size:12px;line-height:16px;color:var(--dim)}
+  .v3 .statusbox{flex:none;height:60px;padding:5px 8px;border:2px solid var(--line);border-left:4px solid var(--green);border-radius:4px;background:var(--panel)}
+  .v3 .statusbox b{font-size:16px;line-height:22px}
+  .v3 .statusbox span{display:block;font-size:12px;line-height:16px;color:var(--dim)}
+  .v3 .sbhint{flex:none;text-align:center;font-size:16px;line-height:22px;font-weight:700}
+  .v3 .sbhint span{display:block;font-size:12px;line-height:16px;color:var(--dim);font-weight:400}
+  .v3 .note{flex:none;padding:6px 8px;border:2px solid var(--line);border-radius:4px;background:var(--panel)}
+  .v3 .note b{font-size:16px;line-height:22px}
+  .v3 .note span{display:block;font-size:12px;line-height:16px;color:var(--dim)}
+  .v3 .lowbox{flex:none;height:96px;display:flex;align-items:center;gap:14px;padding:8px 12px;border:2px solid var(--red);border-radius:6px;background:var(--panel)}
+  .v3 .battbig{width:78px;height:36px;border:3px solid var(--red);border-radius:5px;position:relative;padding:3px;flex:none}
+  .v3 .battbig:after{content:"";position:absolute;right:-8px;top:9px;width:5px;height:12px;background:var(--red);border-radius:0 2px 2px 0}
+  .v3 .battbig i{display:block;width:12%;height:100%;background:var(--red);border-radius:2px}
+  .v3 .low-pct{font-size:28px;line-height:32px;font-weight:700;color:var(--red)}
+  .v3 .low-pct small{display:block;font-size:12px;line-height:16px;color:var(--dim);font-weight:400}
+
+  /* =========================================================
+     V4 · 护照印章
+     ========================================================= */
+  .v4{--bg:#0B0906;--panel:#15100A;--line:#4A3A1E;--ink:#F7EFD9;--dim:#CBB994;
+      --cyan:#FFC857;--green:#8FD694;--orange:#FF9F45;--red:#FF7A6E;background:var(--bg);color:var(--ink)}
+  .v4 .frame{position:absolute;inset:6px;border:2px solid var(--line);pointer-events:none}
+  .v4 .hd{height:26px;border-bottom:2px solid var(--line);padding-bottom:3px}
+  .v4 .pt{font-size:12px;line-height:16px;font-weight:700;letter-spacing:3px;color:var(--cyan);white-space:nowrap}
+  .v4 .pn{font-size:12px;line-height:16px;color:var(--dim);margin-left:auto;letter-spacing:1px}
+  .v4 .visas{flex:1;min-height:0;display:flex;flex-direction:column;gap:2px}
+  .v4 .visa{flex:none;height:48px;position:relative;display:flex;align-items:center;gap:8px;padding:3px 8px;
+    border:2px solid var(--line);border-radius:2px;background:var(--panel)}
+  .v4 .visa.sel{border-color:var(--cyan);background:#191207}
+  .v4 .visa.sel:before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--cyan)}
+  .v4 .vno{flex:none;width:22px;font-size:16px;line-height:20px;font-weight:700;color:var(--cyan)}
+  .v4 .vmain{flex:1;min-width:0}
+  .v4 .vname{font-size:16px;line-height:20px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v4 .vmeta{font-size:12px;line-height:14px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v4 .run{color:var(--cyan)}.v4 .need{color:var(--red)}.v4 .done{color:var(--green)}.v4 .err{color:var(--red)}.v4 .idle{color:var(--dim)}
+  .v4 .more{flex:none;height:16px;display:flex;align-items:center;justify-content:space-between;font-size:12px;line-height:16px;color:var(--dim)}
+  .v4 .stamprow{flex:none;height:26px;display:flex;align-items:center;gap:8px}
+  .v4 .stamp-big{display:inline-block;border:3px solid currentColor;padding:1px 7px;font-size:16px;line-height:18px;font-weight:700;letter-spacing:2px;transform:rotate(-3deg)}
+  .v4 .stamp-big.red{color:var(--red)}
+  .v4 .stamp-big.gold{color:var(--cyan)}
+  .v4 .stamp-big.green{color:var(--green)}
+  .v4 .sr-time{font-size:12px;line-height:14px;color:var(--dim);margin-left:auto}
+  .v4 .toolrow{flex:none;display:flex;align-items:center;gap:8px;font-size:16px;line-height:20px;font-weight:700}
+  .v4 .toolrow .risk{background:var(--red);color:var(--bg);font-size:12px;line-height:1;font-weight:700;padding:3px 6px;border-radius:2px}
+  .v4 .cmd{flex:1;min-height:0;overflow:hidden;padding:4px 8px;border:2px solid var(--red);background:var(--panel)}
+  .v4 .cmd .txt{font-size:12px;line-height:17px;color:var(--ink);word-break:break-all;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden}
+  .v4 .acts{flex:none;display:flex;flex-direction:column;gap:6px}
+  .v4 .act{height:32px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;font-size:16px;line-height:20px;font-weight:700}
+  .v4 .act .k{font-size:12px;line-height:14px;letter-spacing:1px}
+  .v4 .act.ok{background:var(--green);border:2px solid var(--green);color:var(--bg)}
+  .v4 .act.no{background:transparent;border:2px solid var(--red);color:var(--red)}
+  .v4 .qblock{flex:none;height:60px;overflow:hidden;border-left:4px solid var(--orange);padding:2px 0 2px 8px}
+  .v4 .qtext{font-size:16px;line-height:20px;font-weight:700;
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  .v4 .opts{flex:none;display:flex;flex-direction:column;gap:2px}
+  .v4 .opt{height:26px;display:flex;align-items:center;gap:6px;padding:0 6px;border:2px solid var(--line);
+    font-size:16px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:var(--panel)}
+  .v4 .opt .n{flex:none;width:20px;font-size:12px;color:var(--dim);font-weight:700}
+  .v4 .opt.sel{background:var(--cyan);border-color:var(--cyan);color:var(--bg);font-weight:700}
+  .v4 .opt.sel .n{color:var(--bg)}
+  .v4 .hint{flex:none;font-size:12px;line-height:16px;color:var(--dim)}
+  .v4 .sb-top{flex:none;height:20px;display:flex;align-items:center;justify-content:space-between;font-size:12px;line-height:16px;color:var(--dim)}
+  .v4 .sb-center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+  .v4 .sb-stamp{transform:rotate(-5deg);border:3px solid var(--cyan);color:var(--cyan);font-size:16px;line-height:18px;font-weight:700;letter-spacing:3px;padding:2px 10px}
+  .v4 .sb-clock{font-size:28px;line-height:34px;font-weight:700;letter-spacing:5px}
+  .v4 .sb-date{font-size:16px;line-height:22px;color:var(--cyan)}
+  .v4 .sb-hint{flex:none;text-align:center;font-size:16px;line-height:22px;font-weight:700}
+  .v4 .sb-hint span{display:block;font-size:12px;line-height:16px;color:var(--dim);font-weight:400}
+  .v4 .off{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px}
+  .v4 .off-title{font-size:28px;line-height:34px;font-weight:700;color:var(--red)}
+  .v4 .off-sub{font-size:16px;line-height:22px;font-weight:700}
+  .v4 .off-note{font-size:12px;line-height:17px;color:var(--dim);text-align:center}
+  .v4 .low{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+  .v4 .battbig{width:100px;height:44px;border:3px solid var(--red);border-radius:4px;position:relative;padding:4px}
+  .v4 .battbig:after{content:"";position:absolute;right:-9px;top:11px;width:5px;height:14px;background:var(--red)}
+  .v4 .battbig i{display:block;width:12%;height:100%;background:var(--red)}
+  .v4 .low-pct{font-size:28px;line-height:34px;font-weight:700;color:var(--red)}
+  .v4 .low-title{font-size:16px;line-height:22px;font-weight:700}
+  .v4 .low-note{max-width:200px;text-align:center;font-size:12px;line-height:17px;color:var(--dim)}
+  .v4 .ft{height:38px;gap:6px}
+  .v4 .key{border:2px solid var(--line);border-radius:3px;background:var(--panel);padding:0 4px;align-items:center;text-align:center}
+  .v4 .kk{color:var(--cyan);font-weight:700;border:2px solid var(--line);border-radius:2px;padding:0 4px;line-height:12px}
+  .v4 .ka{line-height:12px}
+
+  /* ============ 说明区 ============ */
+  .notes{margin-top:36px;padding-top:22px;border-top:2px solid #26313d}
+  .notes h2{font-size:22px;color:#fff;margin:0 0 10px}
+  .notes h3{font-size:16px;color:#fff;margin:22px 0 8px}
+  .notes p,.notes li{font-size:13.5px;color:#aebdcc}
+  .notes ul{padding-left:20px}
+  .notes .callout{border:2px solid #2d5a42;background:#0f2018;border-radius:8px;padding:12px 14px;margin:14px 0}
+  .notes .callout b{color:#7be495}
+  .cmp{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0 18px;background:#131a22;border:2px solid #26313d}
+  .cmp th,.cmp td{padding:8px 10px;border-bottom:2px solid #202b36;text-align:left;vertical-align:top}
+  .cmp th{background:#18212b;color:#9fb0c2;font-size:12px}
+  .cmp td:first-child{color:#fff;font-weight:700}
+  .footer{margin-top:40px;padding-top:16px;border-top:2px solid #26313d;font-size:12px;color:#7d8fa2}
+  @media (max-width:760px){
+    .tb-in{padding:8px 12px}
+    .brand small{display:none}
+    main{padding:0 12px 40px}
+    :root{--z:1}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="tb-in">
+    <div class="brand">AI Passport 看板设计稿<small>240 × 320 · ST7789 · UP / OK / DOWN</small></div>
+    <div class="tools">
+      <button class="btn" data-scale="1">1×</button>
+      <button class="btn" data-scale="2" aria-pressed="true">2×</button>
+      <button class="btn" id="dimBtn" aria-pressed="false">50% 背光</button>
+      <span class="dim-tip">背光模拟已开</span>
+      <a class="btn" href="#notes">设计说明</a>
+    </div>
+  </div>
+</header>
+
+<main>
+<h1>四版 240×320 看板，同一套状态与三键规则</h1>
+<p class="lede">
+  同一份业务数据（会话列表、审批、提问、待机、离线、低电量）用四种视觉语言各做一套。
+  所有画布严格 240×320、四周 12px 安全区；正文只用 12 / 16 / 28 三档字号；所有描边 2px 起，
+  不使用细发丝线；状态不靠颜色单独表达，永远带文字。默认 2× 显示，可切 1× 或开启 50% 背光模拟。
+</p>
+
+<div class="spec-grid">
+  <div class="spec">
+    <h3>画布</h3>
+    <p><b>240 × 320 px</b> 竖屏，左右 12px、上下 10/12px 安全区。内容宽度 216px。</p>
+  </div>
+  <div class="spec">
+    <h3>字号与每行字数</h3>
+    <p>12 / 16 / 28 点阵。216px 内：<b>12px ≈ 18 汉字</b>，<b>16px ≈ 13 汉字</b>，<b>28px ≈ 7 汉字</b>；ASCII 约半宽。</p>
+  </div>
+  <div class="spec">
+    <h3>按键</h3>
+    <p><b>UP / OK / DOWN</b>，长按 800ms。无触摸、无滑动。焦点必须可见，键位提示必须在屏上。</p>
+  </div>
+  <div class="spec">
+    <h3>背光假设</h3>
+    <p>长期 <b>50% 背光</b>。正文对比度按 ≥7:1 设计（不是 WCAG 的 4.5:1），避免中灰大面积与低对比小字。</p>
+  </div>
+</div>
+
+<table class="matrix">
+  <thead><tr><th>页面 / 状态</th><th>本稿必须出现的内容</th><th>V1 卡片台</th><th>V2 大字流</th><th>V3 仪表盘</th><th>V4 护照印章</th></tr></thead>
+  <tbody>
+    <tr><td>会话总览</td><td>4~6 条会话：名称、状态、模型；焦点与溢出策略</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+    <tr><td>审批</td><td>工具名、命令/参数摘要、长按 DOWN 拒绝</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+    <tr><td>提问</td><td>问题、选项列表、当前选中项</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+    <tr><td>待机</td><td>28px 大号时间、日期星期、无人打扰·在线、唤醒提示</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+    <tr><td>离线</td><td>明确断链提示 + 自动重连说明 + 缓存入口</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+    <tr><td>低电量</td><td>电量百分比、低电提示、可返回</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================
+     V1
+     ============================================================ -->
+<section class="version" id="v1">
+  <div class="vhead">
+    <div class="vnum" style="color:#35C8EC">01</div>
+    <div>
+      <h2 class="vtitle">卡片台 · 信息密度优先</h2>
+      <p class="vsub">深色分层卡片 + 青色焦点框；一屏看 4 条，第 5~6 条用焦点滚动。日常主用版。</p>
+    </div>
+    <div class="vtags">
+      <span class="tag">4 条可见 / 6 条总量</span>
+      <span class="tag">焦点：2px 边框 + 4px 左轨</span>
+      <span class="tag">12 / 16 / 28</span>
+    </div>
+  </div>
+  <div class="vnote">
+    <div class="cell"><h4>定位</h4><p>最像一块“工作台”：会话是主角，状态是第二层，模型名是第三层。适合长时间放在桌面、需要一眼扫完多个任务的场景。</p></div>
+    <div class="cell"><h4>信息层级</h4><ul><li>L1 会话名 16px 近白</li><li>L2 状态色块 + 中文状态 12px</li><li>L3 模型名 12px 灰蓝，右对齐</li><li>焦点卡：2px 青色边 + 4px 左轨</li></ul></div>
+    <div class="cell"><h4>三键</h4><ul><li>UP / DOWN：移动焦点，列表跟焦滚动</li><li>OK：打开当前会话</li><li>长按 OK：刷新会话</li></ul></div>
+    <div class="cell"><h4>配色 / 背光</h4>
+      <p>正文 #E8F2FF / 卡片 #0C1626 = <b>16.0:1</b>；次要灰蓝 <b>8.7:1</b>；红色（已调亮）#FF7A80 <b>7.2:1</b>；深色字压绿底 <b>11.5:1</b>。</p>
+      <div class="swatches"><span class="sw" style="background:#070D17"></span><span class="sw" style="background:#0C1626"></span><span class="sw" style="background:#24405F"></span><span class="sw" style="background:#E8F2FF"></span><span class="sw" style="background:#9FB6D4"></span><span class="sw" style="background:#35C8EC"></span><span class="sw" style="background:#45E0A0"></span><span class="sw" style="background:#FFB454"></span><span class="sw" style="background:#FF7A80"></span></div>
+    </div>
+  </div>
+
+  <div class="shots">
+    <!-- V1 总览 -->
+    <div class="shot">
+      <div class="shot-label"><b>01 · 会话总览</b><span>焦点 #2</span></div>
+      <div class="phone"><div class="screen v1"><div class="safe">
+        <div class="hd">
+          <div class="ht">会话</div><div class="hm">6 条</div><div class="sp"></div>
+          <div class="link"><i class="dot"></i>在线</div>
+          <div class="batt"><i style="width:78%"></i></div><div class="hm">87%</div>
+        </div>
+        <div class="body" style="gap:2px">
+          <div class="list">
+            <div class="card"><span class="rail"></span><div class="cmain"><div class="cname">重构登录鉴权</div><div class="cmeta"><span class="state run"><i class="sq"></i>运行中</span><span class="model">claude-sonnet-4</span></div></div><div class="idx">01</div></div>
+            <div class="card sel"><span class="rail"></span><div class="cmain"><div class="cname">支付回调超时排查</div><div class="cmeta"><span class="state need"><i class="sq"></i>待审批</span><span class="model">gpt-5.1-codex</span></div></div><div class="idx">02</div></div>
+            <div class="card"><span class="rail"></span><div class="cmain"><div class="cname">生成周报摘要</div><div class="cmeta"><span class="state run"><i class="sq"></i>运行中</span><span class="model">gemini-2.5-pro</span></div></div><div class="idx">03</div></div>
+            <div class="card"><span class="rail"></span><div class="cmain"><div class="cname">数据库迁移脚本</div><div class="cmeta"><span class="state done"><i class="sq"></i>已完成</span><span class="model">claude-opus-4</span></div></div><div class="idx">04</div></div>
+          </div>
+          <div class="more"><span>还有 2 条</span><span>按 DOWN 继续</span></div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">移动焦点</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">打开会话</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">刷新列表</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">6 条会话，4 条可见。焦点卡用 2px 青边 + 4px 左轨；按 DOWN 越过第 4 条时列表整屏上滚一格。</div>
+    </div>
+
+    <!-- V1 审批 -->
+    <div class="shot">
+      <div class="shot-label"><b>02 · 审批</b><span>长按 DOWN 拒绝</span></div>
+      <div class="phone"><div class="screen v1"><div class="safe">
+        <div class="hd"><div class="ht">命令审批</div><div class="hm" style="color:var(--red)">82s</div><div class="sp"></div><div class="batt"><i style="width:78%"></i></div><div class="hm">87%</div></div>
+        <div class="body">
+          <div class="toolcard"><span class="tlbl">工具</span><span class="toolname">bash</span><span class="risk">高风险</span></div>
+          <div class="cmd">
+            <div class="lbl">命令原文 · 长按 OK 看全文</div>
+            <div class="txt mono">bash -lc "rm -rf ./node_modules/.vite ./.cache ./dist &amp;&amp; npm ci &amp;&amp; npm run build --mode=production --sourcemap=false --verbose &amp;&amp; tar -czf deploy.tgz dist"</div>
+          </div>
+          <div class="acts">
+            <div class="act ok"><span class="k">OK</span><span>允许执行</span></div>
+            <div class="act no"><span class="k">长按 DOWN</span><span>拒绝</span></div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">滚动原文</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">允许</div></div>
+          <div class="key"><div class="kk">长按DOWN</div><div class="ka">拒绝</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">危险操作双行分离：绿底=允许、红描边=拒绝。命令按 12px 等宽换行，最多 4 行，超出用「长按 OK 看全文」。</div>
+    </div>
+
+    <!-- V1 提问 -->
+    <div class="shot">
+      <div class="shot-label"><b>03 · 提问</b><span>选项 1/4 可见</span></div>
+      <div class="phone"><div class="screen v1"><div class="safe">
+        <div class="hd"><div class="ht">请选择</div><div class="sp"></div><div class="hm">1 / 1</div></div>
+        <div class="body" style="gap:4px">
+          <div class="qcard">
+            <div class="qlabel">AskUserQuestion · 单选</div>
+            <div class="qtext">部署窗口只剩 10 分钟：先发前端，还是先发后端？两种方案都会触发一次全量构建。</div>
+          </div>
+          <div class="opts">
+            <div class="opt sel"><span class="n">1</span>先发布前端（可回滚）</div>
+            <div class="opt"><span class="n">2</span>先发布后端（接口先行）</div>
+            <div class="opt"><span class="n">3</span>前后端同时发布</div>
+            <div class="opt"><span class="n">4</span>推迟到明天上午</div>
+          </div>
+          <div class="hint" style="font-size:12px;line-height:16px;color:var(--dim)">还有 2 个选项 · 按 DOWN 继续</div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">移动焦点</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">确认作答</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">看全文</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">选中项整行反色（青底深字，9.8:1），不靠细勾选框；问题 16px 最多 3 行，选项 16px 单行截断。</div>
+    </div>
+
+    <!-- V1 待机 -->
+    <div class="shot">
+      <div class="shot-label"><b>04 · 待机</b><span>无页头 / 无动画</span></div>
+      <div class="phone"><div class="screen v1"><div class="safe">
+        <div class="sb-top"><span>最后同步 21:30</span><span><i class="dot"></i>在线 · 87%</span></div>
+        <div class="sb-center">
+          <div class="sb-bar"></div>
+          <div class="sb-clock">21:34</div>
+          <div class="sb-date">11月03日 周二</div>
+          <div class="sb-status">无人打扰 · 在线</div>
+        </div>
+        <div class="sb-hint">按任意键唤醒<br>长按 OK 回总览</div>
+      </div></div></div>
+      <div class="shot-cap">只保留时间、日期、状态、唤醒提示。28px 主时间 + 16px 辅助，无动画、无页头，避免“待机还在工作”的错觉。</div>
+    </div>
+
+    <!-- V1 离线 -->
+    <div class="shot">
+      <div class="shot-label"><b>05 · 离线</b><span>明确故障态</span></div>
+      <div class="phone"><div class="screen v1"><div class="safe">
+        <div class="hd"><div class="ht" style="color:var(--red)">离线</div><div class="sp"></div><div class="hm">自动重连中</div></div>
+        <div class="body">
+          <div class="off-main">
+            <div class="off-ic"></div>
+            <div class="off-title">离线</div>
+            <div class="off-sub">未连接主机</div>
+            <div class="off-note">检查主机蓝牙与 daemon 是否运行<br>设备会自动重连，无需反复按键</div>
+          </div>
+          <div class="cache">
+            <div class="lbl">离线缓存</div>
+            <div class="big">6 条会话 · 最后同步 21:30</div>
+            <div class="sub">按 UP 查看缓存列表</div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">OK</div><div class="ka">立即重试</div></div>
+          <div class="key"><div class="kk">UP</div><div class="ka">查看缓存</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">回总览</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">不把故障藏起来：红色叉环 + 28px「离线」+ 具体排查项；同时保留缓存入口，断链时仍有信息可用。</div>
+    </div>
+
+    <!-- V1 低电量 -->
+    <div class="shot">
+      <div class="shot-label"><b>06 · 低电量</b><span>阈值 15%</span></div>
+      <div class="phone"><div class="screen v1"><div class="safe">
+        <div class="hd"><div class="ht" style="color:var(--red)">电量低</div><div class="sp"></div><div class="hm">12%</div></div>
+        <div class="body">
+          <div class="low">
+            <div class="battbig"><i></i></div>
+            <div class="low-pct">12%</div>
+            <div class="low-title">请尽快充电</div>
+            <div class="low-note">电量低于 15% 时显示本页。<br>连接保持，充电后自动恢复。</div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">暂时屏蔽</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">返回总览</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">关闭提醒</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">电量数字用 28px 红色主视觉，电池图形 100×44 粗描边；低电页是覆盖态，OK 返回，长按 OK 关闭本次提醒。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     V2
+     ============================================================ -->
+<section class="version" id="v2">
+  <div class="vhead">
+    <div class="vnum" style="color:#4AE3B5">02</div>
+    <div>
+      <h2 class="vtitle">大字流 · 一次只看一条</h2>
+      <p class="vsub">纯黑底 + 薄荷色单轨；一屏一条会话，UP/DOWN 直接翻条，28px 状态字是唯一主角。</p>
+    </div>
+    <div class="vtags">
+      <span class="tag">1 条 / 屏</span>
+      <span class="tag">6px 左轨 + 3 段进度</span>
+      <span class="tag">最大可读性</span>
+    </div>
+  </div>
+  <div class="vnote">
+    <div class="cell"><h4>定位</h4><p>把 240×320 当成一块“状态牌”。不追求同时看很多条，而追求 1 米外也能读出当前任务和状态。适合挂在墙边或工位边缘。</p></div>
+    <div class="cell"><h4>信息层级</h4><ul><li>L1 状态 28px 薄荷色</li><li>L2 会话名 16px 两行</li><li>L3 模型 12px 灰</li><li>底部 3 段进度表示第几条</li></ul></div>
+    <div class="cell"><h4>三键</h4><ul><li>UP：上一条</li><li>DOWN：下一条</li><li>OK：打开待办（无待办显示“无待办”）；长按 OK 关机</li></ul></div>
+    <div class="cell"><h4>配色 / 背光</h4>
+      <p>正文 #FFFFFF / #0E0E0E = <b>19.3:1</b>；次要 #A8A8A8 = <b>8.1:1</b>；薄荷 <b>11.9:1</b>；红 #FF7070 = <b>7.2:1</b>；黑字压薄荷 <b>13.0:1</b>。</p>
+      <div class="swatches"><span class="sw" style="background:#000000"></span><span class="sw" style="background:#0E0E0E"></span><span class="sw" style="background:#2A2A2A"></span><span class="sw" style="background:#FFFFFF"></span><span class="sw" style="background:#A8A8A8"></span><span class="sw" style="background:#4AE3B5"></span><span class="sw" style="background:#FFB020"></span><span class="sw" style="background:#FF7070"></span></div>
+    </div>
+  </div>
+
+  <div class="shots">
+    <!-- V2 总览 -->
+    <div class="shot">
+      <div class="shot-label"><b>01 · 会话总览</b><span>02 / 03</span></div>
+      <div class="phone"><div class="screen v2"><div class="safe">
+        <div class="hd"><div class="idx2">02 / 03</div><div class="sp"></div><div class="hm">会话</div></div>
+        <div class="body">
+          <div class="focus">
+            <div class="fkick">RUNNING · 第 2 条</div>
+            <div class="fstate">运行中</div>
+            <div class="fbar"></div>
+            <div class="fname">重构登录鉴权</div>
+            <div class="fmodel">claude-sonnet-4 · 已运行 12:48</div>
+          </div>
+          <div class="seg"><i></i><i class="on"></i><i></i></div>
+          <div class="next">下一条 · 支付回调超时排查</div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP</div><div class="ka">上一条</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">打开待办</div></div>
+          <div class="key"><div class="kk">DOWN</div><div class="ka">下一条</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">6px 竖轨把整屏变成一张“卡片”；3 段进度替代滚动条，翻到第几条一眼可见。</div>
+    </div>
+
+    <!-- V2 审批 -->
+    <div class="shot">
+      <div class="shot-label"><b>02 · 审批</b><span>允许执行？</span></div>
+      <div class="phone"><div class="screen v2"><div class="safe">
+        <div class="hd"><div class="idx2">审批</div><div class="sp"></div><div class="hm">待处理</div></div>
+        <div class="body">
+          <div class="bigq">允许执行？</div>
+          <div class="toolrow">bash</div>
+          <div class="cmd"><div class="txt mono">bash -lc "rm -rf ./node_modules/.vite ./.cache ./dist &amp;&amp; npm ci &amp;&amp; npm run build --mode=production --sourcemap=false --verbose"</div></div>
+          <div class="acts">
+            <div class="act ok"><span class="k">选中后</span><span>允许执行 · OK 确认</span></div>
+            <div class="act no"><span class="k">长按 DOWN</span><span>直接拒绝</span></div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">选择</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">确认</div></div>
+          <div class="key"><div class="kk">长按DOWN</div><div class="ka">拒绝</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">28px「允许执行？」先把风险摆出来，再给命令；拒绝用红描边而不是红底，避免和允许的实心块抢注意力。</div>
+    </div>
+
+    <!-- V2 提问 -->
+    <div class="shot">
+      <div class="shot-label"><b>03 · 提问</b><span>选中 1 / 4</span></div>
+      <div class="phone"><div class="screen v2"><div class="safe">
+        <div class="hd"><div class="idx2">提问</div><div class="sp"></div><div class="hm">1 / 1</div></div>
+        <div class="body">
+          <div class="qblock">
+            <div class="kicker">AskUserQuestion · 单选</div>
+            <div class="qtext">部署窗口只剩 10 分钟：先发前端，还是先发后端？</div>
+          </div>
+          <div class="opts">
+            <div class="opt sel"><span class="n">1</span>先发布前端（可回滚）</div>
+            <div class="opt"><span class="n">2</span>先发布后端（接口先行）</div>
+            <div class="opt"><span class="n">3</span>前后端同时发布</div>
+            <div class="opt"><span class="n">4</span>推迟到明天上午</div>
+          </div>
+          <div class="hint">还有 2 个选项 · 按 DOWN 继续</div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">移动焦点</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">确认作答</div></div>
+          <div class="key"><div class="kk">长按DOWN</div><div class="ka">跳过</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">未选中项降到 #A8A8A8（8.1:1），选中项用 6px 薄荷轨 + 近白字，焦点不需要再猜。</div>
+    </div>
+
+    <!-- V2 待机 -->
+    <div class="shot">
+      <div class="shot-label"><b>04 · 待机</b><span>纯黑极简</span></div>
+      <div class="phone"><div class="screen v2"><div class="safe">
+        <div class="sb-top"><i class="dot" style="background:var(--cyan)"></i>无人打扰 · 在线</div>
+        <div class="sb-center">
+          <div class="sb-bar"></div>
+          <div class="sb-clock">21:34</div>
+          <div class="sb-date">11月03日 周二</div>
+          <div class="sb-note">屏幕已休息</div>
+        </div>
+        <div class="sb-hint">按任意键唤醒<span>长按 OK 关机</span></div>
+      </div></div></div>
+      <div class="shot-cap">纯黑背景在 50% 背光下功耗和视觉干扰都最低；28px 时间 + 6px 字距，中央只留一条薄荷短线。</div>
+    </div>
+
+    <!-- V2 离线 -->
+    <div class="shot">
+      <div class="shot-label"><b>05 · 离线</b><span>大字报警</span></div>
+      <div class="phone"><div class="screen v2"><div class="safe">
+        <div class="hd"><div class="idx2">离线</div><div class="sp"></div><div class="hm">自动重连</div></div>
+        <div class="body">
+          <div class="off">
+            <div class="off-ic"></div>
+            <div class="off-title">离线</div>
+            <div class="off-sub">未连接主机</div>
+            <div class="off-note">最后同步 21:30 · 缓存 6 条<br>检查主机蓝牙与 daemon</div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">OK</div><div class="ka">回总览</div></div>
+          <div class="key"><div class="kk">UP</div><div class="ka">查看缓存</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">关机</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">28px「离线」+ 红叉环是整屏唯一高饱和元素；12px 只承担事实信息，不承担主标题。</div>
+    </div>
+
+    <!-- V2 低电量 -->
+    <div class="shot">
+      <div class="shot-label"><b>06 · 低电量</b><span>12%</span></div>
+      <div class="phone"><div class="screen v2"><div class="safe">
+        <div class="hd"><div class="idx2">电量</div><div class="sp"></div><div class="hm">12%</div></div>
+        <div class="body">
+          <div class="low">
+            <div class="battbig"><i></i></div>
+            <div class="low-pct">12%</div>
+            <div class="low-title">电量低 · 请尽快充电</div>
+            <div class="low-note">长按 DOWN 关闭提醒<br>连接保持，充电后自动恢复。</div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">暂时屏蔽</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">返回总览</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">关机</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">低电页没有多余信息：电池图形、28px 百分比、一句行动建议，三键只做返回/关闭。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     V3
+     ============================================================ -->
+<section class="version" id="v3">
+  <div class="vhead">
+    <div class="vnum" style="color:#4FD1FF">03</div>
+    <div>
+      <h2 class="vtitle">仪表盘 · 时间、状态、会话并列</h2>
+      <p class="vsub">顶部常驻 28px 时钟，中部三格 KPI，下部紧凑会话行；适合当桌面时钟 + 任务牌。</p>
+    </div>
+    <div class="vtags">
+      <span class="tag">常驻时钟</span>
+      <span class="tag">3 格 KPI + 4 行</span>
+      <span class="tag">一屏看全局</span>
+    </div>
+  </div>
+  <div class="vnote">
+    <div class="cell"><h4>定位</h4><p>把“现在几点、有多少活、哪条要处理”放在同一屏。待机和日常状态共用同一套顶部时钟，切换时不会跳变。</p></div>
+    <div class="cell"><h4>信息层级</h4><ul><li>L1 时钟 28px + 三格 KPI 28px 数字</li><li>L2 会话行 16px</li><li>L3 日期/链路/状态 12px</li><li>焦点行：4px 青左轨 + 青描边</li></ul></div>
+    <div class="cell"><h4>三键</h4><ul><li>UP / DOWN：移动会话焦点</li><li>OK：打开当前行</li><li>长按 OK：刷新统计</li></ul></div>
+    <div class="cell"><h4>配色 / 背光</h4>
+      <p>正文 #F2F8FB / #0F1C24 = <b>16.2:1</b>；次要 <b>8.7:1</b>；青色 <b>9.8:1</b>；红（调亮）#FF8585 = <b>7.4:1</b>；深字压红底 <b>8.2:1</b>。</p>
+      <div class="swatches"><span class="sw" style="background:#081016"></span><span class="sw" style="background:#0F1C24"></span><span class="sw" style="background:#1E3A48"></span><span class="sw" style="background:#F2F8FB"></span><span class="sw" style="background:#A0BCC9"></span><span class="sw" style="background:#4FD1FF"></span><span class="sw" style="background:#6EE7A8"></span><span class="sw" style="background:#FFC24B"></span><span class="sw" style="background:#FF8585"></span></div>
+    </div>
+  </div>
+
+  <div class="shots">
+    <!-- V3 总览 -->
+    <div class="shot">
+      <div class="shot-label"><b>01 · 会话总览</b><span>2 运行 / 1 审批</span></div>
+      <div class="phone"><div class="screen v3"><div class="safe">
+        <div class="dash-hd">
+          <div class="dash-clock">21:34</div>
+          <div class="dash-side"><div class="dash-date">11月03日 周二</div><div class="dash-link"><i class="dot"></i>在线 · 87%</div></div>
+        </div>
+        <div class="kpis">
+          <div class="kpi"><b>2</b><span>运行中</span></div>
+          <div class="kpi"><b style="color:var(--orange)">1</b><span>待审批</span></div>
+          <div class="kpi"><b style="color:var(--green)">3</b><span>已完成</span></div>
+        </div>
+        <div class="rows">
+          <div class="row"><span class="rdot" style="background:var(--cyan)"></span><span class="rname">重构登录鉴权</span><span class="rstate" style="color:var(--cyan)">运行中</span></div>
+          <div class="row sel"><span class="rdot" style="background:var(--orange)"></span><span class="rname">支付回调超时排查</span><span class="rstate" style="color:var(--orange)">待审批</span></div>
+          <div class="row"><span class="rdot" style="background:var(--cyan)"></span><span class="rname">生成周报摘要</span><span class="rstate" style="color:var(--cyan)">运行中</span></div>
+          <div class="row"><span class="rdot" style="background:var(--green)"></span><span class="rname">数据库迁移脚本</span><span class="rstate" style="color:var(--green)">已完成</span></div>
+          <div class="more"><span>还有 2 条</span><span>DOWN 继续</span></div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">移动焦点</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">打开会话</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">刷新统计</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">三格 KPI 用 28px 数字做第一视觉；会话行压到 29px，4 行 + 溢出提示刚好填满 240×320。</div>
+    </div>
+
+    <!-- V3 审批 -->
+    <div class="shot">
+      <div class="shot-label"><b>02 · 审批</b><span>红色告警条</span></div>
+      <div class="phone"><div class="screen v3"><div class="safe">
+        <div class="dash-hd compact"><div class="dash-clock">21:34</div><div class="dash-side"><div class="dash-link">在线 · 87%</div></div></div>
+        <div class="alert">审批请求 · bash<span class="t12">剩余 82s</span></div>
+        <div class="body">
+          <div class="cmd">
+            <div class="lbl">命令原文 · 长按 OK 看全文</div>
+            <div class="txt mono">bash -lc "rm -rf ./node_modules/.vite ./.cache ./dist &amp;&amp; npm ci &amp;&amp; npm run build --mode=production --sourcemap=false --verbose &amp;&amp; tar -czf deploy.tgz dist"</div>
+          </div>
+          <div class="acts">
+            <div class="act ok"><span class="k">OK</span><span>允许执行</span></div>
+            <div class="act no"><span class="k">长按 DOWN</span><span>拒绝</span></div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">滚动原文</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">允许</div></div>
+          <div class="key"><div class="kk">长按DOWN</div><div class="ka">拒绝</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">顶部时钟保留，说明“现在几点”没丢；红色 28px 告警条先给结论，再给命令细节。</div>
+    </div>
+
+    <!-- V3 提问 -->
+    <div class="shot">
+      <div class="shot-label"><b>03 · 提问</b><span>1 / 1</span></div>
+      <div class="phone"><div class="screen v3"><div class="safe">
+        <div class="dash-hd compact"><div class="dash-clock">21:34</div><div class="dash-side"><div class="dash-link">在线 · 87%</div></div></div>
+        <div class="body">
+          <div class="qbox"><div class="lbl">AskUserQuestion · 单选</div><div class="qtext">部署窗口只剩 10 分钟：先发前端，还是先发后端？</div></div>
+          <div class="opts">
+            <div class="opt sel"><span class="n">1</span>先发布前端（可回滚）</div>
+            <div class="opt"><span class="n">2</span>先发布后端（接口先行）</div>
+            <div class="opt"><span class="n">3</span>前后端同时发布</div>
+            <div class="opt"><span class="n">4</span>推迟到明天上午</div>
+          </div>
+          <div class="hint">还有 2 个选项 · 按 DOWN 继续</div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">移动焦点</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">确认作答</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">看全文</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">选中项用青底深字（10.8:1）；选项区与 KPI 区共用 2px 描边和 4px 圆角，保持仪表盘语言。</div>
+    </div>
+
+    <!-- V3 待机 -->
+    <div class="shot">
+      <div class="shot-label"><b>04 · 待机</b><span>时钟 + KPI</span></div>
+      <div class="phone"><div class="screen v3"><div class="safe">
+        <div class="dash-hd"><div class="dash-clock">21:34</div><div class="dash-side"><div class="dash-date">11月03日 周二</div><div class="dash-link"><i class="dot"></i>在线 · 87%</div></div></div>
+        <div class="kpis">
+          <div class="kpi"><b>6</b><span>今日会话</span></div>
+          <div class="kpi"><b style="color:var(--green)">4</b><span>已完成</span></div>
+          <div class="kpi"><b style="color:var(--orange)">2</b><span>待处理</span></div>
+        </div>
+        <div class="statusbox"><b>无人打扰 · 在线</b><span>最后同步 21:34 · 屏幕已进入待机</span></div>
+        <div style="flex:1"></div>
+        <div class="sbhint">按任意键唤醒<span>长按 OK 回总览</span></div>
+      </div></div></div>
+      <div class="shot-cap">待机不是“空屏”，而是把当天摘要留在桌上：时间、今日会话、完成/待办数一眼可见。</div>
+    </div>
+
+    <!-- V3 离线 -->
+    <div class="shot">
+      <div class="shot-label"><b>05 · 离线</b><span>时钟仍走</span></div>
+      <div class="phone"><div class="screen v3"><div class="safe">
+        <div class="dash-hd"><div class="dash-clock">21:34</div><div class="dash-side"><div class="dash-date">11月03日 周二</div><div class="dash-link" style="color:var(--red)">离线 · 自动重连</div></div></div>
+        <div class="alert">链路断开 · 已 12s<span class="t12">缓存可用</span></div>
+        <div class="kpis">
+          <div class="kpi"><b>6</b><span>缓存会话</span></div>
+          <div class="kpi"><b style="color:var(--green)">4</b><span>已完成</span></div>
+          <div class="kpi"><b style="color:var(--orange)">2</b><span>待处理</span></div>
+        </div>
+        <div class="note"><b>最后同步 21:30</b><span>检查主机蓝牙与 daemon；设备会自动重试。</span></div>
+        <div style="flex:1"></div>
+        <div class="ft">
+          <div class="key"><div class="kk">OK</div><div class="ka">立即重试</div></div>
+          <div class="key"><div class="kk">UP</div><div class="ka">查看缓存</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">回待机</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">时钟继续走（用最近校时 + 设备单调时钟），但链路那一行明确转红；KPI 保留缓存数字，信息不中断。</div>
+    </div>
+
+    <!-- V3 低电量 -->
+    <div class="shot">
+      <div class="shot-label"><b>06 · 低电量</b><span>12% / 阈值 15%</span></div>
+      <div class="phone"><div class="screen v3"><div class="safe">
+        <div class="dash-hd compact"><div class="dash-clock">21:34</div><div class="dash-side"><div class="dash-link" style="color:var(--red)">电量低 · 12%</div></div></div>
+        <div class="body">
+          <div class="lowbox">
+            <div class="battbig"><i></i></div>
+            <div class="low-pct">12%<small>低于 15% 阈值</small></div>
+          </div>
+          <div class="note"><b>请尽快充电</b><span>连接保持，充电后本页自动消失。电量来自 CW2017 电量计。</span></div>
+          <div style="flex:1"></div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">暂时屏蔽</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">返回总览</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">关闭提醒</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">低电页沿用仪表盘顶栏；电量面板用 96px 高的大块，28px 百分比 + 12px 阈值说明，避免小字猜测。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     V4
+     ============================================================ -->
+<section class="version" id="v4">
+  <div class="vhead">
+    <div class="vnum" style="color:#FFC857">04</div>
+    <div>
+      <h2 class="vtitle">护照印章 · 强图形语言</h2>
+      <p class="vsub">金色外框 + 粗描边印章 + 签证式行条目；可作为品牌感最强、与前三版差异最大的对比选项。</p>
+    </div>
+    <div class="vtags">
+      <span class="tag">金色 2px 外框</span>
+      <span class="tag">旋转印章</span>
+      <span class="tag">签证行 48px</span>
+    </div>
+  </div>
+  <div class="vnote">
+    <div class="cell"><h4>定位</h4><p>把“AI Passport”做成一本随身证件：每个会话是一条签证记录，状态是盖上去的章。适合强调设备身份、礼品感或展示场景。</p></div>
+    <div class="cell"><h4>信息层级</h4><ul><li>L1 护照抬头 / 印章</li><li>L2 会话名 16px 奶油白</li><li>L3 模型与状态章 12px</li><li>焦点：金色 5px 左条 + 金框</li></ul></div>
+    <div class="cell"><h4>三键</h4><ul><li>UP / DOWN：移动签证行</li><li>OK：打开会话</li><li>长按 OK：刷新；审批页长按 DOWN 拒绝</li></ul></div>
+    <div class="cell"><h4>配色 / 背光</h4>
+      <p>正文 #F7EFD9 / #15100A = <b>16.5:1</b>；次要 <b>9.8:1</b>；金 <b>12.3:1</b>；红 #FF7A6E = <b>7.4:1</b>；深字压绿 <b>11.6:1</b>。</p>
+      <div class="swatches"><span class="sw" style="background:#0B0906"></span><span class="sw" style="background:#15100A"></span><span class="sw" style="background:#4A3A1E"></span><span class="sw" style="background:#F7EFD9"></span><span class="sw" style="background:#CBB994"></span><span class="sw" style="background:#FFC857"></span><span class="sw" style="background:#8FD694"></span><span class="sw" style="background:#FF7A6E"></span></div>
+    </div>
+  </div>
+
+  <div class="shots">
+    <!-- V4 总览 -->
+    <div class="shot">
+      <div class="shot-label"><b>01 · 会话总览</b><span>焦点 2 / 6</span></div>
+      <div class="phone"><div class="screen v4"><div class="frame"></div><div class="safe">
+        <div class="hd"><div class="pt">AI PASSPORT</div><div class="pn">NO. 006</div></div>
+        <div class="body">
+          <div class="visas">
+            <div class="visa"><div class="vno">01</div><div class="vmain"><div class="vname">重构登录鉴权</div><div class="vmeta"><span class="run">运行中</span> · claude-sonnet-4</div></div></div>
+            <div class="visa sel"><div class="vno">02</div><div class="vmain"><div class="vname">支付回调超时排查</div><div class="vmeta"><span class="need">待审批</span> · gpt-5.1-codex</div></div></div>
+            <div class="visa"><div class="vno">03</div><div class="vmain"><div class="vname">生成周报摘要</div><div class="vmeta"><span class="run">运行中</span> · gemini-2.5-pro</div></div></div>
+            <div class="visa"><div class="vno">04</div><div class="vmain"><div class="vname">数据库迁移脚本</div><div class="vmeta"><span class="done">已完成</span> · claude-opus-4</div></div></div>
+          </div>
+          <div class="more"><span>还有 2 条</span><span>DOWN 继续</span></div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">移动焦点</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">打开会话</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">刷新</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">签证行 48px：编号、名称、状态/模型三行；英文印章只用于页面抬头，避免挤占会话名的宽度。</div>
+    </div>
+
+    <!-- V4 审批 -->
+    <div class="shot">
+      <div class="shot-label"><b>02 · 审批</b><span>APPROVAL 章</span></div>
+      <div class="phone"><div class="screen v4"><div class="frame"></div><div class="safe">
+        <div class="hd"><div class="pt">AI PASSPORT</div><div class="pn">审批 02</div></div>
+        <div class="body">
+          <div class="stamprow"><span class="stamp-big red">APPROVAL</span><span class="sr-time">剩余 82s</span></div>
+          <div class="toolrow">bash<span class="risk">高风险</span></div>
+          <div class="cmd"><div class="txt mono">bash -lc "rm -rf ./node_modules/.vite ./.cache ./dist &amp;&amp; npm ci &amp;&amp; npm run build --mode=production --sourcemap=false --verbose"</div></div>
+          <div class="acts">
+            <div class="act ok"><span class="k">OK</span><span>允许执行</span></div>
+            <div class="act no"><span class="k">长按 DOWN</span><span>拒绝</span></div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">滚动</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">允许</div></div>
+          <div class="key"><div class="kk">长按DOWN</div><div class="ka">拒绝</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">旋转 3° 的红色 APPROVAL 章是第一视觉；命令块用红 2px 框，拒绝仍是红描边而非红底，避免两条实心块对撞。</div>
+    </div>
+
+    <!-- V4 提问 -->
+    <div class="shot">
+      <div class="shot-label"><b>03 · 提问</b><span>QUESTION 章</span></div>
+      <div class="phone"><div class="screen v4"><div class="frame"></div><div class="safe">
+        <div class="hd"><div class="pt">AI PASSPORT</div><div class="pn">提问 01</div></div>
+        <div class="body" style="gap:3px">
+          <div class="stamprow"><span class="stamp-big gold">QUESTION</span><span class="sr-time">1 / 1</span></div>
+          <div class="qblock"><div class="qtext">部署窗口只剩 10 分钟：先发前端，还是先发后端？</div></div>
+          <div class="opts">
+            <div class="opt sel"><span class="n">01</span>先发布前端（可回滚）</div>
+            <div class="opt"><span class="n">02</span>先发布后端（接口先行）</div>
+            <div class="opt"><span class="n">03</span>前后端同时发布</div>
+            <div class="opt"><span class="n">04</span>推迟到明天上午</div>
+          </div>
+          <div class="hint">还有 2 个选项 · 按 DOWN 继续</div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">移动</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">作答</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">看全文</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">选项编号用 01~04 的证件序列感；选中项整行金底深字（12.9:1），与印章的金色形成呼应。</div>
+    </div>
+
+    <!-- V4 待机 -->
+    <div class="shot">
+      <div class="shot-label"><b>04 · 待机</b><span>护照封面感</span></div>
+      <div class="phone"><div class="screen v4"><div class="frame"></div><div class="safe">
+        <div class="sb-top"><span>无人打扰</span><span><i class="dot"></i>在线 · 87%</span></div>
+        <div class="sb-center">
+          <div class="sb-stamp">STANDBY</div>
+          <div class="sb-clock">21:34</div>
+          <div class="sb-date">11月03日 周二</div>
+        </div>
+        <div class="sb-hint">按任意键唤醒<span>长按 OK 回总览</span></div>
+      </div></div></div>
+      <div class="shot-cap">待机像护照封面：金色 STANDBY 章 + 28px 时间 + 16px 日期。所有装饰都是 2~3px 粗线，不做发丝线。</div>
+    </div>
+
+    <!-- V4 离线 -->
+    <div class="shot">
+      <div class="shot-label"><b>05 · 离线</b><span>NO SIGNAL 章</span></div>
+      <div class="phone"><div class="screen v4"><div class="frame"></div><div class="safe">
+        <div class="hd"><div class="pt">AI PASSPORT</div><div class="pn">离线</div></div>
+        <div class="body">
+          <div class="off">
+            <span class="stamp-big red">NO SIGNAL</span>
+            <div class="off-title">离线</div>
+            <div class="off-sub">未连接主机</div>
+            <div class="off-note">最后同步 21:30 · 缓存 6 条<br>检查主机蓝牙与 daemon<br>设备会自动重连</div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">OK</div><div class="ka">立即重试</div></div>
+          <div class="key"><div class="kk">UP</div><div class="ka">查看缓存</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">回总览</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">NO SIGNAL 印章横在视觉中心，下面才是 28px「离线」；先给状态类型，再给中文结论和排查动作。</div>
+    </div>
+
+    <!-- V4 低电量 -->
+    <div class="shot">
+      <div class="shot-label"><b>06 · 低电量</b><span>LOW POWER 章</span></div>
+      <div class="phone"><div class="screen v4"><div class="frame"></div><div class="safe">
+        <div class="hd"><div class="pt">AI PASSPORT</div><div class="pn">电量 12%</div></div>
+        <div class="body">
+          <div class="low">
+            <span class="stamp-big red">LOW POWER</span>
+            <div class="battbig"><i></i></div>
+            <div class="low-pct">12%</div>
+            <div class="low-title">请尽快充电</div>
+            <div class="low-note">低于 15% 阈值时显示。<br>连接保持，充电后自动恢复。</div>
+          </div>
+        </div>
+        <div class="ft">
+          <div class="key"><div class="kk">UP/DOWN</div><div class="ka">暂时屏蔽</div></div>
+          <div class="key"><div class="kk">OK</div><div class="ka">返回总览</div></div>
+          <div class="key"><div class="kk">长按OK</div><div class="ka">关闭提醒</div></div>
+        </div>
+      </div></div></div>
+      <div class="shot-cap">LOW POWER 章 + 粗电池图形 + 28px 百分比；拟物感来自印章和外框，不来自阴影或细纹理。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     设计说明
+     ============================================================ -->
+<section class="notes" id="notes">
+  <h2>设计说明</h2>
+
+  <h3>1. 三键交互（四版共用一套语义）</h3>
+  <table class="cmp">
+    <thead><tr><th>页面</th><th>UP</th><th>OK</th><th>DOWN</th><th>长按（800ms）</th></tr></thead>
+    <tbody>
+      <tr><td>会话总览</td><td>焦点上移</td><td>打开当前会话</td><td>焦点下移</td><td>长按 OK：刷新会话</td></tr>
+      <tr><td>审批</td><td>命令原文上滚</td><td>允许执行</td><td>命令原文下滚</td><td>长按 DOWN：拒绝；长按 OK：看全文</td></tr>
+      <tr><td>提问</td><td>选项上移</td><td>确认作答</td><td>选项下移</td><td>长按 OK：展开全文</td></tr>
+      <tr><td>待机</td><td>唤醒</td><td>唤醒</td><td>唤醒</td><td>长按 OK：直接回总览</td></tr>
+      <tr><td>离线</td><td>查看缓存</td><td>立即重试</td><td>查看缓存</td><td>长按 OK：回总览</td></tr>
+      <tr><td>低电量</td><td>暂时屏蔽</td><td>返回总览</td><td>暂时屏蔽</td><td>长按 OK：关闭本次提醒</td></tr>
+    </tbody>
+  </table>
+  <p>审批页遵循需求里的“长按 DOWN 拒绝”；允许是短按 OK。危险动作不依赖触摸，也不依赖滑动。所有页面底部都保留三键提示，焦点永远有边框/色块/左轨三种之一的明确表达。</p>
+
+  <h3>2. 溢出、截断与滚动</h3>
+  <ul>
+    <li><b>总览最多 6 条</b>：V1 / V3 / V4 显示 4 条 + “还有 N 条”，焦点越过第 4 条时整屏上滚一行；V2 一次一条，用 3 段进度表示位置。没有独立滚动条，避免 2px 竖条在 50% 背光下变成脏线。</li>
+    <li><b>会话名</b>：16px 单行，超出用省略号。V1 卡片内约 10 个汉字，V2 / V3 / V4 约 13 个汉字（V4 有编号列，约 11 个）。</li>
+    <li><b>模型名</b>：12px，最长约 18 个 ASCII；超长用尾部省略。主机侧按协议上限截断，设备只做二次兜底。</li>
+    <li><b>命令原文</b>：12px 等宽，216px 宽约 36 个 ASCII/行；V1 / V2 / V4 显示 4 行，V3 显示 5 行，超出用省略号；长按 OK 展开全文。</li>
+    <li><b>问题</b>：16px，约 13 个汉字/行；最高 3 行（V1）或 2 行（V2/V3/V4），超出省略，长按 OK 看全文。</li>
+    <li><b>选项</b>：16px 单行，最多 6 项；一屏显示 4 项 + “还有 N 个选项”，焦点跟滚。</li>
+  </ul>
+
+  <h3>3. 50% 背光下的可读性判断依据</h3>
+  <p>WCAG 对比度是相对亮度比，均匀降低背光不会改变比值，但会降低绝对亮度、压缩人眼在低亮度下的对比敏感度。因此本稿不按 4.5:1 的网页标准，而按 <b>正文 ≥ 7:1、次要文字 ≥ 7:1、强调色 ≥ 7:1</b> 设计；并且不使用中灰大面积、不使用 1px 细线、不把状态只交给颜色。</p>
+  <table class="cmp">
+    <thead><tr><th>版本</th><th>主文字 / 背景</th><th>次要文字</th><th>红色强调</th><th>深字压亮底</th><th>额外约束</th></tr></thead>
+    <tbody>
+      <tr><td>V1 卡片台</td><td>16.0:1</td><td>8.7:1</td><td>7.2:1</td><td>11.5:1（绿底）</td><td>卡片之间用 2px 描边 + 6px 间距，不靠中灰填充区分</td></tr>
+      <tr><td>V2 大字流</td><td>19.3:1</td><td>8.1:1</td><td>7.2:1</td><td>13.0:1（薄荷底）</td><td>纯黑底，未选中项也保持 8.1:1</td></tr>
+      <tr><td>V3 仪表盘</td><td>16.2:1</td><td>8.7:1</td><td>7.4:1</td><td>8.2:1（红底）</td><td>KPI 用 28px 数字，避免 12px 小字承担关键数字</td></tr>
+      <tr><td>V4 护照印章</td><td>16.5:1</td><td>9.8:1</td><td>7.4:1</td><td>11.6:1（绿底）</td><td>所有装饰线 2~3px；印章文字 16px 起</td></tr>
+    </tbody>
+  </table>
+  <p>补充：V1 的红色用于「待审批 / 出错 / 拒绝」等语义，不用于选中卡上的正文（选中卡用深底反白 + 青边，13.7:1），避免红色在较亮的选中底上掉到 6:1 附近。</p>
+
+  <h3>4. 推荐版本</h3>
+  <div class="callout">
+    <p><b>推荐 V1「卡片台」作为主方案。</b>理由：240×320 比现有 240×240 多出 80px，刚好把会话卡从 2 条提升到 4 条；日常最高频的动作是“看有哪些会话、哪条要审批”，V1 用最少的按键完成，4 条可见 + 焦点滚动比 V2 的一条一翻更省操作。它的 16px 名称、12px 元信息、2px 边框在 50% 背光下分别是 16.0 / 8.7:1，且延续现有产品的深海军蓝 + 青色语言，移植和验收风险最低。</p>
+  </div>
+  <ul>
+    <li><b>V2</b>：单条最大可读性最好，但 3 条会话最多要按 2 次 DOWN；适合“只看当前一条”的展示/挂墙场景，不适合高频操作。</li>
+    <li><b>V3</b>：时钟与全局统计最顺手，但 29px 会话行在 50% 背光下对 12px 状态字要求较高；适合桌面时钟定位，需要再增加一档“放大当前行”的交互才适合做主界面。</li>
+    <li><b>V4</b>：品牌感最强，但护照抬头、印章、编号占用了本可以给数据的像素；适合展示/礼品版本，不建议作为高频工作看板。</li>
+  </ul>
+
+  <h3>5. 落地注意（给固件 / 主机同学）</h3>
+  <ul>
+    <li><b>字符集</b>：屏上固定文案只使用现有 12 / 16 / 28 三档字库已有字符；V4 的 RUNNING / APPROVAL / QUESTION / STANDBY / NO SIGNAL / LOW POWER 只用标准大写 ASCII，不新增汉字。若「签证」「护照」等新词不在字库，按 gen_charset.py → gen_fonts.py 流程补字后再编译，不在运行时硬编缺字。</li>
+    <li><b>页面复用</b>：待机页沿用现有复用结构，进入时一次性完整渲染，退出不影响正式页面；只在时间/状态变化时局部刷新，不做呼吸、闪烁、滚动动画，符合省电约束。</li>
+    <li><b>列表实现</b>：V1 / V3 / V4 只保留 4 个可见行 + 1 个溢出行，焦点越过边界时整屏上滚；不要为 6 条数据创建 6 套完整卡片对象，减少 LVGL 对象数与重绘面积。</li>
+    <li><b>按键</b>：UP / OK / DOWN 短按与 800ms 长按沿用现有消抖逻辑；审批页「长按 DOWN 拒绝」需要长按判定，不与短按 DOWN 的滚动冲突。长按 OK 统一让给底座电源语义（2s 提示 / 5s 关机），不承载页面功能。</li>
+    <li><b>背光与档位</b>：本设计默认运行在 50% 背光；待机沿用现有低功耗档位（背光 50%、LVGL 低帧率、BLE 长连接间隔），不在本稿里改待机门槛与唤醒逻辑。</li>
+    <li><b>低电量</b>：建议阈值 15%，仅在放电且 SOC ≤ 阈值时覆盖显示；OK 返回上一页、长按 DOWN 关闭本次提醒，充电后按 SOC 回升自动解除。</li>
+    <li><b>渲染校准</b>：本文件是浏览器预览，用系统字体近似点阵字；实机 12 / 16 / 28 点阵的字宽、行高与省略号位置需在 LVGL 上逐页对照截图校准，尤其是 28px 时间的字距和 V4 旋转印章的边界。</li>
+    <li><b>未做部分</b>：没有修改任何固件、主机代码，也没有提交到 main；没有在实机上跑这四版，只交付可打开的 HTML 设计稿与说明。</li>
+  </ul>
+
+  <h3>6. 交付清单</h3>
+  <ul>
+    <li><b>4 个版本 × 6 个页面 = 24 屏</b>：会话总览、审批、提问、待机、离线、低电量，全部在 240×320 画布内。</li>
+    <li><b>预览</b>：本文件 <span class="mono">docs/ui-design/index.html</span>，无外部 CDN、无外链图片；顶部可切 1× / 2×，可开 50% 背光模拟。</li>
+    <li><b>说明</b>：本页第 1~5 节，包含定位、信息层级、三键映射、字号/配色、50% 背光对比度依据与推荐理由。</li>
+  </ul>
+</section>
+</main>
+
+<footer class="footer">
+  AI Passport 看板设计稿 · 240×320 · 4 版 / 24 屏 · 设计稿，未修改固件，未提交 main
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var scaleBtns = document.querySelectorAll('[data-scale]');
+  scaleBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      root.style.setProperty('--z', btn.getAttribute('data-scale'));
+      scaleBtns.forEach(function (b) {
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+      });
+    });
+  });
+  var dimBtn = document.getElementById('dimBtn');
+  dimBtn.addEventListener('click', function () {
+    var on = document.body.classList.toggle('dim');
+    dimBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+})();
+</script>
+</body>
+</html>
