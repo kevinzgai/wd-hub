@@ -1,0 +1,14 @@
+# AI Passport 8MB Flash 分区表
+#
+# 与原厂 FoloToy 固件保持同一 factory 布局：0x10000 / 0x7f0000。
+# 出厂整片 dump `.tmp/ai-passport-dump/full_8mb.bin` 是回退手段，
+# 刷写本固件只写 factory 区段，不动 0x0 bootloader 与 0x8000 分区表。
+#
+# 注意：factory 占满 0x10000 之后的全部 8MB，因此没有 storage / cardid
+# 等数据分区。底座 home_profile 的 SPIFFS 挂载会返回 NOT_FOUND 并降级，
+# 不影响 WB 主链路；如需头像/名片存储，应另做布局并同步更新本表。
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x7f0000,

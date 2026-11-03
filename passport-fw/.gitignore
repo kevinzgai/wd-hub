@@ -1,0 +1,28 @@
+build/
+build-public/
+# 本工程自带 sdkconfig（目标/分区/Flash 8MB 等关键差异都固化在里面），
+# 必须入库；只忽略 IDE/IDF 生成的备份。
+sdkconfig.old
+managed_components/
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+*.log
+*.bin
+*.elf
+*.map
+dist/
+.cache/
+build-diag/
+build-*/
+output/
+release/
+sdkconfig.diag
+all_chars.txt
+ui_chars.txt
+.impeccable/
+
+# Generated firmware and local validation artifacts
+*.uf2
+*.hex

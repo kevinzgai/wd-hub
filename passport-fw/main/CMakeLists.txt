@@ -1,0 +1,116 @@
+option(PASSPORT_MUSE_USE_JOLLYBOT "Build Muse with the official Jollybot artwork" ON)
+if(PASSPORT_MUSE_USE_JOLLYBOT)
+    set(PASSPORT_MUSE_AVATAR "apps/muse/muse_avatar_frames.c")
+else()
+    set(PASSPORT_MUSE_AVATAR "apps/muse/muse_avatar_public_frames.c")
+endif()
+idf_component_register(
+    EMBED_TXTFILES "apps/home/phone_setup.html"
+    EMBED_FILES "apps/home/cities.json.gz"
+    SRCS
+        "main.cc"
+        "apps/xiaozhi/opus_encoder_storage.cc"
+        "boot_chime.c"
+        "ui_sfx.c"
+        "ui_sfx_tone.c"
+        "boot_splash.c"
+        "launcher/launcher.cc"
+        "launcher/app_registry.cc"
+        "launcher/wifi_setup.cc"
+        "launcher/wifi_picker.cc"
+        "launcher/network_diagnostics.cc"
+        "launcher/timer_resume.cc"
+        "launcher/settings.cc"
+        "launcher/power.cc"
+        "launcher/system_overlay.cc"
+        "fonts/radio_font.c"
+        "fonts/radio_font_title.c"
+        "fonts/buddy_font_16.c"
+        "fonts/ui_font_20.c"
+        "fonts/vocab_font_16.c"
+        "fonts/vocab_title_20.c"
+        "fonts/home_font_12.c"
+        "apps/radio/app_radio.cc"
+        "apps/radio/radio_catalog.cc"
+        "apps/radio/radio_display_settings.cc"
+        "apps/radio/radio_player.cc"
+        "apps/radio/radio_source.cc"
+        "apps/radio/radio_sleep_timer.cc"
+        "apps/radio/radio_ui.cc"
+        "apps/voice/time_sync.c"
+        "apps/voice/nvs_settings.c"
+        "ui/ui_pixel.c"
+        "ui/ui_capture.c"
+        "apps/voice/ui_pixel_math.c"
+        "apps/xiaozhi/xiaozhi_protocol.cc"
+        "apps/xiaozhi/xiaozhi_audio.cc"
+        "apps/xiaozhi/xiaozhi_ui.cc"
+        "apps/xiaozhi/xiaozhi_store.cc"
+        "apps/xiaozhi/xiaozhi_ota.cc"
+        "apps/xiaozhi/app_xiaozhi.cc"
+        "apps/home/home_profile.c"
+        "apps/home/home_clock.c"
+        "apps/home/home_weather.c"
+        "apps/home/home_upload.cc"
+        "apps/home/app_home.cc"
+        "apps/stopwatch/stopwatch_core.c"
+        "apps/stopwatch/app_stopwatch.cc"
+        "apps/pomodoro/pomodoro_core.c"
+        "apps/pomodoro/app_pomodoro.cc"
+        "apps/pomodoro/pomodoro_font_20.c"
+        "apps/pomodoro/pomodoro_digits_48.c"
+        "apps/muse/app_muse.cc"
+        "${PASSPORT_MUSE_AVATAR}"
+        "apps/morse/morse_code.c"
+        "apps/morse/morse_decode.c"
+        "apps/morse/morse_tone.c"
+        "apps/morse/app_morse.cc"
+        "apps/vocab/app_vocab.cc"
+        "apps/wb/app_wb.cc"
+        "wb/wb_proto.c"
+        "wb/wb_link.c"
+        "wb/wb_biz.c"
+        "wb/wb_power.c"
+        "wb/wb_ui.cc"
+    INCLUDE_DIRS
+        "."
+        "launcher"
+        "apps"
+        "apps/wb"
+        "wb"
+        "apps/radio"
+        "apps/voice"
+        "apps/xiaozhi"
+        "apps/home"
+        "apps/morse"
+        "apps/vocab"
+        "ui"
+        "fonts"
+    REQUIRES
+        passport_muse
+        bsp
+        esp-wifi-connect
+        esp_wifi
+        nvs_flash
+        esp_http_client
+        esp_websocket_client
+        json
+        mbedtls
+        esp_codec_dev
+        esp_audio_codec
+        esp_timer
+        esp_pm
+        spi_flash
+        esp_driver_usb_serial_jtag
+        esp_http_server
+        spiffs
+        lwip
+        bt
+)
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "-Wl,--undefined=__wrap_opus_encoder_create,--undefined=__wrap_opus_encoder_destroy"
+    "-Wl,--wrap=opus_encoder_create,--wrap=opus_encoder_destroy")
+
+if(PASSPORT_RADIO_HLS_TEST)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE PASSPORT_RADIO_HLS_TEST=1)
+endif()

@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>AI 护照 · 手机设置</title>
+<style>
+:root{--paper:#f6f5ef;--ink:#172e24;--muted:#56635a;--line:#d4d9cd;--green:#205c3f;--tint:#e7edde;--error:#a12c23;--radius:12px;color-scheme:light}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;accent-color:var(--green)}
+::selection{background:#c5dec9;color:var(--ink)}:focus-visible{outline:3px solid #438259;outline-offset:3px}input,textarea{caret-color:var(--green)}[hidden]{display:none!important}
+.shell{max-width:540px;margin:auto;padding:24px 24px max(28px,env(safe-area-inset-bottom))}.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:.04em;font-size:15px}.brand svg{width:30px;height:30px}.brand small{margin-left:auto;font-size:12px;color:var(--muted);font-weight:400;letter-spacing:0}
+.steps{display:flex;list-style:none;padding:0;margin:30px 0 32px;gap:8px}.steps li{flex:1;color:var(--muted);font-size:13px;border-top:2px solid var(--line);padding-top:9px}.steps li[aria-current=step]{border-color:var(--green);color:var(--green);font-weight:700}.steps li.done{border-color:#819d7e}
+h1{font-size:30px;line-height:1.3;letter-spacing:-.025em;font-weight:650;margin:0 0 12px;text-wrap:balance}h2{font-size:18px;line-height:1.4;margin:0}p{margin:0 0 24px}.intro,.help{color:var(--muted)}.intro{font-size:15px}.help{font-size:13px;margin:8px 0 0}.divider{height:1px;background:var(--line);margin:28px 0}.field{margin:22px 0}label,.field-title{display:block;font-size:14px;font-weight:600;margin-bottom:8px}.optional{font-size:12px;color:var(--muted);font-weight:400;margin-left:6px}
+input[type=text],input[type=password],select,textarea{width:100%;border:1px solid #9ca99b;border-radius:var(--radius);padding:13px 14px;min-height:50px;background:#fffef9;color:var(--ink);font:inherit;line-height:1.5}textarea{resize:vertical}input::placeholder,textarea::placeholder{color:#677268}select{text-overflow:ellipsis;padding-right:32px}button{font:inherit;cursor:pointer;touch-action:manipulation}button:disabled{cursor:wait;opacity:.6}.primary,.secondary{width:100%;min-height:52px;padding:12px 18px;border:0;border-radius:var(--radius);font-weight:600}.primary{background:var(--green);color:white}.primary:hover{background:#16482f}.secondary{background:var(--tint);color:var(--ink);margin-top:12px}.text-button{background:none;border:0;color:var(--green);padding:10px 0;text-decoration:underline;text-underline-offset:4px;min-height:44px;font-size:14px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.row label{margin:0}.password{position:relative}.password input{padding-right:70px}.password button{position:absolute;right:8px;top:4px;min-width:52px;height:44px;color:var(--green);background:none;border:0;font-size:14px}.status{font-size:14px;line-height:1.6;margin:16px 0;overflow-wrap:anywhere}.status:empty{display:none}.status[data-error=true]{color:var(--error)}.note{padding:16px 0;border-top:1px solid var(--line);color:var(--muted);font-size:13px;margin-top:26px}.actions{margin-top:30px}.connection{display:flex;align-items:center;gap:8px;color:var(--green);font-size:14px;margin-bottom:24px;overflow-wrap:anywhere}.connection svg{width:18px;height:18px;flex:none}.connection span{min-width:0;overflow-wrap:anywhere}
+details{border-top:1px solid var(--line);padding:20px 0}summary{cursor:pointer;font-size:16px;font-weight:600;min-height:30px}summary small{font-size:12px;font-weight:400;color:var(--muted);margin-left:6px}.detail-body{padding-top:18px}.file-pick{display:block;padding:15px 16px;border:1px dashed #80977f;border-radius:var(--radius);font-size:14px;font-weight:400;cursor:pointer}.file-pick input{display:block;width:100%;margin-top:12px;font-size:14px}input::file-selector-button{border:0;background:var(--tint);color:var(--ink);padding:8px 12px;border-radius:6px;margin-right:10px}.photo-tools{margin-top:18px}.crop-layout{display:flex;align-items:center;justify-content:center;gap:22px;flex-wrap:wrap}#vp{position:relative;width:192px;height:300px;overflow:hidden;background:#dde5d7;touch-action:none}#pv{position:absolute;pointer-events:none;user-select:none;max-width:none}#binc{width:96px;height:150px;background:#07170f;image-rendering:pixelated}.caption{text-align:center;font-size:12px;color:var(--muted);margin:8px 0 0}#zm{width:100%;min-height:40px}#sharec{display:block;width:180px;height:240px;margin:20px auto 0;background:white}.saved{font-size:13px;color:var(--muted);margin:8px 0 18px}.success-mark{width:60px;height:60px;color:var(--green);margin:6px 0 24px}.complete{padding-top:12px}.complete p{color:var(--muted)}.recap{margin:30px 0;padding:18px 0;border-block:1px solid var(--line);font-size:15px}.recap strong{display:block;font-size:20px;font-weight:600;overflow-wrap:anywhere}.subtle{font-size:12px;color:var(--muted);margin-top:30px;text-align:center}.empty-networks{margin:12px 0;color:var(--muted);font-size:13px}
+.file-pick label{font-weight:600;margin:0 0 10px}.file-pick input,.picker-help input{width:100%;min-height:48px;font-size:16px;cursor:pointer}input::file-selector-button{min-height:44px}.picker-help{padding:12px 0;margin-top:10px}.picker-help summary{font-size:14px;color:var(--green)}
+#museProxyHost,#museProxyPort{width:100%;min-height:50px;padding:13px 14px;border:1px solid #9ca99b;border-radius:var(--radius);background:#fffef9;color:var(--ink);font:inherit;line-height:1.5}#museSection label{margin-top:16px}
+@media(min-width:760px){.shell{margin:40px auto;padding:32px 40px;border:1px solid var(--line);border-radius:20px;background:#fbfaf5}.brand{margin-bottom:4px}h1{font-size:34px}}
+@media(max-width:360px){.shell{padding:20px 18px}h1{font-size:28px}.brand small{font-size:11px}.steps{margin-top:24px}.crop-layout{gap:12px}}
+@media(prefers-reduced-motion:no-preference){.primary,.secondary{transition:background .15s ease-out}}
+.card-row{display:flex;align-items:center;gap:14px;padding:16px 0;border-bottom:1px solid var(--line)}.card-thumb{width:72px;height:96px;object-fit:contain;background:#fff;flex-shrink:0}.card-meta{flex:1;min-width:0}.card-meta p{margin:0 0 8px;font-size:14px}.card-actions{display:flex;flex-wrap:wrap;gap:8px}.card-actions button{min-height:44px;padding:8px 10px;font-size:13px;border:1px solid var(--line);border-radius:6px;background:var(--tint);color:var(--ink);cursor:pointer}.card-actions button:disabled{opacity:.45;cursor:default}.card-actions .remove{color:#923522;background:transparent}.card-actions button:focus-visible{outline:2px solid var(--green);outline-offset:2px}.card-empty{padding:12px 0;color:var(--muted);font-size:14px}</style>
+<style>
+.portrait-presets{border:0;padding:0;margin:0 0 22px;min-width:0}.portrait-presets legend{font-size:14px;font-weight:600;margin-bottom:8px}.portrait-segments{display:grid;grid-template-columns:1fr 1fr 2fr;gap:4px;padding:4px;background:var(--tint);border-radius:8px}.portrait-segments label{position:relative;margin:0;min-width:0;cursor:pointer}.portrait-segments input{position:absolute;opacity:0;width:1px;height:1px}.portrait-segments span{display:flex;align-items:center;justify-content:center;min-height:44px;padding:6px 4px;font-size:12px;text-align:center;border-radius:5px;line-height:1.4;overflow-wrap:anywhere}.portrait-segments input:checked+span{color:#fff;background:var(--green)}.portrait-segments input:focus-visible+span{outline:3px solid #438259;outline-offset:2px}
+</style>
+</head>
+<body><main class="shell">
+<header class="brand"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="4" y="2" width="24" height="28" rx="3" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="13" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M9 13h14M16 6c-4 4-4 10 0 14 4-4 4-10 0-14ZM11 25h10" stroke="currentColor" stroke-width="1.5"/></svg>AI 护照<small>手机设置</small></header>
+<ol class="steps" aria-label="设置进度"><li id="progress1" aria-current="step">1 连接网络</li><li id="progress2">2 个人资料</li><li id="progress3">3 完成</li></ol>
+
+<section id="step1" aria-labelledby="title1">
+<h1 id="title1" tabindex="-1">先让 AI 护照<br>连上网络。</h1>
+<p class="intro">仅支持 2.4 GHz Wi-Fi。iPhone 热点请打开“最大兼容性”。连接后继续填写个人资料；下次开机会自动连接。</p>
+<div class="field"><div class="row"><label for="network">附近的 Wi-Fi</label><button class="text-button" id="refresh" type="button">刷新列表</button></div>
+<select id="network"><option value="">正在寻找网络…</option></select><p id="scanStatus" class="help" role="status" aria-live="polite">正在扫描附近的 2.4 GHz Wi-Fi…</p></div>
+<button class="text-button" id="manualToggle" type="button" aria-expanded="false">找不到网络？手动输入</button>
+<div class="field" id="manualField" hidden><label for="ssid">Wi-Fi 名称</label><input id="ssid" type="text" autocapitalize="off" spellcheck="false" autocomplete="off" placeholder="完整输入网络名称"></div>
+<div class="field"><label for="password">Wi-Fi 密码</label><div class="password"><input id="password" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" maxlength="64" placeholder="请输入密码"><button id="showPassword" type="button" aria-label="显示 Wi-Fi 密码">显示</button></div><p class="help" id="passwordHelp">密码中的空格会原样保留。</p></div>
+<div id="networkStatus" class="status" role="status" aria-live="polite">正在读取设备状态…</div>
+<div class="field" id="savedField" hidden><label for="savedNetwork">已保存的 Wi-Fi</label><select id="savedNetwork"><option value="">自动选择附近已保存的网络</option></select></div>
+<div class="actions"><button id="connect" class="primary" type="button" disabled>连接并继续</button><button id="reuse" class="secondary" type="button" hidden>连接已保存的 Wi-Fi</button><button id="keepSaved" class="text-button" type="button" hidden>暂不联网，只修改个人资料</button></div>
+<p class="note">请保持手机连接设备热点。若手机提示“无互联网”，选择继续使用此网络。整个页面无需联网加载。</p>
+</section>
+
+<section id="step2" aria-labelledby="title2" hidden>
+<h1 id="title2" tabindex="-1">把它设成<br>你的 AI 护照。</h1>
+<p class="intro">填写你想展示的信息。以下均可选，以后也能从设备的“手机设置”中修改。</p>
+<details id="voiceSection"><summary>AI 随身语音<small>电脑语音输入</small></summary><div class="detail-body">
+<p class="help">设备与电脑连接同一 Wi-Fi。下载电脑端完整包，安装虚拟声卡和微信输入法（也可用其他支持快捷键的语音输入法），再启动语音转发器。</p>
+<p class="help">电脑输入设备选 CABLE Output；转发器输出选 CABLE Input。输入法快捷键与转发器保持一致。设备上键按住说话、松开结束，下键发送回车。</p>
+<p class="help"><a href="https://github.com/manchunx7-bit/folo-ai-passport-voice" target="_blank" rel="noopener noreferrer">AI 随身语音项目、下载与完整教程</a></p>
+<p class="help">设置页可以离线使用。打开 GitHub 教程前，先完成设置并将手机切回能上网的网络；以后可从设备“设置 → 手机设置”再次查看入口。</p>
+</div></details>
+<div class="connection"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.6"/><path d="m6 10 3 3 5-6" stroke="currentColor" stroke-width="1.6"/></svg><span id="connectionSummary">网络已就绪</span></div>
+<div class="field"><label for="name">名字<span class="optional">显示在设备首页</span></label><input id="name" type="text" maxlength="9" autocomplete="nickname" placeholder="你希望被怎样称呼"></div>
+<div class="field"><label for="sig">个性签名</label><input id="sig" type="text" maxlength="30" placeholder="用一句话介绍自己"></div>
+<div class="field"><label for="address">地址<span class="optional">可填写工作室或联系地址</span></label><textarea id="address" rows="2" maxlength="40" autocomplete="street-address" placeholder="按需填写，留空也可以"></textarea><p class="help">地址保存在设备资料中，不会自动改写名片图片。</p></div>
+<div class="field"><label for="province">天气与收音机城市</label><button id="locate" type="button" class="secondary" data-helper="" aria-describedby="locationHelp">使用手机当前位置</button><p id="locationHelp" class="help">允许定位后自动匹配附近城市，核对后再保存。手动选择也可以。</p><p id="locationStatus" class="status" role="status" aria-live="polite"></p><details id="locationFallback" hidden><summary>定位结果没有自动返回？</summary><div class="detail-body"><label for="locationCode">粘贴定位页的结果</label><input id="locationCode" type="text" maxlength="100" autocomplete="off" spellcheck="false" placeholder="PPOS:纬度,经度,精度"><button id="importLocation" class="secondary" type="button">使用这个位置</button><p class="help">打开定位页需要联网；返回这里时，请重新连接设备热点。</p></div></details><select id="province" aria-label="筛选省份"><option value="">全部省份</option></select><label for="citySearch" class="help">搜索城市或区县</label><input id="citySearch" type="text" maxlength="30" placeholder="例如：珠海、香洲" autocomplete="off"><label for="city" class="help">选择城市</label><select id="city"><option value="">暂不设置城市</option></select><p id="cityStatus" class="help" role="status" aria-live="polite">正在读取设备内的离线城市目录…</p><p class="help">天气使用所选地点；收音机优先查找当地台，数量不足时补充省内台和推荐台。</p></div>
+<div id="customCityFields" hidden><div class="field"><label for="customCity">自定义城市或区县名称</label><input id="customCity" type="text" maxlength="15" placeholder="填写所在城市"><label for="customRegion" class="help">所在省份</label><select id="customRegion"><option value="">暂不设置省份</option></select><label for="customRadioCity" class="help">收音机城市<span class="optional">区县可填写所属地级市</span></label><input id="customRadioCity" type="text" maxlength="15" placeholder="留空使用上面的城市名称"><label for="customLat" class="help">纬度</label><input id="customLat" type="text" inputmode="decimal" maxlength="15" placeholder="例如 22.2707"><label for="customLon" class="help">经度</label><input id="customLon" type="text" inputmode="decimal" maxlength="15" placeholder="例如 113.5767"><p class="help">目录中没有你的城市或名称已变更？可填写地图中的经纬度；两项都留空时只设置收音机城市。</p></div></div>
+<button id="retryCities" type="button" class="text-button" hidden>重新加载城市</button>
+<details id="portraitSection"><summary>首页人像<small id="avatarState">可稍后上传</small></summary><div class="detail-body">
+<div class="file-pick"><label for="file">选择一张清晰的人像</label><input type="file" id="file" name="portrait" accept="image/*" aria-describedby="avatarPickerHelp"></div>
+<details class="picker-help"><summary>选图没有反应？从文件选择</summary><div class="detail-body"><label for="fileFallback">从文件选择人像图片</label><input type="file" id="fileFallback" name="portraitFile" aria-describedby="avatarPickerHelp"><p id="avatarPickerHelp" class="help">备用入口使用文件选择器。请选 JPEG 或 PNG 图片；若图片只在相册中，先保存到“文件”。如果两个入口都打不开，保持连接设备热点，在系统 Safari／Chrome 地址栏输入 http://192.168.4.1；也可用电脑连接热点后上传。</p></div></details>
+<div id="photoTools" class="photo-tools" hidden>
+<fieldset class="portrait-presets"><legend>人像风格</legend><div class="portrait-segments">
+<label><input type="radio" name="portraitPreset" id="portraitPresetDot" value="1"><span>点阵</span></label>
+<label><input type="radio" name="portraitPreset" id="portraitPresetFlat" value="2"><span>平涂</span></label>
+<label><input type="radio" name="portraitPreset" id="portraitPresetHybrid" value="3" checked><span>平涂＋局部点阵</span></label>
+</div></fieldset>
+<div class="crop-layout"><div id="vp" style="height:276px"><img id="pv" alt="人像取景预览"></div><div><canvas id="binc" width="96" height="138" style="height:138px" aria-label="设备人像预览"></canvas><p class="caption">设备效果</p></div></div><label for="zm" class="caption">缩放人像</label><input type="range" id="zm" min="100" max="400" value="100"><label for="portraitBrightness" class="caption">明暗</label><input type="range" id="portraitBrightness" min="-48" max="48" value="0" style="width:100%;min-height:40px"><label><input type="checkbox" id="portraitBackground"> 去除纯色背景</label></div>
+<p id="avatarStatus" class="status" role="status"></p></div></details>
+<details id="cardSection"><summary>彩色随身名片<small id="shareState">最多 6 张</small></summary><div class="detail-body">
+<p class="help">最多保存 6 张名片或二维码。首页按上键打开，上下键翻页，确定返回。推荐 3:4 比例，二维码周围请保留白边。</p>
+<div class="file-pick"><label for="shareFile" id="sharePickLabel">一次添加多张图片（最多 6 张）</label><input type="file" id="shareFile" name="card" multiple aria-describedby="shareBatchHelp"><p id="shareBatchHelp" class="help">在文件选择器中长按一张图片进入多选，再勾选其它图片并确认。可选择 JPEG、PNG 或 WebP 图片。</p></div>
+<details class="picker-help"><summary>改用相册选择</summary><div class="detail-body"><label for="shareFileFallback">从相册添加多张图片</label><input type="file" id="shareFileFallback" name="cardPhotos" accept="image/*" multiple aria-describedby="sharePickerHelp"><p id="sharePickerHelp" class="help">如果相册只能单选，请使用上面的文件多选入口；可先把图片保存到手机“文件”。在系统浏览器地址栏输入 http://192.168.4.1 打开设置页，可避免部分内置浏览器的限制。</p></div></details><input type="file" id="shareReplace" name="cardReplacement" hidden aria-hidden="true">
+<p id="shareStatus" class="status" role="status" aria-live="polite"></p><p class="help">选图后会逐张缩放至 240 × 320 并压缩；每张最多 24 KB，6 张最多 144 KB。替换、移除和排序在“完成设置”时保存。</p><p id="cardUsage" class="saved" role="status"></p><div id="cardList" aria-label="名片图片列表"></div><canvas id="sharec" width="240" height="320" aria-label="彩色名片预览" hidden></canvas></div></details>
+<details id="museSection"><summary>Muse 语音助手<small id="museState">可选配置</small></summary><div class="detail-body">
+<p class="help">需要自己的 Muse 账号、手机 App 和 Gadget SDK Token。保存后，在设备应用中打开 Muse，再用手机 Muse 的“设置 → 设备 → 开发者模式 → 添加设备”配对。配对时选择设备当前连接的 Wi-Fi。</p>
+<p class="help">SDK Token 可在 Muse 官方设备接入网站 gadgets.muse.ai 申请。建议在连接设备热点前准备好。</p>
+<p class="help"><a href="https://github.com/manchunx7-bit/ai-passport-muse" target="_blank" rel="noopener noreferrer">Muse 项目与完整配置教程</a> · 需要联网查看。Muse 不需要虚拟声卡或微信输入法。</p>
+<p id="museSaved" class="saved" role="status">正在读取设备中的 Muse 配置…</p>
+<label for="museToken">SDK Token</label><input id="museToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="63" placeholder="mgst_…" aria-describedby="museSaved" disabled>
+<label for="museProxyHost">电脑代理 IP（可选）</label><input id="museProxyHost" inputmode="decimal" autocomplete="off" maxlength="15" placeholder="例如 192.168.1.10">
+<label for="museProxyPort">代理端口</label><input id="museProxyPort" type="number" min="1" max="65535" inputmode="numeric" placeholder="例如 7897">
+<p class="help">电脑与设备需在同一局域网，代理需要允许局域网连接。使用电脑代理时，电脑和代理软件要保持运行。清空 IP 后保存可切回直连；不会解除已有配对。</p>
+<p class="help">仅使用自己的 Token，勿发送给他人。更换 Token 后需要重新配对。通过设备热点配置，页面不回显已保存的密钥。</p>
+<button id="useSavedMuse" type="button" class="secondary" hidden>使用已保存配置</button><button id="retryMuse" type="button" class="text-button" hidden>重新读取配置</button>
+<button id="saveMuse" type="button" class="secondary" disabled>保存 Muse 配置</button><p class="help">Token 和电脑代理设置保存在这台设备，重启后仍可使用。也可以点下方“保存并完成设置”一起保存。</p><p id="museStatus" class="status" role="status" aria-live="polite"></p></div></details>
+<div id="saveStatus" class="status" role="status" aria-live="polite"></div>
+<div class="actions"><button id="save" class="primary" type="button">保存并完成设置</button><button id="back" class="text-button" type="button">返回网络设置</button></div>
+</section>
+
+<section id="step3" class="complete" aria-labelledby="title3" hidden>
+<svg class="success-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true"><circle cx="32" cy="32" r="28" stroke="currentColor" stroke-width="2"/><path d="m19 32 9 9 18-20" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<h1 id="title3" tabindex="-1">设置完成。<br>拿起你的 AI 护照吧。</h1>
+<p>设备即将关闭设置热点并进入首页。手机可以切回平时使用的 Wi-Fi。</p>
+<div class="recap"><strong id="doneName">AI 护照</strong><span id="doneSummary">资料已保存</span></div>
+<p class="help">以后修改：设备“设置 → 手机设置”，或在首页长按下键。</p>
+</section>
+<footer class="subtle">你的设置直接保存到这台设备</footer>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const say=(id,text,error=false)=>{const el=$(id);el.textContent=text;el.dataset.error=String(error)};
+const bytes=s=>new TextEncoder().encode(s).length;
+let page=1,manual=false,busy=false,hasSaved=false,verified=false,pollTimer=null,polls=0;
+let scanTimer=null,scanRound=0,scanning=false;
+// Directory is served from this device, including while the phone has no Internet.
+let cities=[],loadedProfile={},cityCatalogLoaded=false;
+let locatedProfile=null,locationRequest=null,locationTimer=null,locationGeneration=0;
+const provinces=['北京','天津','河北','山西','内蒙古','辽宁','吉林','黑龙江','上海','江苏','浙江','安徽','福建','江西','山东','河南','湖北','湖南','广东','广西','海南','重庆','四川','贵州','云南','西藏','陕西','甘肃','青海','宁夏','新疆','香港','澳门','台湾'];
+for(const p of provinces){$('province').add(new Option(p,p));$('customRegion').add(new Option(p,p))}
+function cityOption(c){return new Option(c[1]+' · '+c[4]+(c[5]!==c[1]?' / '+c[5]:''),c[0])}
+function filterCities(){const selected=$('city').value,region=$('province').value,query=$('citySearch').value.trim();const matches=cities.filter(c=>(!region||c[4]===region)&&(!query||c[1].includes(query)||c[5].includes(query)));const visible=matches.slice(0,200),options=[new Option('暂不设置城市','')];for(const c of visible)options.push(cityOption(c));const current=cities.find(c=>c[0]===selected);if(current&&!visible.includes(current))options.push(new Option('已选择：'+current[1]+' · '+current[4],current[0]));const saved=selected==='__saved'&&loadedProfile.city;if(saved)options.push(new Option('已保存：'+loadedProfile.city,'__saved'));options.push(new Option('自定义城市或区县','__custom'));$('city').replaceChildren(...options);$('city').value=current?selected:saved?'__saved':selected==='__custom'?'__custom':'';$('retryCities').hidden=cityCatalogLoaded;say('cityStatus',cityCatalogLoaded?(matches.length?'找到 '+matches.length+' 个地点，共 '+cities.length+' 个。'+(matches.length>200?'显示前 200 个，请筛选省份或搜索。':''):'没有找到匹配地点。可选择“自定义城市或区县”。'):'城市目录未能读取，已有城市信息会保留。请重新加载。')}
+function selectCity(){const custom=$('city').value==='__custom';$('customCityFields').hidden=!custom;if(custom&&!$('customRegion').value)$('customRegion').value=$('province').value}
+$('province').onchange=filterCities;$('citySearch').oninput=filterCities;$('city').onchange=()=>{cancelLocation();locatedProfile=null;say('locationStatus','');selectCity()};
+async function loadCities(){try{const list=await api('/api/cities');if(!Array.isArray(list)||!list.length)throw new Error('invalid directory');cities=list;cityCatalogLoaded=true}catch(e){cityCatalogLoaded=false}filterCities()}
+function restoreCity(profile){cancelLocation();locatedProfile=null;loadedProfile=profile;$('citySearch').value='';$('province').value=profile.region||'';filterCities();const known=cities.filter(c=>c[1]===profile.city&&(!profile.region||c[4]===profile.region));const closest=known.find(c=>Math.abs(c[2]-Number(profile.lat))<.02&&Math.abs(c[3]-Number(profile.lon))<.02)||(!profile.lat&&!profile.lon&&known.length===1?known[0]:null);if(closest){$('province').value=closest[4];filterCities();if(!Array.from($('city').options).some(o=>o.value===closest[0]))$('city').add(cityOption(closest));$('city').value=closest[0];if(validPosition(Number(profile.lat),Number(profile.lon),0)&&profile.lat&&profile.lon)locatedProfile={id:closest[0],lat:profile.lat,lon:profile.lon}}else if(profile.city&&!cityCatalogLoaded){if(!Array.from($('city').options).some(o=>o.value==='__saved'))$('city').add(new Option('已保存：'+profile.city,'__saved'));$('city').value='__saved'}else if(profile.city){$('city').value='__custom';for(const [id,key] of [['customCity','city'],['customRegion','region'],['customRadioCity','radio_city'],['customLat','lat'],['customLon','lon']])$(id).value=profile[key]||''}else $('city').value='';selectCity()}
+$('retryCities').onclick=async()=>{const saved=$('city').value==='__saved';$('retryCities').disabled=true;try{await loadCities();if(saved&&$('city').value==='__saved')restoreCity(loadedProfile)}finally{$('retryCities').disabled=false}};
+function selectedCityProfile(){if($('city').value==='__saved')return Object.fromEntries(['city','lat','lon','region','radio_city','country_code'].map(key=>[key,loadedProfile[key]||'']));const chosen=cities.find(c=>c[0]===$('city').value);if(chosen){const position=locatedProfile?.id===chosen[0]?locatedProfile:null;return {city:chosen[1],lat:position?.lat||String(chosen[2]),lon:position?.lon||String(chosen[3]),region:chosen[4],radio_city:chosen[5],country_code:chosen[6]}}if($('city').value!=='__custom')return {city:'',lat:'',lon:'',region:'',radio_city:'',country_code:''};const city=$('customCity').value.trim(),region=$('customRegion').value,radio_city=$('customRadioCity').value.trim()||city,lat=$('customLat').value.trim(),lon=$('customLon').value.trim();if(!city)throw new Error('请填写自定义城市名称。');const decimal=v=>/^[+-]?(?:[0-9]+(?:[.][0-9]*)?|[.][0-9]+)$/.test(v);if((lat||lon)&&(!decimal(lat)||!decimal(lon)||Math.abs(Number(lat))>90||Math.abs(Number(lon))>180))throw new Error('请填写有效的纬度与经度；纬度在 -90 到 90、经度在 -180 到 180 之间。');const country_code=({香港:'HK',澳门:'MO',台湾:'TW'})[region]||'CN';return {city,lat,lon,region,radio_city,country_code}}
+function validPosition(lat,lon,accuracy){return [lat,lon,accuracy].every(v=>typeof v==='number'&&Number.isFinite(v))&&Math.abs(lat)<=90&&Math.abs(lon)<=180&&accuracy>=0}
+function distanceKm(lat,lon,c){const rad=Math.PI/180,a=Math.sin((c[2]-lat)*rad/2)**2+Math.cos(lat*rad)*Math.cos(c[2]*rad)*Math.sin((c[3]-lon)*rad/2)**2;return 12742*Math.asin(Math.min(1,Math.sqrt(a)))}
+function applyPhonePosition(lat,lon,accuracy){if(!validPosition(lat,lon,accuracy))throw new Error('定位结果无效，请重新定位。');if(accuracy>50000)throw new Error('定位范围太大，请开启精确位置后重试，或手动选择城市。');if(!cityCatalogLoaded||!cities.length)throw new Error('城市目录尚未读到，请刷新后再定位；也可手动填写城市与经纬度。');let nearest=null,distance=Infinity;for(const c of cities){const km=distanceKm(lat,lon,c);if(km<distance){distance=km;nearest=c}}if(distance>100)throw new Error('此位置附近没有目录地点，请手动填写所在城市。');$('province').value=nearest[4];$('citySearch').value='';filterCities();if(!Array.from($('city').options).some(o=>o.value===nearest[0]))$('city').add(cityOption(nearest));$('city').value=nearest[0];selectCity();locatedProfile={id:nearest[0],lat:lat.toFixed(6),lon:lon.toFixed(6)};say('locationStatus','附近地点：'+nearest[4]+' / '+nearest[5]+(nearest[1]!==nearest[5]?' / '+nearest[1]:'')+'。定位精度约 '+Math.ceil(accuracy)+' 米，请核对城市后保存；天气使用手机经纬度。');return nearest}
+function cancelLocation(){locationGeneration++;clearTimeout(locationTimer);locationTimer=null;if(locationRequest){clearTimeout(locationRequest.timer);locationRequest=null}$('locate').disabled=false}
+function locationFailure(code){return ({1:'未获得定位权限，请在浏览器或手机设置中允许位置访问，或手动选择城市。',2:'暂时无法获取位置，请开启手机定位后重试，或手动选择城市。',3:'定位等待超时，请移到信号较好的位置后重试，或手动选择城市。'})[code]||'定位未成功，请重试或手动选择城市。'}
+function locationHelper(){try{const url=new URL($('locate').dataset.helper);return url.protocol==='https:'&&!url.username&&!url.password?url:null}catch(e){return null}}
+function locatePhone(){cancelLocation();const generation=locationGeneration;if(window.isSecureContext&&navigator.geolocation){$('locate').disabled=true;say('locationStatus','正在获取位置，请允许浏览器访问手机位置…');const timer=locationTimer=setTimeout(()=>{if(generation===locationGeneration){cancelLocation();say('locationStatus',locationFailure(3),true)}},45000);navigator.geolocation.getCurrentPosition(position=>{if(generation!==locationGeneration)return;clearTimeout(timer);cancelLocation();try{applyPhonePosition(position.coords.latitude,position.coords.longitude,position.coords.accuracy)}catch(e){say('locationStatus',e.message,true)}},error=>{if(generation!==locationGeneration)return;clearTimeout(timer);cancelLocation();say('locationStatus',locationFailure(error.code),true)},{enableHighAccuracy:true,timeout:20000,maximumAge:60000});return}const helper=locationHelper();if(!helper){say('locationStatus','当前设备热点页面无法调用手机定位，联网定位入口尚未启用。请先手动选择城市。',true);return}const random=new Uint8Array(16);window.crypto.getRandomValues(random);const request=Array.from(random,b=>b.toString(16).padStart(2,'0')).join('');helper.hash=new URLSearchParams({origin:window.location.origin,request}).toString();const popup=window.open(helper.href,'passport-location');if(!popup){say('locationStatus','定位页未能打开，请允许浏览器打开新窗口后重试。',true);return}$('locationFallback').hidden=false;const timer=setTimeout(()=>{if(locationRequest?.request===request){cancelLocation();say('locationStatus','尚未收到定位结果，请返回定位页重试，或复制结果到此页。',true)}},180000);locationRequest={request,popup,origin:helper.origin,timer};$('locate').disabled=true;say('locationStatus','已打开手机定位页。请保持此页打开；定位页需要联网，返回保存时请连接设备热点。')}
+function receiveLocation(event){const job=locationRequest,data=event.data;if(!job||event.source!==job.popup||event.origin!==job.origin||data?.type!=='passport-position'||data.request!==job.request)return;cancelLocation();try{applyPhonePosition(data.lat,data.lon,data.accuracy)}catch(e){say('locationStatus',e.message,true)}}
+$('locate').onclick=locatePhone;window.addEventListener('message',receiveLocation);
+// Keep the unconfigured HTTPS handoff out of the offline device flow.
+const canLocate=Boolean((window.isSecureContext&&navigator.geolocation)||locationHelper());$('locate').hidden=!canLocate;$('locationHelp').hidden=!canLocate;
+$('importLocation').onclick=()=>{const match=$('locationCode').value.trim().match(/^PPOS:([+-]?\d+(?:\.\d+)?),([+-]?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)$/);if(!match){say('locationStatus','请完整粘贴定位页生成的结果，以 PPOS: 开头。',true);return}try{applyPhonePosition(Number(match[1]),Number(match[2]),Number(match[3]));cancelLocation()}catch(e){say('locationStatus',e.message,true)}};
+async function api(path,body){
+ const controller=new AbortController();
+ // Avatar retries may include two socket waits; keep the client deadline outside them.
+ const timer=setTimeout(()=>controller.abort(),path==='/api/avatar'?20000:12000);
+ const options={cache:'no-store',signal:controller.signal};
+ if(body!==undefined){options.method='POST';options.body=body instanceof Uint8Array||body instanceof Blob?body:JSON.stringify(body);if(typeof options.body==='string')options.headers={'Content-Type':'application/json'}}
+ let r,j={};
+ try{
+  r=await fetch(path+(path.includes('?')?'&':'?')+'t='+encodeURIComponent(window.__T||''),options);
+  try{j=await r.json()}catch(e){if(controller.signal.aborted)throw e}
+ }catch(e){e.path=path;throw e}finally{clearTimeout(timer)}
+ if(!r.ok){
+  const errors={
+   unauthorized:'设置页面已失效，请刷新后重试。',saved_not_found:'附近暂未发现可用的已保存网络。请选择指定网络重试，或只修改个人资料。',
+   network_required:'请先连接 Wi-Fi，再完成设置。',busy:'正在处理连接，请稍等。',credentials:'请检查网络名称与密码长度。',
+   storage_full:'设备存储空间不足，请先移除不需要的图片并保存，再添加新图片。',card_image:'图片格式不符合要求，请重新选择并压缩。',card_order:'图片列表未能保存，请重试。',
+   avatar_size:'头像数据长度不匹配，请刷新设置页并重新选择图片。',avatar_recv:'头像传输中断，请保持连接设备热点后重试。',
+   avatar_store:j.code==='ESP_ERR_NO_MEM'?'设备内存不足，头像未保存，请稍后重试。':'头像未能写入设备，原头像已保留。请重试；若持续失败，请反馈此提示。'
+  };
+  const error=new Error(errors[j.error]||'设备未能保存，请重试。');
+  error.code=j.error||'rejected';error.deviceCode=j.code||'';error.path=path;throw error;
+ }
+ return j;
+}
+function step(n){page=n;if(n!==1)clearTimeout(scanTimer);for(let i=1;i<=3;i++){ $('step'+i).hidden=i!==n;const p=$('progress'+i);if(i===n)p.setAttribute('aria-current','step');else p.removeAttribute('aria-current');p.classList.toggle('done',i<n)}$('title'+n).focus({preventScroll:true});window.scrollTo(0,0)}
+function lockNetwork(lock){busy=lock;if(lock)clearTimeout(scanTimer);for(const id of ['connect','reuse','keepSaved','refresh','network','savedNetwork','ssid','password','manualToggle'])$(id).disabled=lock;$('network').disabled=lock||manual;$('connect').textContent=lock?'正在连接…':'连接并继续'}
+function networkReady(text){verified=true;lockNetwork(false);$('password').value='';$('connectionSummary').textContent=text;step(2)}
+async function scan(reset=true){
+ if(scanning||busy||page!==1)return;
+ clearTimeout(scanTimer);if(reset)scanRound=0;scanRound++;scanning=true;
+ $('refresh').disabled=true;$('refresh').textContent='扫描中…';
+ say('scanStatus','正在扫描附近的 2.4 GHz Wi-Fi…');
+ let retry=false;
+ try{
+  const list=await api('/api/networks');
+  if(busy||page!==1)return;
+  if(!Array.isArray(list))throw new Error('invalid networks');
+  if(list.length){
+   const old=$('network').value,previous=$('network').selectedOptions[0];
+   $('network').replaceChildren(new Option('请选择 Wi-Fi',''));
+   for(const ap of list){const opt=new Option(ap.ssid+(ap.secure?'':'（无需密码）'),ap.ssid);opt.dataset.secure=String(ap.secure);$('network').add(opt)}
+   if(old){if(!list.some(ap=>ap.ssid===old)&&previous)$('network').add(previous);$('network').value=old}
+   say('scanStatus','已找到 '+list.length+' 个网络 · 仅支持 2.4 GHz');
+  }else{
+   retry=scanRound<10;
+   if(!$('network').value)$('network').replaceChildren(new Option(retry?'正在寻找网络…':'暂未找到网络，可刷新或手动输入',''));
+   say('scanStatus',retry?'正在等待扫描结果，列表会自动更新…':'暂未发现网络。可刷新列表，或手动输入 2.4 GHz 网络名称。');
+  }
+ }catch(e){
+  retry=scanRound<3;
+  if(!$('network').value)$('network').replaceChildren(new Option('连接热点后重试，或手动输入',''));
+  say('scanStatus',retry?'正在重新读取网络列表…':'暂时无法读取列表。请确认仍连接设备热点，再点刷新。',true);
+ }finally{
+  scanning=false;$('refresh').disabled=busy;$('refresh').textContent='刷新列表';
+  if(retry&&!busy&&!manual&&page===1)scanTimer=setTimeout(()=>scan(false),1500);
+ }
+}
+$('refresh').onclick=()=>scan();
+$('manualToggle').onclick=()=>{manual=!manual;$('manualField').hidden=!manual;$('manualToggle').setAttribute('aria-expanded',String(manual));$('manualToggle').textContent=manual?'返回附近的网络':'找不到网络？手动输入';$('network').disabled=manual;if(manual)$('ssid').focus()};
+$('network').onchange=()=>{const open=$('network').selectedOptions[0]?.dataset.secure==='false';$('passwordHelp').textContent=open?'这是开放网络，无需输入密码。':'密码中的空格会原样保留。';if(open)$('password').value=''};
+$('showPassword').onclick=()=>{const visible=$('password').type==='password';$('password').type=visible?'text':'password';$('showPassword').textContent=visible?'隐藏':'显示';$('showPassword').setAttribute('aria-label',visible?'隐藏 Wi-Fi 密码':'显示 Wi-Fi 密码')};
+async function poll(){polls++;try{const state=await api('/api/setup');if(state.finishing){step(3);return}if(state.state==='connected'){networkReady('已连接 '+state.ssid);return}if(state.state==='failed'){lockNetwork(false);say('networkStatus','连接未成功。请检查密码、路由器是否开启，以及是否为 2.4 GHz 网络，然后重试。',true);return}say('networkStatus','正在连接'+(state.ssid?' '+state.ssid:' Wi-Fi')+'，请保持连接设备热点。')}catch(e){say('networkStatus','连接过程中热点可能短暂断开。请重新连接设备热点，此页面会继续检查。',true)}if(polls<180)pollTimer=setTimeout(poll,1500);else{lockNetwork(false);say('networkStatus','暂时联系不到设备。请连接设备热点后刷新页面，查看连接结果。',true)}}
+async function connect(saved=false){const ssid=manual?$('ssid').value:$('network').value,password=$('password').value;if(!saved){if(!ssid||bytes(ssid)>32){say('networkStatus','请选择 Wi-Fi，或输入不超过 32 字节的网络名称。',true);return}const n=bytes(password);if(n!==0&&(n<8||n>63)&&!/^[0-9a-fA-F]{64}$/.test(password)){say('networkStatus','Wi-Fi 密码通常为 8–63 字节，请检查后重试。',true);return}}clearTimeout(pollTimer);polls=0;verified=false;lockNetwork(true);say('networkStatus','正在连接，稍后会自动进入个人资料。');try{await api('/api/connect',{...(saved?{saved:true,ssid:$('savedNetwork').value}:{ssid,password}),epoch:Math.floor(Date.now()/1000),tz_minutes:-new Date().getTimezoneOffset()});}catch(e){if(e.code&&e.code!=='busy'){lockNetwork(false);say('networkStatus',e.message,true);return}say('networkStatus','正在确认设备是否已收到请求，请保持热点连接。')}pollTimer=setTimeout(poll,1000)}
+$('connect').onclick=()=>connect();$('reuse').onclick=()=>connect(true);$('keepSaved').onclick=()=>{$('connectionSummary').textContent='仅修改资料，完成后自动重连已保存网络';step(2)};$('back').onclick=()=>step(1);
+let museConfigured=false,musePaired=false,museSaving=false,museLoaded=false,museLoading=null,museProxyEdited=false;
+let savedMuseHost='',savedMusePort=0;
+function lockMuse(){for(const id of ['saveMuse','useSavedMuse','retryMuse','museToken','museProxyHost','museProxyPort'])$(id).disabled=museSaving||!!museLoading}
+function applyMuseConfig(m,restore=false){
+ if(typeof m.token_set!=='boolean'||typeof m.paired!=='boolean'||typeof m.proxy_host!=='string'||!Number.isInteger(m.proxy_port))throw new Error('invalid Muse configuration');
+ museConfigured=m.token_set;musePaired=m.paired;savedMuseHost=m.proxy_host;savedMusePort=m.proxy_port;museLoaded=true;
+ $('museState').textContent=musePaired?'已配对':museConfigured?'已保存，待配对':'可选配置';
+ $('museSaved').textContent=(museConfigured?'Token 已保存，无需重新填写':'尚未保存 Token')+' · '+(savedMuseHost?'电脑代理 '+savedMuseHost+':'+savedMusePort:'直连，不使用电脑代理');
+ $('museToken').placeholder=museConfigured?'已保存，留空沿用；填写新 Token 可更换':'mgst_…';
+ $('useSavedMuse').hidden=!museConfigured;$('retryMuse').hidden=true;
+ if(restore||!museProxyEdited){$('museProxyHost').value=savedMuseHost;$('museProxyPort').value=savedMusePort||'';museProxyEdited=false}
+}
+for(const id of ['museProxyHost','museProxyPort'])$(id).oninput=()=>{museProxyEdited=true};
+function pendingMuseConfig(){
+ const host=$('museProxyHost').value.trim(),port=host?Number($('museProxyPort').value):0;
+ return !!$('museToken').value.trim() || (museLoaded && (host!==savedMuseHost || port!==savedMusePort)) || (!museLoaded && !!host);
+}
+async function saveMuseConfig(onlyPending=false){
+ if(museSaving)throw new Error('Muse 配置正在保存，请稍等后再完成设置。');
+ if(onlyPending&&!pendingMuseConfig())return;
+ if(museLoading)await museLoading;
+ if(!museLoaded&&!await loadMuse())throw new Error('请先重新读取已保存的 Muse 配置，再保存。');
+ if(museSaving)throw new Error('Muse 配置正在保存，请稍等后再完成设置。');
+ const token=$('museToken').value.trim(),host=$('museProxyHost').value.trim(),port=host?Number($('museProxyPort').value):0;
+ if(token&&!/^mgst_[!-~]{7,58}$/.test(token))throw new Error('请填写官方发放的 mgst_ 开头 SDK Token。');
+ if(!token&&!museConfigured)throw new Error('首次使用 Muse 请填写 SDK Token。');
+ if(host&&(!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(host)||host.split('.').some(n=>Number(n)>255)||Number(host.split('.')[0])===127||Number(host.split('.')[0])===0||Number(host.split('.')[0])>=224||Number(host.split('.').at(-1))===255||!Number.isInteger(port)||port<1||port>65535))throw new Error('请填写电脑局域网 IPv4 地址和有效端口。');
+ museSaving=true;lockMuse();
+ try{
+  const config={proxy_host:host,proxy_port:port};if(token)config.sdk_token=token;
+  const m=await api('/api/muse',config);applyMuseConfig(m,true);$('museToken').value='';
+  say('museStatus',musePaired?'已保存。重新进入设备 Muse，按确定键重试连接。':'已保存。完成本页设置后，在手机 Muse 添加设备。');
+ }finally{museSaving=false;lockMuse()}
+}
+$('saveMuse').onclick=async()=>{try{await saveMuseConfig()}catch(e){say('museStatus',e.code==='muse_active'?'请先退出设备上的 Muse 应用，再保存配置。':e.message,true)}};
+function loadMuse(restore=false){
+ if(museSaving)return Promise.resolve(false);
+ if(museLoading)return museLoading;
+ museLoading=(async()=>{try{
+  const m=await api('/api/muse');applyMuseConfig(m,restore);if(restore)$('museToken').value='';
+  say('museStatus',restore?'已恢复设备中保存的配置，无需重新输入 Token。':'');return true;
+ }catch(e){
+  if(!museLoaded){$('museState').textContent='待读取';$('museSaved').textContent='尚未读取到设备配置，请重试。'}
+  $('retryMuse').hidden=false;say('museStatus','读取失败，设备中已保存的配置不会被清除。请重新读取。',true);return false;
+ }finally{museLoading=null;lockMuse()}})();
+ lockMuse();return museLoading;
+}
+$('retryMuse').onclick=()=>loadMuse();$('useSavedMuse').onclick=()=>loadMuse(true);
+$('museSection').ontoggle=()=>{if($('museSection').open&&!museLoaded)return loadMuse()};
+
+// Portrait cropping happens on the phone, preserving the device's small memory budget.
+const VP={w:192,h:276},PORTRAIT={w:96,h:138};let portraitPalette=[0x03120b,0x3a5b45,0x719c80,0xa8edbb],portraitSubjectPalette=[0x254d36,0x4b8060,0x80b795,0xa8edbb];let zoom=1,ox=0,oy=0,base=1,portrait=null,shareImg=null,imageLoading=0,portraitPreset=3,portraitSampleCache=null,portraitPreparedCache=null;
+const CARD_MAX=6,CARD_BYTES=24576;let cards=[],cardsDirty=false,cardsReady=false,cardBusy=false,replaceSlot=null,cardStorage=null;
+function clamp(){if(!portrait)return;const s=base*zoom;ox=Math.min(0,Math.max(VP.w-portrait.naturalWidth*s,ox));oy=Math.min(0,Math.max(VP.h-portrait.naturalHeight*s,oy));$('pv').style.width=portrait.naturalWidth*s+'px';$('pv').style.left=ox+'px';$('pv').style.top=oy+'px'}
+function portraitPixels(){
+ const key=[zoom,ox,oy,base].join(',');if(portraitSampleCache?.image===portrait&&portraitSampleCache.key===key)return portraitSampleCache.data;
+ const c=document.createElement('canvas');c.width=PORTRAIT.w;c.height=PORTRAIT.h;const g=c.getContext('2d'),s=base*zoom;g.imageSmoothingEnabled=true;g.imageSmoothingQuality='high';g.drawImage(portrait,-ox/s,-oy/s,VP.w/s,VP.h/s,0,0,c.width,c.height);
+ const data=g.getImageData(0,0,c.width,c.height).data;portraitSampleCache={image:portrait,key,data};return data;
+}
+function portraitLocalContrast(lum,mask,w,h){
+ if(w<12||h<16)return lum;
+ const cols=3,rows=4,tw=w/cols,th=h/rows,maps=[];
+ for(let ty=0;ty<rows;ty++)for(let tx=0;tx<cols;tx++){
+  const hist=new Uint32Array(256);let count=0;
+  for(let y=Math.floor(ty*th);y<Math.floor((ty+1)*th);y++)for(let x=Math.floor(tx*tw);x<Math.floor((tx+1)*tw);x++){const p=y*w+x;if(mask[p]){hist[lum[p]]++;count++}}
+  const map=new Uint8Array(256);if(!count){for(let v=0;v<256;v++)map[v]=v;maps.push(map);continue}
+  const limit=Math.max(1,Math.floor(count*1.1/256));let excess=0;
+  for(let v=0;v<256;v++)if(hist[v]>limit){excess+=hist[v]-limit;hist[v]=limit}
+  const step=Math.floor(excess/256),rest=excess%256;let sum=0;
+  for(let v=0;v<256;v++){sum+=hist[v]+step+(Math.floor((v+1)*rest/256)>Math.floor(v*rest/256)?1:0);map[v]=Math.round(sum*255/count)}maps.push(map);
+ }
+ const out=new Uint8Array(lum.length);
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+  const fx=Math.max(0,Math.min(cols-1,(x+.5)/tw-.5)),fy=Math.max(0,Math.min(rows-1,(y+.5)/th-.5)),a=Math.floor(fx),b=Math.floor(fy),c=Math.min(a+1,cols-1),d=Math.min(b+1,rows-1),dx=fx-a,dy=fy-b,p=y*w+x,v=lum[p];
+  const local=(maps[b*cols+a][v]*(1-dx)+maps[b*cols+c][v]*dx)*(1-dy)+(maps[d*cols+a][v]*(1-dx)+maps[d*cols+c][v]*dx)*dy;
+  out[p]=Math.round(v*.8+local*.2);
+ }return out;
+}
+function portraitPrepare(data,w,h,removeBackground){
+ if(portraitPreparedCache?.data===data&&portraitPreparedCache.removeBackground===removeBackground&&portraitPreparedCache.w===w&&portraitPreparedCache.h===h)return portraitPreparedCache;
+ const count=w*h,background=new Uint8Array(count),lum=new Uint8Array(count),hist=new Uint32Array(256),mask=new Uint8Array(count);
+ for(let p=0;p<count;p++){const i=p*4;lum[p]=(data[i]*77+data[i+1]*151+data[i+2]*28)>>8;if(data[i+3]<128)background[p]=1}
+ if(removeBackground){
+  const border=[];for(let x=0;x<w;x++){border.push(x,(h-1)*w+x)}for(let y=1;y<h-1;y++){border.push(y*w,y*w+w-1)}
+  const center=[0,1,2].map(c=>{const values=border.map(p=>data[p*4+c]).sort((a,b)=>a-b);return values[values.length>>1]});
+  const matches=p=>{const i=p*4;return data[i+3]>=128&&center.reduce((sum,c,k)=>sum+(c-data[i+k])**2,0)<=18*18*3};
+  if(border.filter(matches).length>=border.length*.6){
+   const queue=new Uint16Array(count);let head=0,tail=0;
+   const visit=p=>{if(!background[p]&&matches(p)){background[p]=1;queue[tail++]=p}};
+   border.forEach(visit);while(head<tail){const p=queue[head++],x=p%w;if(x)visit(p-1);if(x<w-1)visit(p+1);if(p>=w)visit(p-w);if(p<count-w)visit(p+w)}
+  }
+ }
+ // Small bilateral kernel removes weak texture while retaining high-contrast eyes and glasses.
+ const range=Float32Array.from({length:256},(_,i)=>Math.exp(-i*i/(2*24*24))),kernel=[];
+ for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++)kernel.push([dx,dy,Math.exp(-(dx*dx+dy*dy)/(2*1.2*1.2))]);
+ const smooth=new Uint8Array(count);let used=0;
+ for(let y=0;y<h;y++)for(let x=0;x<w;x++){const p=y*w+x;if(background[p])continue;let total=0,weight=0;
+  for(const [dx,dy,spatial] of kernel){const xx=x+dx,yy=y+dy;if(xx<0||xx>=w||yy<0||yy>=h)continue;const q=yy*w+xx;if(background[q])continue;const k=spatial*range[Math.abs(lum[q]-lum[p])];total+=lum[q]*k;weight+=k}
+  smooth[p]=Math.round(total/weight);hist[smooth[p]]++;mask[p]=1;used++;
+ }
+ const percentile=part=>{let n=0;for(let v=0;v<256;v++){n+=hist[v];if(n>=Math.max(1,used*part))return v}return 255};
+ let low=percentile(.02),high=percentile(.98);if(high-low<40){low=0;high=255}
+ for(let p=0;p<count;p++)smooth[p]=Math.max(0,Math.min(255,Math.round((smooth[p]-low)*255/(high-low))));
+ portraitPreparedCache={data,w,h,removeBackground,mask,gray:portraitLocalContrast(smooth,mask,w,h)};return portraitPreparedCache;
+}
+function portraitLevels(data,w,h,removeBackground,brightness,preset=3){
+ const {gray,mask}=portraitPrepare(data,w,h,removeBackground),levels=new Uint8Array(w*h),bayer=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5];
+ for(let p=0;p<levels.length;p++)if(mask[p]){
+  const x=p%w,y=Math.floor(p/w),v=Math.max(0,Math.min(255,gray[p]+brightness)),t=(bayer[(y%4)*4+x%4]+.5)/16;
+  if(preset===1){const edge=(x>0&&!mask[p-1])||(x<w-1&&!mask[p+1])||(y>0&&!mask[p-w])||(y<h-1&&!mask[p+w]);levels[p]=.13+.78*(v/255)**.95>t||(edge&&(x+y)%3===0)?3:0}
+  else{const value=v+(preset===3?(t-.5)*34:0);levels[p]=value<57?0:value<124?1:value<190?2:3}
+ }return {levels,mask};
+}
+function portraitPacked(){
+ const {levels,mask}=portraitLevels(portraitPixels(),PORTRAIT.w,PORTRAIT.h,$('portraitBackground').checked,Number($('portraitBrightness').value)||0,portraitPreset),count=PORTRAIT.w*PORTRAIT.h,packed=new Uint8Array(8+count/4+count/8);
+ packed.set([80,84,51,53,portraitPreset,0,0,0]);for(let p=0;p<count;p++){packed[8+(p>>2)]|=levels[p]<<(6-2*(p&3));if(mask[p])packed[8+count/4+(p>>3)]|=128>>(p&7)}return packed;
+}
+function portraitColor(packed,p){
+ const count=PORTRAIT.w*PORTRAIT.h,visible=packed[8+count/4+(p>>3)]&(128>>(p&7)),level=(packed[8+(p>>2)]>>(6-2*(p&3)))&3;
+ return !visible||(packed[4]===1&&!level)?portraitPalette[0]:portraitSubjectPalette[level];
+}
+function previewPortrait(){if(!portrait)return;const packed=portraitPacked(),g=$('binc').getContext('2d'),o=g.createImageData(PORTRAIT.w,PORTRAIT.h);for(let p=0;p<PORTRAIT.w*PORTRAIT.h;p++){const color=portraitColor(packed,p),i=p*4;o.data[i]=color>>16;o.data[i+1]=(color>>8)&255;o.data[i+2]=color&255;o.data[i+3]=255}g.putImageData(o,0,0)}
+function setPortraitPreset(value){portraitPreset=[1,2,3].includes(value)?value:3;for(const [i,id] of ['portraitPresetDot','portraitPresetFlat','portraitPresetHybrid'].entries())$(id).checked=portraitPreset===i+1;previewPortrait()}
+for(const [i,id] of ['portraitPresetDot','portraitPresetFlat','portraitPresetHybrid'].entries())$(id).onchange=()=>{if($(id).checked)setPortraitPreset(i+1)};
+$('portraitBrightness').oninput=previewPortrait;$('portraitBackground').onchange=previewPortrait;
+async function imageFile(input){const file=input.files[0];if(!file)return null;if(!file.size)throw new Error('图片文件为空，请重新选择。');if(file.size>20*1024*1024)throw new Error('图片超过 20 MB，请选择较小的图片。');const url=URL.createObjectURL(file);let timer;imageLoading++;try{const img=new Image();await new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(new Error('读取图片超时，请将图片保存到手机本地后重试。')),15000);img.onload=resolve;img.onerror=()=>reject(new Error('无法读取图片，请换一张 JPEG 或 PNG 图片。'));img.src=url});if(!img.naturalWidth||!img.naturalHeight)throw new Error('图片尺寸无效，请重新选择。');return img}catch(e){URL.revokeObjectURL(url);throw e}finally{clearTimeout(timer);imageLoading--}}
+async function selectPortrait(input){say('avatarStatus','正在读取图片…');try{const img=await imageFile(input);if(!img){say('avatarStatus',portrait?'已保留之前选择的人像。':'未选择图片。');return}if(portrait)URL.revokeObjectURL(portrait.src);portrait=img;$('pv').src=img.src;base=Math.max(VP.w/img.naturalWidth,VP.h/img.naturalHeight);zoom=1;$('zm').value=100;ox=(VP.w-img.naturalWidth*base)/2;oy=(VP.h-img.naturalHeight*base)/2;clamp();previewPortrait();$('photoTools').hidden=false;say('avatarStatus','已选择，将在完成设置时保存。')}catch(e){input.value='';say('avatarStatus',e.message,true)}}
+$('zm').oninput=()=>{if(!portrait)return;const z=Number($('zm').value)/100;ox=VP.w/2-(VP.w/2-ox)*z/zoom;oy=VP.h/2-(VP.h/2-oy)*z/zoom;zoom=z;clamp();previewPortrait()};let drag=null;
+$('vp').onpointerdown=e=>{if(!portrait)return;drag={x:e.clientX,y:e.clientY,ox,oy};$('vp').setPointerCapture(e.pointerId)};$('vp').onpointermove=e=>{if(!drag)return;ox=drag.ox+e.clientX-drag.x;oy=drag.oy+e.clientY-drag.y;clamp()};$('vp').onpointerup=$('vp').onpointercancel=()=>{if(drag){drag=null;previewPortrait()}};
+function drawShare(){const c=$('sharec'),g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,240,320);const scale=Math.min(240/shareImg.naturalWidth,320/shareImg.naturalHeight),w=Math.round(shareImg.naturalWidth*scale),h=Math.round(shareImg.naturalHeight*scale);g.imageSmoothingEnabled=true;g.imageSmoothingQuality='high';g.drawImage(shareImg,Math.floor((240-w)/2),Math.floor((320-h)/2),w,h)}
+function cardUrl(slot){return '/api/share?slot='+slot+'&t='+encodeURIComponent(window.__T||'')}
+function galleryUsage(){const total=cards.reduce((n,c)=>n+c.bytes,0);$('shareState').textContent=cards.length+' / '+CARD_MAX+' 张';$('cardUsage').textContent='已选 '+cards.length+' / '+CARD_MAX+' 张 · '+(total/1024).toFixed(1)+' / 144 KB'+(cardStorage?' · 设备剩余约 '+Math.floor(cardStorage.storage_free/1024)+' KB':'');}
+function renderCards(){$('sharePickLabel').textContent=cards.length===CARD_MAX?'图片已满，可移除或替换':'一次添加多张图片（还可添加 '+(CARD_MAX-cards.length)+' 张）';const list=$('cardList');list.replaceChildren();galleryUsage();if(!cards.length){const empty=document.createElement('p');empty.className='card-empty';empty.textContent='还没有名片图片。可以添加微信名片、联系方式或其它展示图片。';list.appendChild(empty)}for(const [i,card] of cards.entries()){const row=document.createElement('div');row.className='card-row';const img=document.createElement('img');img.className='card-thumb';img.alt='名片图片 '+(i+1);img.src=card.preview||cardUrl(card.slot);const meta=document.createElement('div');meta.className='card-meta';const title=document.createElement('p');title.textContent='第 '+(i+1)+' 张 · '+(card.bytes/1024).toFixed(1)+' KB'+(card.blob?' · 待保存':'');const actions=document.createElement('div');actions.className='card-actions';for(const [label,action,disabled] of [['替换',()=>chooseReplacement(card.slot),false],['上移',()=>moveCard(i,-1),i===0],['下移',()=>moveCard(i,1),i===cards.length-1],['移除',()=>removeCard(i),false]]){const button=document.createElement('button');button.type='button';button.textContent=label;button.setAttribute('aria-label',label+'第 '+(i+1)+' 张图片');button.disabled=disabled||cardBusy||$('save').disabled;if(label==='移除')button.className='remove';button.onclick=action;actions.appendChild(button)}meta.appendChild(title);meta.appendChild(actions);row.appendChild(img);row.appendChild(meta);list.appendChild(row)}}
+function chooseReplacement(slot){if(cardBusy||$('save').disabled)return;replaceSlot=slot;$('shareReplace').value='';$('shareReplace').click();say('shareStatus','请选择 1 张图片替换当前图片；批量添加请使用上面的多选入口。')}
+function moveCard(i,delta){if(cardBusy||$('save').disabled||i+delta<0||i+delta>=cards.length)return;[cards[i],cards[i+delta]]=[cards[i+delta],cards[i]];cardsDirty=true;renderCards();say('shareStatus','顺序已调整，将在完成设置时保存。')}
+function removeCard(i){if(cardBusy||$('save').disabled)return;const [card]=cards.splice(i,1);if(card.preview)URL.revokeObjectURL(card.preview);cardsDirty=true;renderCards();say('shareStatus','已从待保存列表移除。点击完成设置后生效。')}
+async function selectShare(input){
+ if(cardBusy||$('save').disabled)return;
+ if(!cardsReady){say('shareStatus','请先读取设备图片列表，刷新页面后重试。',true);return}
+ const files=Array.from(input.files||[]);
+ if(!files.length){say('shareStatus',cards.length?'已保留之前选择的名片。':'未收到图片，请重试；若仍无效，请在 Safari 打开 http://192.168.4.1 后选择手机本地的 JPEG 或 PNG 图片。',!cards.length);return}
+ const replacement=input===$('shareReplace')?replaceSlot:null;replaceSlot=null;
+ if(replacement!==null&&files.length!==1){say('shareStatus','替换时请只选择 1 张图片。',true);return}
+ if(replacement===null&&cards.length+files.length>CARD_MAX){say('shareStatus','最多保存 6 张图片，请减少选择数量或先移除图片。',true);return}
+ cardBusy=true;renderCards();
+ try{
+  for(const [i,file] of files.entries()){
+   const position=(i+1)+' / '+files.length;
+   say('shareStatus','正在读取 '+position+' 张…');
+   if(file.type&&!file.type.startsWith('image/'))throw new Error('请选择 JPEG、PNG 或 WebP 图片，不支持文档或视频。');
+   shareImg=await imageFile({files:[file]});
+   try{
+    drawShare();say('shareStatus','正在压缩 '+position+' 张…');
+    const blob=await shareBlob();
+    const slot=replacement===null?Array.from({length:CARD_MAX},(_,n)=>n).find(n=>!cards.some(c=>c.slot===n)):replacement;
+    const at=cards.findIndex(c=>c.slot===slot),card={slot,blob,bytes:blob.size,preview:URL.createObjectURL(blob)};
+    if(at>=0){if(cards[at].preview)URL.revokeObjectURL(cards[at].preview);cards[at]=card}else cards.push(card);
+    cardsDirty=true;$('sharec').hidden=false;
+   }finally{if(shareImg)URL.revokeObjectURL(shareImg.src);shareImg=null}
+  }
+  say('shareStatus','已选择并压缩，将在完成设置时保存。');
+ }catch(e){say('shareStatus',e.message+' 已成功压缩的图片会保留。',true)}
+ finally{cardBusy=false;renderCards()}
+}
+async function loadCards(){try{const data=await api('/api/cards');if(!Array.isArray(data.images)||data.images.length>CARD_MAX||data.images.some(c=>!Number.isInteger(c.slot)||c.slot<0||c.slot>=CARD_MAX||!Number.isInteger(c.bytes)||c.bytes<0||c.bytes>CARD_BYTES)||new Set(data.images.map(c=>c.slot)).size!==data.images.length)throw new Error('invalid gallery');if(cards.some(c=>c.preview))for(const c of cards)if(c.preview)URL.revokeObjectURL(c.preview);cards=data.images.map(c=>({slot:c.slot,bytes:c.bytes,blob:null,preview:null}));cardStorage=data;cardsDirty=false;cardsReady=true;renderCards()}catch(e){cardsReady=false;say('shareStatus','无法读取图片列表，请刷新重试；已有图片不会被改动。',true)}}
+async function saveCards(){if(!cardsDirty)return;if(!cardsReady)throw new Error('图片列表未读取，请刷新后重试。');for(const [i,card] of cards.entries())if(card.blob){say('saveStatus','正在保存名片 '+(i+1)+' / '+cards.length+'…');await api('/api/share?slot='+card.slot,card.blob);card.blob=null;}await api('/api/cards',{order:cards.map(c=>c.slot)});cardsDirty=false;for(const c of cards){if(c.preview)URL.revokeObjectURL(c.preview);c.preview=null;}renderCards()}
+
+// Keep file inputs native: deferred .click() can lose the user gesture, and
+// showPicker() is not available in every browser used on the device's HTTP AP.
+// No accept filter on the fallback lets phones use their document provider
+// when the image/gallery provider cannot open. Both paths decode an image.
+for(const [id,status,select,selected] of [['file','avatarStatus',selectPortrait,()=>portrait],['fileFallback','avatarStatus',selectPortrait,()=>portrait],['shareFile','shareStatus',selectShare,()=>cards.length],['shareFileFallback','shareStatus',selectShare,()=>cards.length],['shareReplace','shareStatus',selectShare,()=>cards.length]]){const input=$(id);input.onclick=()=>{if(id.startsWith('share')){if(cardBusy||$('save').disabled)return;input.value=''}if(id==='shareFile'||id==='shareFileFallback'){replaceSlot=null;say(status,'正在打开多选入口，可长按图片后勾选多张。若相册只能单选，请改用文件多选。')}else say(status,id==='shareReplace'?'正在选择替换图片（单张）。':'正在打开选择器。若没有弹出，请展开“从文件选择”使用备用入口。')};input.onchange=()=>select(input);input.oncancel=()=>{if(id.startsWith('share'))replaceSlot=null;say(status,selected()?'已保留之前选择的图片。':'未选择图片，可重试或使用备用入口。')}}
+async function shareBlob(){
+ for(const quality of [.86,.78,.68,.58,.48,.38,.28]){
+  const blob=await new Promise((resolve,reject)=>{
+   const timer=setTimeout(()=>reject(new Error('图片压缩超时，请重新选择；若仍无效，请在 Safari 打开 http://192.168.4.1 后重试。')),10000);
+   try{$('sharec').toBlob(value=>{clearTimeout(timer);resolve(value)},'image/jpeg',quality)}catch(e){clearTimeout(timer);reject(new Error('无法压缩图片，请换一张本地 JPEG 或 PNG 图片。'))}
+  });
+  if(!blob||!blob.size)throw new Error('图片压缩失败，请换一张本地 JPEG 或 PNG 图片。');
+  if(blob.type!=='image/jpeg')throw new Error('浏览器未能生成 JPEG 图片，请在 Safari 打开 http://192.168.4.1 后重试。');
+  if(blob.size<=CARD_BYTES)return blob;
+ }
+ throw new Error('名片图片过于复杂，压缩后仍较大，请换一张图片。');
+}
+async function save(){if(imageLoading||cardBusy){say('saveStatus','图片还在读取，请稍等。',true);return}if(!verified&&!hasSaved){step(1);say('networkStatus','请先连接 Wi-Fi。',true);return}let selected;try{selected=selectedCityProfile()}catch(e){say('saveStatus',e.message,true);return}const profile={name:$('name').value,signature:$('sig').value,address:$('address').value,...selected};for(const [key,max] of [['name',31],['signature',95],['address',127],['city',47],['region',31],['radio_city',47],['lat',15],['lon',15]])if(bytes(profile[key])>max){say('saveStatus','有一项内容过长，请缩短后再保存。',true);return}$('save').disabled=true;$('back').disabled=true;try{renderCards();if(pendingMuseConfig()){say('saveStatus','正在保存 Muse 配置…');await saveMuseConfig(true)}say('saveStatus','正在保存个人资料…');await api('/api/profile',profile);if(portrait){say('saveStatus','正在保存人像…');await api('/api/avatar',portraitPacked())}await saveCards();say('saveStatus','正在完成设置…');await api('/api/finish',{});$('doneName').textContent=profile.name||'AI 护照';$('doneSummary').textContent='个人资料'+(portrait?'、人像':'')+(cards.length?'、'+cards.length+' 张彩色名片':'')+'已保存';step(3)}catch(e){say('saveStatus',e.message+' 尚未完成的内容可再次保存。',true)}finally{$('save').disabled=false;$('back').disabled=false;renderCards()}}
+$('save').onclick=()=>{cancelLocation();return save()};
+async function load(){try{const [profile,state]=await Promise.all([api('/api/profile'),api('/api/setup')]);await loadCities();for(const [id,key] of [['name','name'],['sig','signature'],['address','address']])$(id).value=profile[key]||'';if(Array.isArray(profile.portrait_palette)&&profile.portrait_palette.length===4)portraitPalette=profile.portrait_palette;if(Array.isArray(profile.portrait_subject_palette)&&profile.portrait_subject_palette.length===4)portraitSubjectPalette=profile.portrait_subject_palette;previewPortrait();restoreCity(profile);$('avatarState').textContent=profile.avatar?'已有，可替换':'可稍后上传';await loadCards();hasSaved=state.saved_network;$('reuse').hidden=!hasSaved;$('keepSaved').hidden=!hasSaved;$('savedField').hidden=!hasSaved;const selected=$('savedNetwork').value;$('savedNetwork').replaceChildren(new Option('自动选择附近已保存的网络',''));for(const name of state.saved_networks||[])$('savedNetwork').add(new Option(name,name));if((state.saved_networks||[]).includes(selected))$('savedNetwork').value=selected;$('connect').disabled=false;say('networkStatus','');if(state.finishing){step(3);return}if(state.state==='connected')networkReady('已连接 '+state.ssid);else if(state.state==='connecting'){lockNetwork(true);polls=0;pollTimer=setTimeout(poll,1000)}await scan()}catch(e){say('networkStatus','无法读取设备。请确认手机已连接设备热点，然后刷新页面。',true)}}
+load().finally(()=>loadMuse());
+</script></body></html>

@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0-rc.56",
+  "date": "2026-10-25",
+  "purpose": "Local private candidate with Muse phone-hotspot proxy configuration removed",
+  "build": {
+    "target": "esp32c3",
+    "idf": "5.5.3",
+    "public_defaults": true,
+    "PASSPORT_MUSE_USE_JOLLYBOT": true,
+    "application_bytes": 3941040,
+    "application_partition_bytes": 4194304,
+    "remaining_bytes": 253264,
+    "merged_image_bytes": 4006576,
+    "protected_layout": "PASS",
+    "sram_budget": "PASS"
+  },
+  "host_tests": {
+    "phone_setup_muse_flow": "PASS",
+    "firmware_build": "PASS",
+    "muse_proxy_route_unit": "NOT_RUN: Windows host has no native C compiler; WSL test service was initially unavailable",
+    "full_host_regression": "NOT_RUN: WSL service was unavailable before the release build was retried with elevated execution"
+  },
+  "device": {
+    "flashed": false,
+    "boot_verified": false,
+    "muse_hotspot_removal_verified": false
+  },
+  "limitations": [
+    "This candidate removes Muse phone-hotspot proxy configuration and route selection; direct and computer LAN proxy remain supported",
+    "The device has not been flashed or physically tested in this run",
+    "The general device setup access point remains available for first-time Wi-Fi provisioning"
+  ],
+  "published": false
+}

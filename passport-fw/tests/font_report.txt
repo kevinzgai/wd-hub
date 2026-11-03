@@ -1,0 +1,7 @@
+Total unique CJK chars in main/ string literals: 538
+Font buddy_font_16: 4713 glyphs
+Font ui_font_20: 560 glyphs
+Font radio_font: 248 glyphs
+Font radio_font_title: 131 glyphs
+
+Missing in buddy_font_16: 0 characters:
