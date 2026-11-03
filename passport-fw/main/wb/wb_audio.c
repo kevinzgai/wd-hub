@@ -3,7 +3,7 @@
 // 行为对齐 S3 看板固件（firmware/main/audio.cpp），但代码在本工程独立实现：
 //   * 素材：与 S3 同一段 Gentle Marimba，已离线重采样成 16kHz（见 wb_tone_pcm.h）；
 //   * 通道：ES8311 + 单喇叭，16kHz / 16bit / 单声道入参；
-//   * 缓冲：400ms 立体声展开缓冲（25.6KB，内部 RAM），不碰 PSRAM；
+//   * 缓冲：6400 帧/400ms 单声道块，分配 25.6KB 内部 RAM（沿用旧容量），不碰 PSRAM；
 //   * 队列：深度 4，满了就丢，绝不反压 LVGL / BLE；
 //   * 音量：PCM 保持满幅，增益只由 codec 档位承担（见 WB_AUDIO_VOLUME），
 //     主机 cfg.beep_vol 只当静音开关用。
@@ -95,8 +95,9 @@ static bool codec_ensure(void)
     return true;
 }
 
-// 把一段单声道 PCM 展开成 L/R 交错立体声后分块写 I2S。
-// 单喇叭也不必区分声道：两路都送，硬件接哪一路都能听到。
+// 分块写 I2S。格式是单声道(MONO/左槽，每帧 1 个 16bit 样点)，
+// 所以必须按 1 样点/帧写入。早先按 L/R 交错复制会变成 2 样点/帧，
+// 硬件只取左槽 → 每个样点被播两遍（音高降八度、时长翻倍），听起来就是破音。
 static bool play_one(wb_sfx_t sfx)
 {
     const int16_t *pcm = NULL;
@@ -117,11 +118,10 @@ static bool play_one(wb_sfx_t sfx)
         size_t n = frames - offset;
         if (n > WB_AUDIO_FRAMES_MAX) n = WB_AUDIO_FRAMES_MAX;
         for (size_t i = 0; i < n; ++i) {
-            const int16_t v = pcm[offset + i];   // 满幅写入，增益交给 codec 档位
-            s_buf[i * 2] = v;
-            s_buf[i * 2 + 1] = v;
+            s_buf[i] = pcm[offset + i];   // 满幅写入，增益交给 codec 档位
         }
-        if (bsp_audio_write(s_buf, n * 2 * sizeof(int16_t)) != ESP_OK) {
+        // 1 帧 = 1 个 int16，和 slot_mode=MONO 的取数节奏一致。
+        if (bsp_audio_write(s_buf, n * sizeof(int16_t)) != ESP_OK) {
             s_failures++;
             ESP_LOGW(TAG, "%s 写入失败（%u 帧后中止）", name, (unsigned)offset);
             return false;
@@ -130,8 +130,8 @@ static bool play_one(wb_sfx_t sfx)
 
     // 10ms 静音把 DMA 里最后一块推完，避免截断成“咔”声。
     const size_t tail = WB_TONE_RATE / 100;
-    memset(s_buf, 0, tail * 2 * sizeof(int16_t));
-    (void)bsp_audio_write(s_buf, tail * 2 * sizeof(int16_t));
+    memset(s_buf, 0, tail * sizeof(int16_t));
+    (void)bsp_audio_write(s_buf, tail * sizeof(int16_t));
 
     s_played++;
     ESP_LOGI(TAG, "播放 %s: %u 帧(%.0fms), 累计 played=%u",
@@ -197,7 +197,7 @@ bool wb_audio_init(void)
         return false;
     }
 
-    ESP_LOGI(TAG, "提示音就绪: 缓冲 %uB(%dms), 队列 %d, 内部最大块 %u",
+    ESP_LOGI(TAG, "提示音就绪: 缓冲 %uB, 块 %dms(单声道), 队列 %d, 内部最大块 %u",
              (unsigned)WB_AUDIO_BUF_BYTES, WB_AUDIO_CHUNK_MS, WB_AUDIO_QUEUE_LEN,
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     return true;
