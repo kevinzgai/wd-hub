@@ -384,3 +384,40 @@ y=274 三键栏：UP/DOWN 移动 | OK 进入 | 长按DOWN 关闭
 - 菜单「待机」按键后最多延迟 1 个 tick（≤1s）才真正进待机：切待机要碰 LVGL，只能回到 tick 上下文执行。
 - 声音页改的是**全局主音量**，会影响启动器/收音机等其他应用；本期不写 NVS，重启回 NVS 值。
 - 撤掉长 UP 额度入口后**没有保留兼容周期**：额度只能从菜单进。若老用户依赖旧手势，按 §4.5 可加回。
+
+### B.5 上板验证结果（2026-11-05，真机）
+
+设备 ESP32-C3 rev1.1 / 8MB flash，端口 `/dev/cu.usbmodem21201`；固件 0.3.0（IDF v5.5.6 编译）。
+按键由 USB Serial/JTAG console 注入（`u`=UP / `d`=DOWN / `o`=OK / `k`=长 DOWN / `p`=抓屏），无需物理按键；完整日志 `wb_verify_session.log`（本机 `/tmp`）。
+
+| # | 结果 | 证据 |
+|---|---|---|
+| 1 | PASS | `screen -> menu`，长 DOWN → `screen -> overview` |
+| 2 | PASS | 截图 `02_menu_focus0` / `02_menu_focus3` 首项、末项高亮；4 次 DOWN 回环后后续行为正确 |
+| 3 | PASS | `screen -> credit`；长 DOWN → `screen -> menu`（**不是**总览） |
+| 4 | PASS | `主音量 -> 60% / 80% / 40%` 三档循环；KEY 音人耳响度未验 |
+| 5 | PASS | 声音页短 OK、长 DOWN 都回 `screen -> menu` |
+| 6 前半 | PASS | `screen -> standby`；任意键唤醒 → `screen -> overview` |
+| 8 | PASS | 静置 29.4s 后日志「菜单 30s 超时，回总览」 |
+| 12 | PASS | boot 日志 `App version: 0.3.0` |
+| 6 后半 / 7 / 9 的待办文案 / 10 / 11 | 未验 | 依赖主机 daemon 造审批 / 提问 / 待办 / 低电，需起 `host/wb_app.py` 后补验 |
+
+全程 **0 条 `E (` / panic / assert**。实机截图（240×320 RGB565 还原）确认共享顶栏与底栏在菜单屏、总览屏的文案均按屏正确切换。
+
+### B.6 上板才暴露、已修掉的两个 P0
+
+**① 分区表不匹配 → 启动失败**
+
+设备原厂分区表 factory 只有 `0x400000`（4 MB），工程 `partitions.csv` 是 `0x7f0000`（7.94 MB）。0.3.0 镜像 4,251,504 B 超出 4 MB，bootloader 报 `Image length ... doesn't fit in partition length 4194304` 并无限重启。
+处理：把工程 `partition-table.bin` 烧到 `0x8000`（3 KB），app 与 `0x0` bootloader 未动。
+代价：原厂 `cardid`(0x410000) / `storage`(0x420000) 分区不再声明，`cardid` 区域被 app 镜像覆盖；工程 `partitions.csv` 本来就声明不用这两块。
+回退镜像：`passport-fw/.tmp/flash-backup-20261105/partition-table-orig.bin`（原厂分区表）与 `app-0.2.0-rc56.bin`（rc56 app）。
+
+> `partitions.csv` 顶部「只写 factory 区段，不动 0x0 bootloader 与 0x8000 分区表」的注释，前提是设备**已经刷过工程分区表**。对原厂板首次烧录必须连分区表一起写 —— `build-mac/flash_args` 本来就是 bootloader + 分区表 + app 三件套。
+
+**② 堆耗尽 → 开机即 panic**
+
+现象：WB 应用启动后 `free heap = 3296 B`，首次渲染进 LVGL `recolor_only()` 时 `lv_malloc()` 失败触发 `LV_ASSERT_MALLOC` → `Guru Meditation Error (Breakpoint)` → 无限重启。
+根因：9 个屏各自 `build_header()` + `build_footer()` 建了一整套顶栏状态簇与三键底栏（每屏约 17 个 LVGL 对象，合计 150+）；方案 B 新增 `SCR_MENU` / `SCR_SOUND` 两屏把堆推过临界点。
+修复：`wb_ui.cc` 新增 `build_chrome()`，把顶栏 + 底栏改为挂在 `lv_layer_top()` 的**一组共享对象**；每屏文案存进 `hdr_l/hdr_r/key_k/key_a` 字符数组，切屏时 `apply_chrome(target)` 写入。`build_header()` 返回的两个指针指向共享 label，所以 `update_*()` 里原有 `set_text(s_ui.*_idx, ...)` 全部不用改；`wb_ui_deinit()` 单独删共享容器。
+效果：`Initial Free Heap: 36 KB`（原 3.2 KB），单次启动、无 panic，实机截图确认视觉无变化。

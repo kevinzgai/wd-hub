@@ -179,9 +179,19 @@ struct UiState {
     lv_obj_t *sd_level_txt[3];
     lv_obj_t *sd_note;
 
-    // 三键键位栏：0..2 = UP / OK / DOWN。
-    lv_obj_t *key_kk[SCR_COUNT][3];
-    lv_obj_t *key_ka[SCR_COUNT][3];
+    // 全局常驻 chrome：顶栏状态簇 + 三键底栏挂在 LVGL top layer，9 屏共用一份。
+    // 原先每屏各建一套（约 17 个对象 × 9 屏），方案 B 新增两屏后堆只剩 3KB，
+    // LVGL 绘制时 lv_malloc 失败触发 LV_ASSERT_MALLOC → 开机即 panic。
+    // 改成共享层后视觉完全不变，省掉 8 份重复对象。
+    lv_obj_t *chrome;                  // top layer 容器，deinit 时一次删干净
+    lv_obj_t *g_hdr_left;
+    lv_obj_t *g_hdr_right;
+    lv_obj_t *g_key_kk[3];
+    lv_obj_t *g_key_ka[3];
+    char key_k[SCR_COUNT][3][20];     // 每屏的键名文案（build 期由 set_keys 记录）
+    char key_a[SCR_COUNT][3][32];     // 每屏的动作文案
+    char hdr_l[SCR_COUNT][24];        // 每屏顶栏左/右初始文案
+    char hdr_r[SCR_COUNT][24];
 
     int screen;            // Screen；-1 = 还没加载过
     bool inited;
@@ -286,17 +296,49 @@ void set_text_color(lv_obj_t *label, uint32_t color)
     if (label) ui_pixel_text_color(label, color);
 }
 
-// 顶栏右侧状态簇：连接点 + 电池框 + 电量百分比。
+// 顶栏 + 三键底栏只建一份，挂在 LVGL top layer，9 个屏共用。
+// 每屏的文案由 build_header()/set_keys() 记进 s_ui 的字符数组，
+// 切屏时 apply_chrome() 把当前屏那一份写进这一组共享对象。
+void build_chrome(void)
+{
+    lv_obj_t *c = frame(lv_layer_top(), 0, 0, 240, 320);
+    s_ui.chrome = c;
+
+    s_ui.g_hdr_left = text(c, &wb_font_12, C_DIM, SAFE_L, HEADER_Y + 1, 100, 15,
+                           LV_TEXT_ALIGN_LEFT, 2);
+    s_ui.g_hdr_right = text(c, &wb_font_12, C_DIM, 112, HEADER_Y + 1, 62, 15,
+                            LV_TEXT_ALIGN_RIGHT);
+
+    // 顶栏右侧状态簇：连接点 + 电池框 + 电量百分比。
+    BatUi &b = s_ui.bat[0];
+    b.dot = panel(c, 178, 14, 6, 6, C_SEG_IDLE, 3);
+    b.shell = panel(c, 184, 13, 14, 8, C_BG, 2);
+    all_rule(b.shell, C_LINE, 1, 2);
+    b.fill = panel(c, 185, 14, 1, 6, C_SEG_IDLE, 1);
+    panel(c, 198, 15, 2, 4, C_LINE, 1);   // 电池正极
+    b.pct = text(c, &wb_font_12, C_DIM, 201, 11, 27, 15, LV_TEXT_ALIGN_RIGHT);
+    set_text(b.pct, "--%");
+    for (int i = 1; i < SCR_COUNT; ++i) s_ui.bat[i] = b;
+
+    // 三键键位栏：左轨 2px，上排动作键名，下排当前动作。
+    int x = SAFE_L;
+    for (int i = 0; i < 3; ++i) {
+        lv_obj_t *cell = frame(c, x, FOOTER_Y, KEY_W[i], FOOTER_H);
+        left_rule(cell, C_LINE, 2);
+        s_ui.g_key_kk[i] = text(cell, &wb_font_12, C_DIM, 7, 2,
+                                KEY_W[i] - 9, 15, LV_TEXT_ALIGN_LEFT);
+        s_ui.g_key_ka[i] = text(cell, &wb_font_12, C_INK, 7, 18,
+                                KEY_W[i] - 9, 15, LV_TEXT_ALIGN_LEFT);
+        x += KEY_W[i] + KEY_GAP;
+    }
+}
+
+// 兼容旧调用点：状态簇已统一建在 top layer，这里只让本屏索引指向同一组对象。
 void build_status_cluster(lv_obj_t *scr, int scr_idx, bool with_dot)
 {
-    BatUi &b = s_ui.bat[scr_idx];
-    if (with_dot) b.dot = panel(scr, 178, 14, 6, 6, C_SEG_IDLE, 3);
-    b.shell = panel(scr, 184, 13, 14, 8, C_BG, 2);
-    all_rule(b.shell, C_LINE, 1, 2);
-    b.fill = panel(scr, 185, 14, 1, 6, C_SEG_IDLE, 1);
-    panel(scr, 198, 15, 2, 4, C_LINE, 1);   // 电池正极
-    b.pct = text(scr, &wb_font_12, C_DIM, 201, 11, 27, 15, LV_TEXT_ALIGN_RIGHT);
-    set_text(b.pct, "--%");
+    (void)scr;
+    (void)with_dot;
+    s_ui.bat[scr_idx] = s_ui.bat[0];
 }
 
 void update_status_cluster(int scr_idx, bool connected, int soc)
@@ -324,39 +366,55 @@ void update_status_cluster(int scr_idx, bool connected, int soc)
 void build_header(lv_obj_t *scr, int scr_idx, lv_obj_t **left, lv_obj_t **right,
                   const char *l, const char *r)
 {
-    *left = text(scr, &wb_font_12, C_DIM, SAFE_L, HEADER_Y + 1, 100, 15,
-                 LV_TEXT_ALIGN_LEFT, 2);
-    *right = text(scr, &wb_font_12, C_DIM, 112, HEADER_Y + 1, 62, 15,
-                  LV_TEXT_ALIGN_RIGHT);
-    set_text(*left, l);
-    set_text(*right, r);
-    build_status_cluster(scr, scr_idx, true);
+    (void)scr;
+    // 顶栏两处文字同样共享。初始文案先记进数组，切屏时由 apply_header 写入；
+    // update_*() 里对 s_ui.*_idx / *_tag 的 set_text 仍直接写这组共享对象。
+    *left = s_ui.g_hdr_left;
+    *right = s_ui.g_hdr_right;
+    snprintf(s_ui.hdr_l[scr_idx], sizeof(s_ui.hdr_l[scr_idx]), "%s", l);
+    snprintf(s_ui.hdr_r[scr_idx], sizeof(s_ui.hdr_r[scr_idx]), "%s", r);
+    build_status_cluster(nullptr, scr_idx, true);
 }
 
-// 三键键位栏：左轨 2px，上排动作键名（12px 灰），下排当前动作（12px 白）。
+void apply_header(int target)
+{
+    set_text(s_ui.g_hdr_left, s_ui.hdr_l[target]);
+    set_text(s_ui.g_hdr_right, s_ui.hdr_r[target]);
+}
+
+void apply_keys(int target)
+{
+    for (int i = 0; i < 3; ++i) {
+        set_text(s_ui.g_key_kk[i], s_ui.key_k[target][i]);
+        set_text(s_ui.g_key_ka[i], s_ui.key_a[target][i]);
+    }
+}
+
+void apply_chrome(int target)
+{
+    apply_header(target);
+    apply_keys(target);
+}
+
+// 三键键位栏已由 build_chrome() 统一创建，这里保留调用点但不再建对象。
 void build_footer(lv_obj_t *scr, int scr_idx)
 {
-    int x = SAFE_L;
-    for (int i = 0; i < 3; ++i) {
-        lv_obj_t *cell = frame(scr, x, FOOTER_Y, KEY_W[i], FOOTER_H);
-        left_rule(cell, C_LINE, 2);
-        s_ui.key_kk[scr_idx][i] = text(cell, &wb_font_12, C_DIM, 7, 2,
-                                       KEY_W[i] - 9, 15, LV_TEXT_ALIGN_LEFT);
-        s_ui.key_ka[scr_idx][i] = text(cell, &wb_font_12, C_INK, 7, 18,
-                                       KEY_W[i] - 9, 15, LV_TEXT_ALIGN_LEFT);
-        x += KEY_W[i] + KEY_GAP;
-    }
+    (void)scr;
+    (void)scr_idx;
 }
 
 void set_keys(int scr_idx, const char *k0, const char *a0, const char *k1, const char *a1,
               const char *k2, const char *a2)
 {
-    set_text(s_ui.key_kk[scr_idx][0], k0);
-    set_text(s_ui.key_ka[scr_idx][0], a0);
-    set_text(s_ui.key_kk[scr_idx][1], k1);
-    set_text(s_ui.key_ka[scr_idx][1], a1);
-    set_text(s_ui.key_kk[scr_idx][2], k2);
-    set_text(s_ui.key_ka[scr_idx][2], a2);
+    const char *kk[3] = {k0, k1, k2};
+    const char *ka[3] = {a0, a1, a2};
+    for (int i = 0; i < 3; ++i) {
+        snprintf(s_ui.key_k[scr_idx][i], sizeof(s_ui.key_k[scr_idx][i]), "%s", kk[i]);
+        snprintf(s_ui.key_a[scr_idx][i], sizeof(s_ui.key_a[scr_idx][i]), "%s", ka[i]);
+    }
+    // update_*() 会在每秒 sync 里动态改底栏文案；改的若是当前屏，立即生效。
+    // 只刷底栏，不刷顶栏——顶栏可能刚被 update_*() 写成动态页码，别覆盖掉。
+    if (s_ui.screen == scr_idx) apply_keys(scr_idx);
 }
 
 // ---------------- 六屏搭建 ----------------
@@ -1113,6 +1171,9 @@ void wb_ui_init(void)
     const int vol = bsp_audio_get_master_volume();
     s_ui.sound_idx = (vol <= 50) ? 0 : (vol <= 70 ? 1 : 2);
 
+    // 共享顶栏/底栏必须先于各屏建立：build_header()/build_footer() 引用它。
+    build_chrome();
+
     build_overview();
     build_approval();
     build_ask();
@@ -1131,6 +1192,9 @@ void wb_ui_deinit(void)
     for (int i = 0; i < SCR_COUNT; ++i) {
         if (s_ui.scr[i]) lv_obj_delete(s_ui.scr[i]);
     }
+    // top layer 上的共享顶栏/底栏不属于任何 screen，要单独删，否则切到
+    // 别的应用后仍会盖在画面上。
+    if (s_ui.chrome) lv_obj_delete(s_ui.chrome);
     memset(&s_ui, 0, sizeof(s_ui));
     s_ui.screen = -1;
     s_ui.soc = -1;
@@ -1325,6 +1389,7 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
 
     if (target != s_ui.screen) {
         lv_screen_load(s_ui.scr[target]);
+        apply_chrome(target);   // 共享顶栏/底栏切到本屏的文案
         ESP_LOGI(TAG, "screen -> %s", k_screen_name[target]);
         s_ui.screen = target;
         s_ui.last_sel = -1;
@@ -1332,9 +1397,8 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
         s_ui.last_token_set = false;
     }
 
-    // 顶栏连接点 + 电量在所有屏幕常驻，随每次快照刷新。
-    for (int i = 0; i < SCR_COUNT; ++i)
-        update_status_cluster(i, v->connected, s_ui.soc);
+    // 顶栏状态簇是全局唯一一份，每帧刷一次即可（原先 9 屏各刷一次）。
+    update_status_cluster(target, v->connected, s_ui.soc);
 
     switch (target) {
     case SCR_STANDBY: update_standby(v); break;
