@@ -29,6 +29,10 @@ void wb_ui_set_battery(int soc);
 // 仅处理 CLICK / LONG；PRESS/RELEASE 仍由应用层做唤醒与续期。
 bool wb_ui_key(wb_ui_key_t key, bool long_press);
 
+// 每秒在 LVGL 上下文调用：处理菜单/声音页的 30s 超时与「立即待机」请求。
+// 返回 true 表示 UI 层状态已变化，调用方需要重绘。
+bool wb_ui_tick(void);
+
 #ifdef __cplusplus
 }
 #endif

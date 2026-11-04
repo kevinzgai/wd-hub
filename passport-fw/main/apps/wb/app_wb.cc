@@ -110,6 +110,10 @@ void tick_cb(lv_timer_t *timer)
     wb_biz_snapshot(&view);
     wb_power_set_busy(view.busy);
     wb_power_tick();
+
+    // 菜单/声音页 30s 超时与菜单「待机」请求在这里落地（LVGL 上下文）。
+    if (wb_ui_tick()) s_dirty.store(true, std::memory_order_release);
+
     wb_audio_set_standby(wb_power_is_standby());
     wb_audio_set_host_mute(view.beep_vol <= 0);
 

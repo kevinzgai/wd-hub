@@ -1,7 +1,8 @@
-# 三键交互与菜单 · 设计方案（只读评审稿）
+# 三键交互与菜单 · 设计方案（方案 B 已实施）
 
-> 状态：本轮只读。未改代码、未编译、未烧录，未动 `firmware/`、未碰 `main` 分支、未动协议。
-> 破音修复与额度页实机验证按原队列等待，本期不执行。
+> 状态：**方案 B 已实现并通过编译**（macOS · ESP-IDF v5.5.6 · target esp32c3 · 0 error 0 warning），
+> **未上板验证**。实施日期 2026-11-04，固件版本 0.3.0，改动 6 个文件 +399/−32。
+> 实施记录见文末「附录 B」。未动 `firmware/`、未碰 `main` 分支、未动协议。
 > 适用范围：`passport-fw/main/wb/` 的 WorkBuddy 看板（240×320，UP / OK / DOWN 三键）。
 
 ---
@@ -312,7 +313,7 @@ y=274 三键栏：UP/DOWN 移动 | OK 进入 | 长按DOWN 关闭
 - 不实现组合键关机（单 ADC 节点不可行）；
 - 菜单不设关机项；
 - 不改协议、不改 UI 视觉骨架、不改 `firmware/`、不碰 `main` 分支；
-- 不在本轮编译/烧录；破音修复与额度页实机验证继续排队。
+- **已编译通过，但未烧录**：实机回归（见附录 B 清单）留给下一轮上板。
 
 ---
 
@@ -332,3 +333,54 @@ y=274 三键栏：UP/DOWN 移动 | OK 进入 | 长按DOWN 关闭
 | 全局音量运行时接口 | [bsp_audio.c](../../passport-fw/components/bsp/src/bsp_audio.c#L336-L359) |
 | 已有的 NVS 音量接口（全局、持久化） | [settings.cc](../../passport-fw/main/launcher/settings.cc#L323-L360) |
 | 待机 180s / busy 禁止待机 | [wb_power.h](../../passport-fw/main/wb/wb_power.h#L10) / [wb_power.c](../../passport-fw/main/wb/wb_power.c#L116-L153) |
+
+---
+
+## 附录 B：方案 B 实施记录（2026-11-04）
+
+### B.1 改动范围
+
+| 文件 | 变化 | 内容 |
+|---|---|---|
+| `main/wb/wb_ui.cc` | +376 / −32 | 新增 `SCR_MENU`、`SCR_SOUND`；`build_menu` / `build_sound` / `update_menu` / `update_sound`；重写 `wb_ui_key` 路由；`wb_ui_sync` 重排打断优先级；新增 `wb_ui_tick` |
+| `main/wb/wb_ui.h` | +4 | 导出 `wb_ui_tick` |
+| `main/wb/wb_power.c` | +10 | 新增 `wb_power_standby_now()` |
+| `main/wb/wb_power.h` | +3 | 同上声明 |
+| `main/apps/wb/app_wb.cc` | +4 | tick 里调用 `wb_ui_tick` |
+| `CMakeLists.txt` | +1 / −1 | `PROJECT_VER` 0.2.0-rc.56 → **0.3.0**（独立版本线） |
+
+### B.2 已落地的裁决
+
+| 裁决 | 落点 |
+|---|---|
+| C1 菜单不用长按 OK | 总览短 OK（无待办）或根层长 DOWN 打开菜单 |
+| C2 长 DOWN 例外只在审批/提问 | 其余页一律「返回上一层」，底栏同步改写 |
+| C3 总览无待办不再是死键 | 短 OK 打开菜单，底栏写「菜单」 |
+| C4 低电页底栏承认屏蔽 | 「UP/DOWN 屏蔽」，返回改「长按 DOWN」 |
+| C5 撤掉长 UP 额度入口 | 长 UP 不承载功能（返回 false，不拦截、不响） |
+| §5.1 优先级重排 | 待机 > 离线 > 审批/提问 > 低电 > 菜单/额度/声音 > 总览 |
+| §5.2 打断即关闭 | 四个高优先级分支都会清 `menu_open` / `credit_open` / `sound_open` |
+| 离线页待办提示 | 「缓存 N 条 · 待办 M 条 / 连上后可处理」 |
+| 声音三档 | 40 / 60 / 80%，`bsp_audio_set_master_volume` 即时生效，不落 NVS |
+| 30s 超时 | `wb_ui_tick` 用 `esp_timer_get_time()`，不依赖主机墙钟 |
+
+### B.3 上板验证清单（按顺序走）
+
+1. 总览**无待办**按短 OK → `screen -> menu`；再长 DOWN → `screen -> overview`。
+2. 菜单里 UP/DOWN 焦点 4 项循环，第 1 项与第 4 项首尾相接。
+3. 菜单选「额度遥测」→ `screen -> credit`；长 DOWN → `screen -> menu`（不是总览）。
+4. 菜单选「声音设置」→ `screen -> sound`；UP/DOWN 三档切换，每档都有 KEY 音且响度有区别。
+5. 声音页短 OK → 回菜单；长 DOWN → 回菜单。
+6. 菜单选「待机」→ 立即进待机屏；此时来审批应自动唤醒并响 ATTENTION。
+7. 有待办时菜单「待机」项按 OK **不执行**（副标题为「有待办 · 不可待机」）。
+8. 菜单停留 30s 无按键 → 自动回总览（日志「菜单 30s 超时」）。
+9. 断连时打开菜单或额度 → 立即被离线页顶掉；离线页显示「待办 M 条」。
+10. 低电 ≤15% 且有审批 → **审批优先**（低电不再挡待办）。
+11. 审批页长 DOWN 仍是「拒绝」；提问页长 DOWN 仍是「跳过」（例外未被破坏）。
+12. 串口版本行显示 **0.3.0**。
+
+### B.4 已知取舍
+
+- 菜单「待机」按键后最多延迟 1 个 tick（≤1s）才真正进待机：切待机要碰 LVGL，只能回到 tick 上下文执行。
+- 声音页改的是**全局主音量**，会影响启动器/收音机等其他应用；本期不写 NVS，重启回 NVS 值。
+- 撤掉长 UP 额度入口后**没有保留兼容周期**：额度只能从菜单进。若老用户依赖旧手势，按 §4.5 可加回。

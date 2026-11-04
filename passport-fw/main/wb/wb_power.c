@@ -134,6 +134,16 @@ void wb_power_wake(void)
     wb_power_note_activity();
 }
 
+// 菜单「待机」项：用户主动进入，不再等 180s。只在 LVGL 上下文调用。
+void wb_power_standby_now(void)
+{
+    if (!s_inited || s_standby) return;
+    idle_reset();
+    apply_power_state(true);
+    set_refresh_slowed(true);
+    if (s_ui_cb) s_ui_cb(true);
+}
+
 void wb_power_tick(void)
 {
     if (!s_inited) return;

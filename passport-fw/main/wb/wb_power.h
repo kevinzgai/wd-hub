@@ -27,6 +27,9 @@ void wb_power_tick(void);
 // 按键唤醒（等同 note_activity，但语义更明确）。
 void wb_power_wake(void);
 
+// 立即进入待机（菜单「待机」项）。必须在 LVGL 上下文调用。
+void wb_power_standby_now(void);
+
 #ifdef __cplusplus
 }
 #endif

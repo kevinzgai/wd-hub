@@ -16,8 +16,11 @@
 #include <time.h>
 
 #include "app_fonts.h"
+#include "bsp_audio.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "ui_pixel.h"
+#include "wb_power.h"
 
 LV_FONT_DECLARE(wb_font_12);
 LV_FONT_DECLARE(buddy_font_16);
@@ -61,12 +64,26 @@ enum Screen {
     SCR_OFFLINE,
     SCR_LOW,
     SCR_CREDIT,
+    SCR_MENU,
+    SCR_SOUND,
     SCR_COUNT,
 };
 
 const char *const k_screen_name[SCR_COUNT] = {
-    "overview", "approval", "ask", "standby", "offline", "low_battery", "credit",
+    "overview", "approval", "ask", "standby", "offline", "low_battery", "credit", "menu",
+    "sound",
 };
+
+// 菜单项：顺序即显示顺序（docs/KEYMAP_PLAN.md §4.1）。
+enum MenuItem {
+    MI_OVERVIEW = 0,   // 会话总览：关闭菜单回根
+    MI_CREDIT,         // 额度遥测
+    MI_SOUND,          // 声音设置
+    MI_STANDBY,        // 立即待机
+    MI_COUNT,
+};
+
+constexpr int MENU_TIMEOUT_MS = 30000;   // 30s 无按键自动关闭（§4.4）
 
 // 顶栏状态簇：连接点 + 电量图形 + 电量百分比（每屏常驻）。
 struct BatUi {
@@ -144,6 +161,24 @@ struct UiState {
     lv_obj_t *cr_bar[12];
     lv_obj_t *cr_note;
 
+    // 菜单（总览短 OK 无待办 / 根层长 DOWN 进入）。
+    lv_obj_t *mn_idx;
+    lv_obj_t *mn_tag;
+    lv_obj_t *mn_row[MI_COUNT];
+    lv_obj_t *mn_rail[MI_COUNT];
+    lv_obj_t *mn_title[MI_COUNT];
+    lv_obj_t *mn_sub[MI_COUNT];
+
+    // 声音设置（菜单进入；40/60/80 三档，即时生效、不落 NVS）。
+    lv_obj_t *sd_idx;
+    lv_obj_t *sd_tag;
+    lv_obj_t *sd_kick;
+    lv_obj_t *sd_big;
+    lv_obj_t *sd_sub;
+    lv_obj_t *sd_level[3];
+    lv_obj_t *sd_level_txt[3];
+    lv_obj_t *sd_note;
+
     // 三键键位栏：0..2 = UP / OK / DOWN。
     lv_obj_t *key_kk[SCR_COUNT][3];
     lv_obj_t *key_ka[SCR_COUNT][3];
@@ -153,7 +188,15 @@ struct UiState {
 
     bool offline_dismissed;
     bool low_dismissed;
-    bool credit_open;      // 额度页是否由长按 UP 打开
+    bool credit_open;      // 额度页是否打开
+    bool menu_open;        // 菜单是否打开
+    bool sound_open;       // 声音设置页是否打开
+    bool credit_from_menu; // 额度从菜单进入（返回目标是菜单，而不是总览）
+    int menu_sel;          // 菜单焦点 0..MI_COUNT-1
+    int sound_idx;         // 声音档位 0..2 = 40/60/80
+    uint32_t menu_seen_ms; // 菜单最近一次按键时刻（esp_timer ms），30s 超时用
+    bool standby_request;  // 菜单「待机」被选中：由 wb_ui_tick 在 LVGL 上下文执行
+    bool has_pending;      // 快照缓存：是否有审批/提问待办
     int soc;               // <0 = 尚未读到
 
     int last_sel;
@@ -510,7 +553,7 @@ void build_low_battery(void)
     set_text(s_ui.lb_note, "长按 DOWN 关闭提醒\n连接保持，充电后自动恢复。");
 
     build_footer(scr, SCR_LOW);
-    set_keys(SCR_LOW, "UP/DOWN", "屏蔽", "OK", "返回总览", "长按OK", "关机");
+    set_keys(SCR_LOW, "UP/DOWN", "屏蔽", "OK", "返回总览", "长按DOWN", "返回总览");
 }
 
 void build_credit(void)
@@ -543,7 +586,76 @@ void build_credit(void)
     set_text(s_ui.cr_note, "未同步");
 
     build_footer(scr, SCR_CREDIT);
-    set_keys(SCR_CREDIT, "UP", "返回总览", "OK", "返回总览", "长按DOWN", "返回总览");
+    set_keys(SCR_CREDIT, "UP/DOWN", "无操作", "OK", "返回", "长按DOWN", "返回");
+}
+
+void build_menu(void)
+{
+    lv_obj_t *scr = screen_new();
+    s_ui.scr[SCR_MENU] = scr;
+    build_header(scr, SCR_MENU, &s_ui.mn_idx, &s_ui.mn_tag, "菜单", "1 / 4");
+
+    static const char *const k_title[MI_COUNT] = {
+        "会话总览", "额度遥测", "声音设置", "待机",
+    };
+
+    // 行 x=12 / w=216 / h=38、间距 8；4 行占 52..228（KEYMAP_PLAN §4.2）。
+    // 焦点语言沿用 V2：6px 薄荷竖轨 + 实心块 + 白字。
+    for (int i = 0; i < MI_COUNT; ++i) {
+        const int y = 52 + i * 46;
+        lv_obj_t *row = panel(scr, SAFE_L, y, CONTENT_W, 38, C_BG, 0);
+        s_ui.mn_row[i] = row;
+        s_ui.mn_rail[i] = panel(row, 0, 0, 6, 38, C_MINT, 0);
+        s_ui.mn_title[i] = text(row, &buddy_font_16, C_DIM, FOCUS_X - SAFE_L, 3, 190, 20,
+                                LV_TEXT_ALIGN_LEFT);
+        s_ui.mn_sub[i] = text(row, &wb_font_12, C_DIM, FOCUS_X - SAFE_L, 21, 190, 15,
+                              LV_TEXT_ALIGN_LEFT);
+        set_text(s_ui.mn_title[i], k_title[i]);
+    }
+
+    build_footer(scr, SCR_MENU);
+    set_keys(SCR_MENU, "UP/DOWN", "移动", "OK", "进入", "长按DOWN", "关闭");
+}
+
+void build_sound(void)
+{
+    lv_obj_t *scr = screen_new();
+    s_ui.scr[SCR_SOUND] = scr;
+    build_header(scr, SCR_SOUND, &s_ui.sd_idx, &s_ui.sd_tag, "声音", "全局");
+
+    panel(scr, SAFE_L, 44, 6, 194, C_MINT, 0);
+
+    s_ui.sd_kick = text(scr, &wb_font_12, C_DIM, FOCUS_X, 52, 196, 15,
+                        LV_TEXT_ALIGN_LEFT, 1);
+    set_text(s_ui.sd_kick, "提示音音量");
+
+    s_ui.sd_big = text(scr, &wb_font_28, C_MINT, FOCUS_X, 70, 196, 34,
+                       LV_TEXT_ALIGN_LEFT, 1);
+    set_text(s_ui.sd_big, "80%");
+
+    s_ui.sd_sub = text(scr, &wb_font_12, C_DIM, FOCUS_X, 112, 196, 15,
+                       LV_TEXT_ALIGN_LEFT);
+    set_text(s_ui.sd_sub, "全局生效 · 不写入设置");
+
+    // 三档块：3×60 + 2×8 = 196，落在 32..228。
+    static const int k_pct[3] = {40, 60, 80};
+    for (int i = 0; i < 3; ++i) {
+        lv_obj_t *blk = panel(scr, FOCUS_X + i * 68, 148, 60, 40, C_PANEL, 0);
+        s_ui.sd_level[i] = blk;
+        s_ui.sd_level_txt[i] = text(blk, &buddy_font_16, C_DIM, 0, 10, 60, 20,
+                                    LV_TEXT_ALIGN_CENTER);
+        char b[8];
+        snprintf(b, sizeof(b), "%d%%", k_pct[i]);
+        set_text(s_ui.sd_level_txt[i], b);
+    }
+
+    s_ui.sd_note = text(scr, &wb_font_12, C_DIM, FOCUS_X, 200, 196, 32,
+                        LV_TEXT_ALIGN_LEFT);
+    lv_label_set_long_mode(s_ui.sd_note, LV_LABEL_LONG_WRAP);
+    set_text(s_ui.sd_note, "UP/DOWN 换档，即时试听\n长按 DOWN 返回菜单");
+
+    build_footer(scr, SCR_SOUND);
+    set_keys(SCR_SOUND, "UP/DOWN", "换档", "OK", "完成", "长按DOWN", "返回");
 }
 
 // ---------------- 数据 → 文本 ----------------
@@ -683,7 +795,8 @@ void update_overview(const wb_view_t *v)
         snprintf(buf, sizeof(buf), "%s", sel == 0 ? "仅 1 条会话" : "已是最后一条");
     set_text(s_ui.ov_next, buf);
 
-    set_keys(SCR_OVERVIEW, "UP/长按UP", "上一条·额度", "OK", (v->approval || v->ask) ? "打开待办" : "无待办", "DOWN", "下一条");
+    set_keys(SCR_OVERVIEW, "UP", "上一条", "OK", (v->approval || v->ask) ? "打开待办" : "菜单",
+             "DOWN", "下一条");
 
     if (sel != s_ui.last_sel || n != s_ui.last_n ||
         (token && (!s_ui.last_token_set || strcmp(token, s_ui.last_token) != 0))) {
@@ -807,10 +920,17 @@ void update_offline(const wb_view_t *v)
     format_hm(v->clock_s, hm, sizeof(hm));
     set_text(s_ui.of_idx, "离线");
     set_text(s_ui.of_tag, "自动重连");
-    snprintf(buf, sizeof(buf), "最后同步 %s · 缓存 %d 条\n检查主机蓝牙与 daemon",
-             hm, v->n_sess);
+
+    // 离线优先于审批/提问（§5.1）：断连时答不了，要明确告诉用户待办还在。
+    const int pending = (v->approval ? 1 : 0) + (v->ask ? 1 : 0);
+    if (pending > 0)
+        snprintf(buf, sizeof(buf), "缓存 %d 条 · 待办 %d 条\n最后同步 %s · 连上后可处理",
+                 v->n_sess, pending, hm);
+    else
+        snprintf(buf, sizeof(buf), "最后同步 %s · 缓存 %d 条\n检查主机蓝牙与 daemon",
+                 hm, v->n_sess);
     set_text(s_ui.of_note, buf);
-    set_keys(SCR_OFFLINE, "UP", "查看缓存", "OK", "回总览", "长按OK", "关机");
+    set_keys(SCR_OFFLINE, "UP", "查看缓存", "OK", "回总览", "长按DOWN", "回总览");
 }
 
 void update_low_battery(int soc)
@@ -878,6 +998,103 @@ void update_credit(const wb_view_t *v)
     set_text(s_ui.cr_note, note);
 }
 
+void update_menu(const wb_view_t *v)
+{
+    char buf[40];
+
+    snprintf(buf, sizeof(buf), "%d / %d", s_ui.menu_sel + 1, MI_COUNT);
+    set_text(s_ui.mn_tag, buf);
+
+    // 1 会话总览：N 条 · M 运行
+    if (v->n_sess <= 0) {
+        snprintf(buf, sizeof(buf), "暂无会话");
+    } else {
+        int running = 0;
+        for (int i = 0; i < v->n_sess; ++i)
+            if (v->sess[i].state[0] && strcmp(v->sess[i].state, "RUNNING") == 0) ++running;
+        snprintf(buf, sizeof(buf), "%d 条 · %d 运行", v->n_sess, running);
+    }
+    set_text(s_ui.mn_sub[MI_OVERVIEW], buf);
+
+    // 2 额度遥测
+    if (v->credit_total > 0.0) {
+        char num[24];
+        fmt_num(num, sizeof(num), v->credit_remain);
+        snprintf(buf, sizeof(buf), "剩余 %s", num);
+    } else {
+        snprintf(buf, sizeof(buf), "额度未知");
+    }
+    set_text(s_ui.mn_sub[MI_CREDIT], buf);
+
+    // 3 声音设置：主机静音时明说，避免用户以为本地坏了
+    if (v->beep_vol <= 0)
+        snprintf(buf, sizeof(buf), "主机静音中");
+    else
+        snprintf(buf, sizeof(buf), "当前 %d%%", bsp_audio_get_master_volume());
+    set_text(s_ui.mn_sub[MI_SOUND], buf);
+
+    // 4 待机：有待办时禁用（§4.1）
+    snprintf(buf, sizeof(buf), "%s",
+             (v->approval || v->ask) ? "有待办 · 不可待机" : "立即进入待机");
+    set_text(s_ui.mn_sub[MI_STANDBY], buf);
+
+    // 焦点：选中行实心块 + 6px 竖轨 + 白字；非焦点无竖轨、无块。
+    for (int i = 0; i < MI_COUNT; ++i) {
+        const bool on = (i == s_ui.menu_sel);
+        set_color(s_ui.mn_row[i], on ? C_PANEL : C_BG);
+        if (on)
+            lv_obj_remove_flag(s_ui.mn_rail[i], LV_OBJ_FLAG_HIDDEN);
+        else
+            lv_obj_add_flag(s_ui.mn_rail[i], LV_OBJ_FLAG_HIDDEN);
+        set_text_color(s_ui.mn_title[i], on ? C_INK : C_DIM);
+        set_text_color(s_ui.mn_sub[i], on ? C_DIM : C_SEG_IDLE);
+    }
+}
+
+void update_sound(const wb_view_t *v)
+{
+    static const int k_pct[3] = {40, 60, 80};
+    char buf[32];
+
+    set_text(s_ui.sd_tag, v->beep_vol <= 0 ? "主机静音" : "全局");
+
+    snprintf(buf, sizeof(buf), "%d%%", k_pct[s_ui.sound_idx]);
+    set_text(s_ui.sd_big, buf);
+
+    for (int i = 0; i < 3; ++i) {
+        const bool on = (i == s_ui.sound_idx);
+        set_color(s_ui.sd_level[i], on ? C_MINT : C_PANEL);
+        set_text_color(s_ui.sd_level_txt[i], on ? 0x000000 : C_DIM);
+    }
+
+    set_text(s_ui.sd_sub, v->beep_vol <= 0 ? "主机静音中 · 暂不出声"
+                                           : "全局生效 · 不写入设置");
+
+    set_keys(SCR_SOUND, "UP/DOWN", "换档", "OK", "完成", "长按DOWN", "返回");
+}
+
+// ---------------- 按键辅助 ----------------
+
+uint32_t now_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000LL);
+}
+
+void menu_open_at(int sel)
+{
+    s_ui.menu_open = true;
+    s_ui.menu_sel = sel;
+    s_ui.menu_seen_ms = now_ms();
+}
+
+// 声音档位：只改全局主音量，不落 NVS（§4.6）；试听音由 app_wb 的按键反馈负责。
+void sound_apply(void)
+{
+    static const int k_pct[3] = {40, 60, 80};
+    bsp_audio_set_master_volume((uint8_t)k_pct[s_ui.sound_idx]);
+    ESP_LOGI(TAG, "主音量 -> %d%%", k_pct[s_ui.sound_idx]);
+}
+
 }  // namespace
 
 // ---------------- 对外接口 ----------------
@@ -892,6 +1109,10 @@ void wb_ui_init(void)
     s_ui.last_n = -1;
     s_ui.last_token_set = false;
 
+    // 声音页初始档位：把当前主音量吸附到 40/60/80 最近的一档（§4.6）。
+    const int vol = bsp_audio_get_master_volume();
+    s_ui.sound_idx = (vol <= 50) ? 0 : (vol <= 70 ? 1 : 2);
+
     build_overview();
     build_approval();
     build_ask();
@@ -899,6 +1120,8 @@ void wb_ui_init(void)
     build_offline();
     build_low_battery();
     build_credit();
+    build_menu();
+    build_sound();
     s_ui.inited = true;
 }
 
@@ -923,32 +1146,99 @@ void wb_ui_set_battery(int soc)
 bool wb_ui_key(wb_ui_key_t key, bool long_press)
 {
     if (!s_ui.inited) return false;
-    (void)key;
 
-    // 额度页：短按 UP/OK、长按 DOWN 返回总览；长按 OK 仍交给底座关机。
-    if (s_ui.screen == SCR_CREDIT) {
+    // ---- 菜单：UP/DOWN 移动，OK 进入，长 DOWN 关闭；30s 超时在 wb_ui_tick。
+    if (s_ui.screen == SCR_MENU) {
+        s_ui.menu_seen_ms = now_ms();
         if (long_press) {
-            if (key == WB_UI_KEY_OK) return false;
-            if (key == WB_UI_KEY_DOWN) {
-                s_ui.credit_open = false;
-                return true;
-            }
-            return true;   // 长按 UP 不动作
-        }
-        if (key == WB_UI_KEY_UP || key == WB_UI_KEY_OK) {
-            s_ui.credit_open = false;
+            if (key == WB_UI_KEY_OK) return false;   // 长按 OK 归底座（2s 提示 / 5s 关机）
+            s_ui.menu_open = false;
             return true;
         }
-        return true;       // 短按 DOWN 不动作
-    }
-
-    // 总览长按 UP：打开额度页（短按 UP 仍是上一条）。
-    if (s_ui.screen == SCR_OVERVIEW && long_press && key == WB_UI_KEY_UP) {
-        s_ui.credit_open = true;
+        if (key == WB_UI_KEY_UP) {
+            s_ui.menu_sel = (s_ui.menu_sel + MI_COUNT - 1) % MI_COUNT;
+            return true;
+        }
+        if (key == WB_UI_KEY_DOWN) {
+            s_ui.menu_sel = (s_ui.menu_sel + 1) % MI_COUNT;
+            return true;
+        }
+        // 短 OK：进入当前项
+        switch (s_ui.menu_sel) {
+        case MI_CREDIT:
+            s_ui.menu_open = false;
+            s_ui.credit_open = true;
+            s_ui.credit_from_menu = true;
+            break;
+        case MI_SOUND:
+            s_ui.menu_open = false;
+            s_ui.sound_open = true;
+            break;
+        case MI_STANDBY:
+            // 有待办时菜单项禁用：不关闭菜单，也不执行，避免「按了没进待机」的错觉。
+            if (!s_ui.has_pending) {
+                s_ui.menu_open = false;
+                // 切待机要碰 LVGL，交给 wb_ui_tick 在 LVGL 上下文执行。
+                s_ui.standby_request = true;
+            }
+            break;
+        default:
+            s_ui.menu_open = false;   // 会话总览 = 关闭菜单回根
+            break;
+        }
         return true;
     }
 
-    // 离线覆盖页：任意短按先回到缓存总览；长按 DOWN 等价“返回”。
+    // ---- 声音设置：UP/DOWN 换档即时生效，OK 完成，长 DOWN 返回菜单。
+    if (s_ui.screen == SCR_SOUND) {
+        s_ui.menu_seen_ms = now_ms();
+        if (long_press) {
+            if (key == WB_UI_KEY_OK) return false;
+            s_ui.sound_open = false;
+            menu_open_at(MI_SOUND);
+            return true;
+        }
+        if (key == WB_UI_KEY_UP || key == WB_UI_KEY_DOWN) {
+            s_ui.sound_idx = (key == WB_UI_KEY_UP)
+                                 ? (s_ui.sound_idx + 2) % 3
+                                 : (s_ui.sound_idx + 1) % 3;
+            sound_apply();
+            return true;
+        }
+        s_ui.sound_open = false;   // 短 OK = 完成
+        menu_open_at(MI_SOUND);
+        return true;
+    }
+
+    // ---- 额度页：UP/DOWN 无操作；OK / 长 DOWN 返回来源层（§3.2）。
+    if (s_ui.screen == SCR_CREDIT) {
+        if (long_press && key == WB_UI_KEY_OK) return false;   // 归底座关机
+        if (key == WB_UI_KEY_OK || long_press) {
+            s_ui.credit_open = false;
+            if (s_ui.credit_from_menu) menu_open_at(MI_CREDIT);
+            return true;
+        }
+        return true;   // UP/DOWN 吞掉：额度页是只读页，不做隐藏动作
+    }
+
+    // ---- 总览：长 DOWN 打开菜单；短 OK 无待办也打开菜单（消灭死键，§2.3 C3）。
+    if (s_ui.screen == SCR_OVERVIEW) {
+        if (long_press) {
+            if (key == WB_UI_KEY_OK) return false;   // 长按 OK 归底座
+            if (key == WB_UI_KEY_DOWN) {
+                menu_open_at(MI_OVERVIEW);
+                return true;
+            }
+            return false;   // 长 UP 不承载功能，交给业务层（无动作、也不响）
+        }
+        if (key == WB_UI_KEY_OK && !s_ui.has_pending) {
+            menu_open_at(MI_OVERVIEW);
+            return true;
+        }
+        return false;   // 其余交给业务层：翻页 / 打开待办
+    }
+
+    // ---- 离线覆盖页：任意短按先回缓存总览；长按 DOWN 等价「返回」。
     if (s_ui.screen == SCR_OFFLINE) {
         if (long_press) {
             if (key == WB_UI_KEY_OK) return false;   // 长按 OK 交给底座关机
@@ -964,7 +1254,7 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
         return false;
     }
 
-    // 低电覆盖页：UP/DOWN 暂时屏蔽；OK / 长按 DOWN 返回总览。
+    // ---- 低电覆盖页：UP/DOWN 屏蔽；OK / 长按 DOWN 返回总览。
     if (s_ui.screen == SCR_LOW) {
         if (long_press) {
             if (key == WB_UI_KEY_OK) return false;   // 长按 OK 交给底座关机
@@ -978,7 +1268,7 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
         return true;
     }
 
-    // 其余页面（含待机）由业务层处理按键。
+    // 其余页面（含待机、审批、提问）由业务层处理按键。
     return false;
 }
 
@@ -986,26 +1276,51 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
 {
     if (!s_ui.inited || !v) return;
 
-    if (v->connected) s_ui.offline_dismissed = false;
-    if (v->page != WB_PAGE_OVERVIEW) s_ui.credit_open = false;
-    if (standby) s_ui.credit_open = false;
+    // 快照缓存：总览短 OK 要判断有没有待办（§2.3 C3）。
+    s_ui.has_pending = (v->approval || v->ask);
 
+    if (v->connected) s_ui.offline_dismissed = false;
+
+    const bool biz_page = (v->page != WB_PAGE_OVERVIEW);
     const bool low = (s_ui.soc >= 0 && s_ui.soc <= LOW_BATTERY_SOC && !s_ui.low_dismissed);
     const bool offline = (!v->connected && !s_ui.offline_dismissed);
 
+    // 打断优先级（§5.1）：待机 > 离线 > 审批/提问 > 低电 > 菜单/额度/声音 > 总览。
+    // 被更高优先级打断时，瞬时层一律关闭、不恢复（§5.2）。
     int target = SCR_OVERVIEW;
     if (standby) {
+        s_ui.menu_open = false;
+        s_ui.credit_open = false;
+        s_ui.sound_open = false;
         target = SCR_STANDBY;
     } else if (offline) {
+        s_ui.menu_open = false;
+        s_ui.credit_open = false;
+        s_ui.sound_open = false;
         target = SCR_OFFLINE;
-    } else if (low) {
-        target = SCR_LOW;
-    } else {
+    } else if (biz_page) {
+        s_ui.menu_open = false;
+        s_ui.credit_open = false;
+        s_ui.sound_open = false;
         switch (v->page) {
         case WB_PAGE_APPROVAL: target = SCR_APPROVAL; break;
         case WB_PAGE_ASK: target = SCR_ASK; break;
-        default: target = s_ui.credit_open ? SCR_CREDIT : SCR_OVERVIEW; break;
+        default: target = SCR_OVERVIEW; break;
         }
+    } else if (low) {
+        // 审批/提问已在上一支接住，所以低电不会挡住待办。
+        s_ui.menu_open = false;
+        s_ui.credit_open = false;
+        s_ui.sound_open = false;
+        target = SCR_LOW;
+    } else if (s_ui.sound_open) {
+        target = SCR_SOUND;
+    } else if (s_ui.credit_open) {
+        target = SCR_CREDIT;
+    } else if (s_ui.menu_open) {
+        target = SCR_MENU;
+    } else {
+        target = SCR_OVERVIEW;
     }
 
     if (target != s_ui.screen) {
@@ -1028,6 +1343,37 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
     case SCR_APPROVAL: update_approval(v); break;
     case SCR_ASK: update_ask(v); break;
     case SCR_CREDIT: update_credit(v); break;
+    case SCR_MENU: update_menu(v); break;
+    case SCR_SOUND: update_sound(v); break;
     default: update_overview(v); break;
     }
+}
+
+bool wb_ui_tick(void)
+{
+    if (!s_ui.inited) return false;
+
+    bool changed = false;
+    const uint32_t idle = (uint32_t)(now_ms() - s_ui.menu_seen_ms);
+
+    // 菜单 / 声音页 30s 无按键自动退出（§4.4）。声音页按规则直接回总览。
+    if (s_ui.menu_open && s_ui.screen == SCR_MENU && idle >= MENU_TIMEOUT_MS) {
+        s_ui.menu_open = false;
+        changed = true;
+        ESP_LOGI(TAG, "菜单 30s 超时，回总览");
+    }
+    if (s_ui.sound_open && s_ui.screen == SCR_SOUND && idle >= MENU_TIMEOUT_MS) {
+        s_ui.sound_open = false;
+        changed = true;
+        ESP_LOGI(TAG, "声音页 30s 超时，回总览");
+    }
+
+    // 菜单「待机」：按键上下文只置标志，这里在 LVGL 上下文执行。
+    if (s_ui.standby_request) {
+        s_ui.standby_request = false;
+        wb_power_standby_now();
+        changed = true;
+    }
+
+    return changed;
 }
