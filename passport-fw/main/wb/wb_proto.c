@@ -28,6 +28,12 @@ static int64_t json_i64(const cJSON *root, const char *key, int64_t def)
     return cJSON_IsNumber(it) ? (int64_t)it->valuedouble : def;
 }
 
+static double json_double(const cJSON *root, const char *key, double def)
+{
+    const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
+    return cJSON_IsNumber(it) ? it->valuedouble : def;
+}
+
 static void decode_status(const cJSON *root, wb_ev_t *ev)
 {
     ev->count = json_int(root, "count", 0);
@@ -92,7 +98,21 @@ bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev)
         if (cJSON_GetObjectItemCaseSensitive(root, "voice")) {
             ev->type = WB_EV_NONE;
         } else if (cJSON_GetObjectItemCaseSensitive(root, "usage")) {
+            // 主机每 30s 推一次今日用量；此前只识别不解析，数据全丢了。
             ev->type = WB_EV_USAGE;
+            ev->usage_today = json_double(root, "today", 0.0);
+            ev->usage_cache = json_double(root, "cache", 0.0);
+            ev->usage_req = json_int(root, "req", 0);
+            const cJSON *models = cJSON_GetObjectItemCaseSensitive(root, "models");
+            ev->usage_models = cJSON_IsArray(models) ? cJSON_GetArraySize(models) : 0;
+        } else if (cJSON_GetObjectItemCaseSensitive(root, "host")) {
+            // Web 大盘的主机侧信息：status_list 已 488B 塞不下，走独立小帧。
+            ev->type = WB_EV_HOST;
+            ev->gw_ports = json_int(root, "gw_ports", 0);
+            ev->gw_sessions = json_int(root, "gw_sessions", 0);
+            ev->uptime_s = json_int(root, "uptime", 0);
+            ev->gw_secret = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "secret"));
+            ev->gw_cli = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "cli"));
         } else if (cJSON_HasObjectItem(root, "remain")) {
             ev->type = WB_EV_CREDIT;
             ev->remain = cJSON_GetObjectItemCaseSensitive(root, "remain")->valuedouble;

@@ -66,20 +66,23 @@ enum Screen {
     SCR_CREDIT,
     SCR_MENU,
     SCR_SOUND,
+    SCR_HOST,          // 主机大盘：Web 控制台的今日用量 / 网关 / 连接信息
     SCR_COUNT,
 };
 
 const char *const k_screen_name[SCR_COUNT] = {
     "overview", "approval", "ask", "standby", "offline", "low_battery", "credit", "menu",
-    "sound",
+    "sound", "host",
 };
 
 // 菜单项：顺序即显示顺序（docs/KEYMAP_PLAN.md §4.1）。
+// MI_HOST 放最后：让「待机」仍是第 4 项，B.3 验证清单里的 3 次 DOWN 序列不变。
 enum MenuItem {
     MI_OVERVIEW = 0,   // 会话总览：关闭菜单回根
     MI_CREDIT,         // 额度遥测
     MI_SOUND,          // 声音设置
     MI_STANDBY,        // 立即待机
+    MI_HOST,           // 主机大盘
     MI_COUNT,
 };
 
@@ -179,6 +182,14 @@ struct UiState {
     lv_obj_t *sd_level_txt[3];
     lv_obj_t *sd_note;
 
+    // 主机大盘（只读，1 条竖轨 + 4 个 label；共享 chrome 不随屏增加）。
+    lv_obj_t *hs_idx;
+    lv_obj_t *hs_tag;
+    lv_obj_t *hs_kick;
+    lv_obj_t *hs_big;
+    lv_obj_t *hs_lines;
+    lv_obj_t *hs_note;
+
     // 全局常驻 chrome：顶栏状态簇 + 三键底栏挂在 LVGL top layer，9 屏共用一份。
     // 原先每屏各建一套（约 17 个对象 × 9 屏），方案 B 新增两屏后堆只剩 3KB，
     // LVGL 绘制时 lv_malloc 失败触发 LV_ASSERT_MALLOC → 开机即 panic。
@@ -201,6 +212,7 @@ struct UiState {
     bool credit_open;      // 额度页是否打开
     bool menu_open;        // 菜单是否打开
     bool sound_open;       // 声音设置页是否打开
+    bool host_open;        // 主机大盘页是否打开
     bool credit_from_menu; // 额度从菜单进入（返回目标是菜单，而不是总览）
     int menu_sel;          // 菜单焦点 0..MI_COUNT-1
     int sound_idx;         // 声音档位 0..2 = 40/60/80
@@ -306,17 +318,20 @@ void build_chrome(void)
 
     s_ui.g_hdr_left = text(c, &wb_font_12, C_DIM, SAFE_L, HEADER_Y + 1, 100, 15,
                            LV_TEXT_ALIGN_LEFT, 2);
-    s_ui.g_hdr_right = text(c, &wb_font_12, C_DIM, 112, HEADER_Y + 1, 62, 15,
+    // 顶栏右侧文案右边界收到 167，给状态簇腾位置（"100%" 需要 29px 宽）。
+    s_ui.g_hdr_right = text(c, &wb_font_12, C_DIM, 112, HEADER_Y + 1, 55, 15,
                             LV_TEXT_ALIGN_RIGHT);
 
     // 顶栏右侧状态簇：连接点 + 电池框 + 电量百分比。
+    // 电量文本框给到 33px："100%" 在 wb_font_12 下约 29px，原先 27px 会被
+    // LV_LABEL_LONG_DOT 截成 "1..."（电量数字被吃掉，肉眼看不见）。
     BatUi &b = s_ui.bat[0];
-    b.dot = panel(c, 178, 14, 6, 6, C_SEG_IDLE, 3);
-    b.shell = panel(c, 184, 13, 14, 8, C_BG, 2);
+    b.dot = panel(c, 171, 14, 6, 6, C_SEG_IDLE, 3);
+    b.shell = panel(c, 177, 13, 14, 8, C_BG, 2);
     all_rule(b.shell, C_LINE, 1, 2);
-    b.fill = panel(c, 185, 14, 1, 6, C_SEG_IDLE, 1);
-    panel(c, 198, 15, 2, 4, C_LINE, 1);   // 电池正极
-    b.pct = text(c, &wb_font_12, C_DIM, 201, 11, 27, 15, LV_TEXT_ALIGN_RIGHT);
+    b.fill = panel(c, 178, 14, 1, 6, C_SEG_IDLE, 1);
+    panel(c, 191, 15, 2, 4, C_LINE, 1);   // 电池正极
+    b.pct = text(c, &wb_font_12, C_DIM, 195, 11, 33, 15, LV_TEXT_ALIGN_RIGHT);
     set_text(b.pct, "--%");
     for (int i = 1; i < SCR_COUNT; ++i) s_ui.bat[i] = b;
 
@@ -651,22 +666,23 @@ void build_menu(void)
 {
     lv_obj_t *scr = screen_new();
     s_ui.scr[SCR_MENU] = scr;
-    build_header(scr, SCR_MENU, &s_ui.mn_idx, &s_ui.mn_tag, "菜单", "1 / 4");
+    build_header(scr, SCR_MENU, &s_ui.mn_idx, &s_ui.mn_tag, "菜单", "1 / 5");
 
     static const char *const k_title[MI_COUNT] = {
-        "会话总览", "额度遥测", "声音设置", "待机",
+        "会话总览", "额度遥测", "声音设置", "待机", "主机大盘",
     };
 
-    // 行 x=12 / w=216 / h=38、间距 8；4 行占 52..228（KEYMAP_PLAN §4.2）。
-    // 焦点语言沿用 V2：6px 薄荷竖轨 + 实心块 + 白字。
+    // 5 行：h=36 / 间距 6，y=44..248。
+    // 实机试过 h=32/gap=4：buddy_font_16 的字形会溢出 label，被下一行
+    // 的 C_BG 底板盖掉副标题下半截。这里把行高与间距都放宽到字形有余量。
     for (int i = 0; i < MI_COUNT; ++i) {
-        const int y = 52 + i * 46;
-        lv_obj_t *row = panel(scr, SAFE_L, y, CONTENT_W, 38, C_BG, 0);
+        const int y = 44 + i * 42;
+        lv_obj_t *row = panel(scr, SAFE_L, y, CONTENT_W, 36, C_BG, 0);
         s_ui.mn_row[i] = row;
-        s_ui.mn_rail[i] = panel(row, 0, 0, 6, 38, C_MINT, 0);
-        s_ui.mn_title[i] = text(row, &buddy_font_16, C_DIM, FOCUS_X - SAFE_L, 3, 190, 20,
+        s_ui.mn_rail[i] = panel(row, 0, 0, 6, 36, C_MINT, 0);
+        s_ui.mn_title[i] = text(row, &buddy_font_16, C_DIM, FOCUS_X - SAFE_L, 2, 190, 18,
                                 LV_TEXT_ALIGN_LEFT);
-        s_ui.mn_sub[i] = text(row, &wb_font_12, C_DIM, FOCUS_X - SAFE_L, 21, 190, 15,
+        s_ui.mn_sub[i] = text(row, &wb_font_12, C_DIM, FOCUS_X - SAFE_L, 20, 190, 15,
                               LV_TEXT_ALIGN_LEFT);
         set_text(s_ui.mn_title[i], k_title[i]);
     }
@@ -1058,7 +1074,7 @@ void update_credit(const wb_view_t *v)
 
 void update_menu(const wb_view_t *v)
 {
-    char buf[40];
+    char buf[64];   // 大盘副标题「今日 220,724 · 网关 8」最坏 53B，40B 会截断
 
     snprintf(buf, sizeof(buf), "%d / %d", s_ui.menu_sel + 1, MI_COUNT);
     set_text(s_ui.mn_tag, buf);
@@ -1095,6 +1111,17 @@ void update_menu(const wb_view_t *v)
     snprintf(buf, sizeof(buf), "%s",
              (v->approval || v->ask) ? "有待办 · 不可待机" : "立即进入待机");
     set_text(s_ui.mn_sub[MI_STANDBY], buf);
+
+    // 5 主机大盘：菜单里就先给一眼今日用量与网关端口数。
+    if (v->have_usage) {
+        char num[24];
+        fmt_num(num, sizeof(num), v->usage_today);
+        snprintf(buf, sizeof(buf), "今日 %s · 网关 %d", num,
+                 v->have_host ? v->gw_ports : 0);
+    } else {
+        snprintf(buf, sizeof(buf), "等待主机同步");
+    }
+    set_text(s_ui.mn_sub[MI_HOST], buf);
 
     // 焦点：选中行实心块 + 6px 竖轨 + 白字；非焦点无竖轨、无块。
     for (int i = 0; i < MI_COUNT; ++i) {
@@ -1145,6 +1172,102 @@ void menu_open_at(int sel)
     s_ui.menu_seen_ms = now_ms();
 }
 
+// 主机大盘：只读页。刻意只用 1 条竖轨 + 4 个 label，多行文本靠 WRAP，
+// 避免再增加 LVGL 对象数（共享 chrome 修复后堆余量约 36KB，需留余量）。
+void build_host(void)
+{
+    lv_obj_t *scr = screen_new();
+    s_ui.scr[SCR_HOST] = scr;
+    build_header(scr, SCR_HOST, &s_ui.hs_idx, &s_ui.hs_tag, "主机", "大盘");
+
+    panel(scr, SAFE_L, 44, 6, 194, C_MINT, 0);
+
+    s_ui.hs_kick = text(scr, &wb_font_12, C_DIM, FOCUS_X, 52, 196, 15,
+                        LV_TEXT_ALIGN_LEFT, 1);
+    set_text(s_ui.hs_kick, "今日消耗 tokens");
+
+    s_ui.hs_big = text(scr, &wb_font_28, C_MINT, FOCUS_X, 70, 196, 34,
+                       LV_TEXT_ALIGN_LEFT, 1);
+    set_text(s_ui.hs_big, "--");
+
+    s_ui.hs_lines = text(scr, &wb_font_12, C_DIM, FOCUS_X, 112, 196, 130,
+                         LV_TEXT_ALIGN_LEFT);
+    lv_label_set_long_mode(s_ui.hs_lines, LV_LABEL_LONG_WRAP);
+    set_text(s_ui.hs_lines, "等待主机同步");
+
+    s_ui.hs_note = text(scr, &wb_font_12, C_DIM, FOCUS_X, 248, 196, 15,
+                        LV_TEXT_ALIGN_LEFT);
+    set_text(s_ui.hs_note, "未同步");
+
+    build_footer(scr, SCR_HOST);
+    set_keys(SCR_HOST, "UP/DOWN", "无操作", "OK", "返回", "长按DOWN", "返回");
+}
+
+void update_host(const wb_view_t *v)
+{
+    char buf[384], note[64], hm[16];   // 5 行中文最坏 304B
+    char num[24], rem[24], tot[24], cache[24], gw[16], live[16];
+
+    if (v->have_usage) {
+        fmt_num(num, sizeof(num), v->usage_today);
+        set_text(s_ui.hs_big, num);
+        set_text_color(s_ui.hs_big, C_MINT);
+    } else {
+        snprintf(num, sizeof(num), "--");
+        set_text(s_ui.hs_big, "--");
+        set_text_color(s_ui.hs_big, C_DIM);
+    }
+    fmt_num(cache, sizeof(cache), v->have_usage ? v->usage_cache : 0.0);
+
+    if (v->have_credit && v->credit_total > 0.0) {
+        fmt_num(rem, sizeof(rem), v->credit_remain);
+        fmt_num(tot, sizeof(tot), v->credit_total);
+    } else {
+        snprintf(rem, sizeof(rem), "--");
+        snprintf(tot, sizeof(tot), "--");
+    }
+    double used = (v->have_credit && v->credit_total > 0.0)
+                      ? v->credit_total - v->credit_remain : 0.0;
+    if (used < 0.0) used = 0.0;
+    int pct = (v->have_credit && v->credit_total > 0.0)
+                  ? (int)(used * 100.0 / v->credit_total + 0.5) : 0;
+    if (pct > 100) pct = 100;
+
+    if (v->have_host) {
+        snprintf(gw, sizeof(gw), "%d", v->gw_ports);
+        snprintf(live, sizeof(live), "%d", v->gw_sessions);
+    } else {
+        snprintf(gw, sizeof(gw), "--");
+        snprintf(live, sizeof(live), "--");
+    }
+    const char *secret = v->have_host ? (v->gw_secret ? "有" : "无") : "--";
+    const char *cli = v->have_host ? (v->gw_cli ? "有" : "无") : "--";
+
+    int up = v->have_host ? v->uptime_s : 0;
+    if (up < 0) up = 0;
+    const int hh = up / 3600, mm = (up % 3600) / 60, ss = up % 60;
+
+    snprintf(buf, sizeof(buf),
+             "请求 %d · 模型 %d · 缓存 %s\n"
+             "额度 %s / %s · 已用 %d%%\n"
+             "网关 %s 端口 · 活会话 %s\n"
+             "密钥 %s · CLI %s · 增益 %d%%\n"
+             "已连接 %02d:%02d:%02d · 电量 %d%%",
+             v->usage_req, v->usage_models, cache,
+             rem, tot, pct,
+             gw, live,
+             secret, cli, v->beep_vol,
+             hh, mm, ss, s_ui.soc >= 0 ? s_ui.soc : 0);
+    set_text(s_ui.hs_lines, buf);
+
+    format_hm(v->clock_s, hm, sizeof(hm));
+    if (v->connected)
+        snprintf(note, sizeof(note), "同步 %s · fw %.5s", hm, WB_FW_VERSION);
+    else
+        snprintf(note, sizeof(note), "离线 · 显示缓存 · fw %.5s", WB_FW_VERSION);
+    set_text(s_ui.hs_note, note);
+}
+
 // 声音档位：只改全局主音量，不落 NVS（§4.6）；试听音由 app_wb 的按键反馈负责。
 void sound_apply(void)
 {
@@ -1183,6 +1306,7 @@ void wb_ui_init(void)
     build_credit();
     build_menu();
     build_sound();
+    build_host();
     s_ui.inited = true;
 }
 
@@ -1246,6 +1370,11 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
                 s_ui.standby_request = true;
             }
             break;
+        case MI_HOST:
+            s_ui.menu_open = false;
+            s_ui.host_open = true;
+            s_ui.menu_seen_ms = now_ms();
+            break;
         default:
             s_ui.menu_open = false;   // 会话总览 = 关闭菜单回根
             break;
@@ -1283,6 +1412,18 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
             return true;
         }
         return true;   // UP/DOWN 吞掉：额度页是只读页，不做隐藏动作
+    }
+
+    // ---- 主机大盘：只读页，OK / 长 DOWN 回菜单（与额度页同一套返回语义）。
+    if (s_ui.screen == SCR_HOST) {
+        s_ui.menu_seen_ms = now_ms();
+        if (long_press && key == WB_UI_KEY_OK) return false;   // 归底座关机
+        if (key == WB_UI_KEY_OK || long_press) {
+            s_ui.host_open = false;
+            menu_open_at(MI_HOST);
+            return true;
+        }
+        return true;   // UP/DOWN 无操作
     }
 
     // ---- 总览：长 DOWN 打开菜单；短 OK 无待办也打开菜单（消灭死键，§2.3 C3）。
@@ -1349,23 +1490,26 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
     const bool low = (s_ui.soc >= 0 && s_ui.soc <= LOW_BATTERY_SOC && !s_ui.low_dismissed);
     const bool offline = (!v->connected && !s_ui.offline_dismissed);
 
-    // 打断优先级（§5.1）：待机 > 离线 > 审批/提问 > 低电 > 菜单/额度/声音 > 总览。
+    // 打断优先级（§5.1）：待机 > 离线 > 审批/提问 > 低电 > 菜单/额度/声音/大盘 > 总览。
     // 被更高优先级打断时，瞬时层一律关闭、不恢复（§5.2）。
     int target = SCR_OVERVIEW;
     if (standby) {
         s_ui.menu_open = false;
         s_ui.credit_open = false;
         s_ui.sound_open = false;
+        s_ui.host_open = false;
         target = SCR_STANDBY;
     } else if (offline) {
         s_ui.menu_open = false;
         s_ui.credit_open = false;
         s_ui.sound_open = false;
+        s_ui.host_open = false;
         target = SCR_OFFLINE;
     } else if (biz_page) {
         s_ui.menu_open = false;
         s_ui.credit_open = false;
         s_ui.sound_open = false;
+        s_ui.host_open = false;
         switch (v->page) {
         case WB_PAGE_APPROVAL: target = SCR_APPROVAL; break;
         case WB_PAGE_ASK: target = SCR_ASK; break;
@@ -1376,11 +1520,14 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
         s_ui.menu_open = false;
         s_ui.credit_open = false;
         s_ui.sound_open = false;
+        s_ui.host_open = false;
         target = SCR_LOW;
     } else if (s_ui.sound_open) {
         target = SCR_SOUND;
     } else if (s_ui.credit_open) {
         target = SCR_CREDIT;
+    } else if (s_ui.host_open) {
+        target = SCR_HOST;
     } else if (s_ui.menu_open) {
         target = SCR_MENU;
     } else {
@@ -1409,6 +1556,7 @@ void wb_ui_sync(const wb_view_t *v, bool standby)
     case SCR_CREDIT: update_credit(v); break;
     case SCR_MENU: update_menu(v); break;
     case SCR_SOUND: update_sound(v); break;
+    case SCR_HOST: update_host(v); break;
     default: update_overview(v); break;
     }
 }
@@ -1430,6 +1578,11 @@ bool wb_ui_tick(void)
         s_ui.sound_open = false;
         changed = true;
         ESP_LOGI(TAG, "声音页 30s 超时，回总览");
+    }
+    if (s_ui.host_open && s_ui.screen == SCR_HOST && idle >= MENU_TIMEOUT_MS) {
+        s_ui.host_open = false;
+        changed = true;
+        ESP_LOGI(TAG, "主机大盘 30s 超时，回总览");
     }
 
     // 菜单「待机」：按键上下文只置标志，这里在 LVGL 上下文执行。

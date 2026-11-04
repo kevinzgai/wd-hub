@@ -53,6 +53,19 @@ typedef struct {
     double credit_remain;
     double credit_total;
     int64_t credit_at; // 收到 credit 帧时的主机墙钟（epoch 秒），0 = 未知
+
+    // 主机大盘：usage 帧（30s 一跳）与 host 帧。have_* 区分「没数据」和「0」。
+    bool have_usage;
+    double usage_today;
+    double usage_cache;
+    int usage_req;
+    int usage_models;
+    bool have_host;
+    int gw_ports;
+    int gw_sessions;
+    int uptime_s;
+    bool gw_secret;
+    bool gw_cli;
 } wb_view_t;
 
 typedef void (*wb_biz_change_cb_t)(void);

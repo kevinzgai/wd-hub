@@ -191,11 +191,35 @@ static void handle_frame(const wb_frame_msg_t *msg)
         s_view.credit_at = s_view.clock_s;
         s_view.have_credit = true;
         changed = true;
+        ESP_LOGI(TAG, "积分 remain=%.2f total=%.0f",
+                 ev.remain, ev.total);
         break;
     case WB_EV_MSG:
         changed = true;   // 仅 ACK，不改界面
         break;
     case WB_EV_USAGE:
+        // 今日用量：主机大盘屏的数据源。以前直接丢弃，Web 有设备没有。
+        s_view.usage_today = ev.usage_today;
+        s_view.usage_cache = ev.usage_cache;
+        s_view.usage_req = ev.usage_req;
+        s_view.usage_models = ev.usage_models;
+        s_view.have_usage = true;
+        changed = true;
+        ESP_LOGI(TAG, "大盘用量 today=%lld req=%d models=%d",
+                 (long long)ev.usage_today, ev.usage_req, ev.usage_models);
+        break;
+    case WB_EV_HOST:
+        s_view.gw_ports = ev.gw_ports;
+        s_view.gw_sessions = ev.gw_sessions;
+        s_view.uptime_s = ev.uptime_s;
+        s_view.gw_secret = ev.gw_secret;
+        s_view.gw_cli = ev.gw_cli;
+        s_view.have_host = true;
+        changed = true;
+        ESP_LOGI(TAG, "主机大盘 gw=%d live=%d up=%ds secret=%d cli=%d",
+                 ev.gw_ports, ev.gw_sessions, ev.uptime_s,
+                 (int)ev.gw_secret, (int)ev.gw_cli);
+        break;
     case WB_EV_NONE:
     default:
         break;

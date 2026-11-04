@@ -203,6 +203,9 @@ CAP_ASK_MULTI = 1 << 2
 CAP_COUNT_TOTAL = 1 << 3
 CAP_AUTO_PAGE = 1 << 4
 CAP_VOICE_UP = 1 << 5
+# bit6：设备有「主机大盘」屏，能解析 usage / host 帧。
+# 只有声明这一位才推 host 帧；旧固件不认识无 type 的 host 帧会回 ERR_JSON。
+CAP_HOST_DASH = 1 << 6
 
 CAP_LABELS = {
     CAP_APPROVAL_PAGE: "审批页",
@@ -211,6 +214,7 @@ CAP_LABELS = {
     CAP_COUNT_TOTAL: "总数语义",
     CAP_AUTO_PAGE: "自动切页",
     CAP_VOICE_UP: "语音上行",
+    CAP_HOST_DASH: "主机大盘",
 }
 
 # ---- 本地 ACP（设备端直接作答通道）----
@@ -3793,6 +3797,8 @@ class UnifiedDaemon:
         self._st.set(device_fw=(fw if isinstance(fw, str) else ""),
                      device_proto=proto,
                      device_caps=caps)
+        # hello 紧跟 BLE 连接建立，用它当「已连接」起点（与 Web 顶栏 uptime 同义）。
+        self._ble_since = time.time()
         names = "、".join(lbl for bit, lbl in CAP_LABELS.items() if caps & bit) or "无"
         self._log(f"[daemon] 设备握手：fw={fw or '?'} proto={proto} "
                   f"caps=0x{caps:x}（{names}）")
@@ -5270,6 +5276,25 @@ class UnifiedDaemon:
                     self._last_usage_today = payload.get("today")
                     self._log(f"[daemon] 今日消耗已推 today={payload['today']:,} "
                               f"req={payload['req']} 模型 {len(payload['models'])} 个")
+
+            # 主机大盘：Web 控制台的网关/连接信息走独立小帧（status_list 已满）。
+            # caps 协商是必须的：老固件不认识无 type 的 host 帧会回 ERR_JSON。
+            if self._caps_has(CAP_HOST_DASH):
+                try:
+                    host = await asyncio.to_thread(self._build_host_frame)
+                    ok_host = await self._write(host)
+                    # 30s 一跳，内容不变时别刷屏；首次/变化时留一条证据。
+                    sig = (host["gw_ports"], host["gw_sessions"],
+                           host["secret"], host["cli"])
+                    if sig != getattr(self, "_last_host_sig", None):
+                        self._last_host_sig = sig
+                        self._log(
+                            f"[daemon] 主机大盘帧已推（{'成功' if ok_host else '写帧失败'}）"
+                            f"网关 {sig[0]} 端口 / 活会话 {sig[1]} / "
+                            f"密钥 {'有' if sig[2] else '无'}")
+                except Exception as exc:
+                    self._log(f"[daemon] 主机大盘帧组装失败：{exc}")
+
             await asyncio.sleep(USAGE_INTERVAL)
 
     def _build_usage_frame(self) -> dict | None:
@@ -5289,6 +5314,32 @@ class UnifiedDaemon:
                 "req": u["req"],
                 "cache": u["cache"],
                 "models": u["models"]}
+
+    def _build_host_frame(self) -> dict:
+        """把 Web 大盘里「主机侧独有」的指标拼成独立小帧推给设备。
+
+        status_list 实测最坏 488B（设备 512B 上限、主机按 480B 告警），
+        塞不下网关信息；独立帧约 100B，与 usage 帧同频（30s）。
+
+        对应控制台：网关卡片的端口数 / 活会话数 / 密钥 / CLI，
+        以及顶栏「已连接」时长。设备固件用 cJSON_IsTrue 解析 secret/cli，
+        所以这里必须发 JSON bool，不能发 0/1。
+        """
+        try:
+            gw = wb_gateway_state()
+        except Exception:
+            gw = {"count": 0, "secret": False, "cli": False}
+        try:
+            live = wb_live_sessions(force=True) if gw.get("secret") else []
+        except Exception:
+            live = []
+        since = getattr(self, "_ble_since", 0.0) or getattr(self, "_start_time", time.time())
+        return {"host": 1,
+                "gw_ports": int(gw.get("count") or 0),
+                "gw_sessions": len(live),
+                "secret": bool(gw.get("secret")),
+                "cli": bool(gw.get("cli")),
+                "uptime": max(0, int(time.time() - since))}
 
     # ---- 审批遥控 ----
 
