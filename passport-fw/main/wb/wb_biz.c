@@ -183,6 +183,9 @@ static void handle_frame(const wb_frame_msg_t *msg)
         s_view.beep_vol = ev.beep_vol;
         if (ev.beep_test) s_test_beep = true;
         changed = true;
+        // 留一行现场证据：重连自动补推应是 test=0，点试听应是 test=1。
+        // 以前没有日志，标志被吞掉时只能靠猜。
+        ESP_LOGI(TAG, "提示音配置 vol=%d test=%d", ev.beep_vol, (int)ev.beep_test);
         break;
     case WB_EV_CREDIT:
         // 额度页数据：留住最近一次 credit 帧；同步时间取最近一次主机墙钟。

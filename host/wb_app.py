@@ -5732,7 +5732,13 @@ class DaemonController:
             return False
         payload: dict = {"type": "cfg", "beep_vol": vol}
         if test:
-            payload["beep_test"] = 1
+            # 必须发 JSON bool，不能发 1。passport-fw 的 wb_proto.c 用
+            # cJSON_IsTrue 解 beep_test，而 cJSON 的 IsTrue 对 cJSON_Number
+            # 恒返回 false —— 发 1 会让试听标志被静默吞掉，按钮点了没声音。
+            # 与 _build_host_frame 的 secret/cli 是同一条约定。
+            # 另一条固件线的 wb_json_bool 同时兼容 bool 与非 0 数字，
+            # 所以老设备收到 true 也不会退化。
+            payload["beep_test"] = True
         fut = asyncio.run_coroutine_threadsafe(daemon._write(payload), loop)
         try:
             return bool(fut.result(timeout=3))

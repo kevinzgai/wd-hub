@@ -56,6 +56,25 @@ static double json_double(const cJSON *root, const char *key, double def)
     return cJSON_IsNumber(it) ? it->valuedouble : def;
 }
 
+// cJSON_IsTrue() 只认 JSON 字面量 true，对 1 / "1" 一律返回 false。
+// 而 cfg.beep_test 在主机侧的早期实现里就是数字 1（另一条固件线的
+// wb_json_bool 把「非 0 数字」当 true，所以那里一直正常）。移植时直接换成
+// cJSON_IsTrue，试听标志就被静默吞掉了。这里按「真值」语义兼容三种写法，
+// 让新旧主机下发的 cfg 都能被正确识别。
+static bool json_bool(const cJSON *root, const char *key, bool def)
+{
+    const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
+    if (!it) return def;
+    if (cJSON_IsTrue(it)) return true;
+    if (cJSON_IsFalse(it)) return false;
+    if (cJSON_IsNumber(it)) return it->valuedouble != 0.0;
+    if (cJSON_IsString(it) && it->valuestring) {
+        return strcmp(it->valuestring, "1") == 0 ||
+               strcmp(it->valuestring, "true") == 0;
+    }
+    return def;
+}
+
 static void decode_status(const cJSON *root, wb_ev_t *ev)
 {
     ev->count = json_int(root, "count", 0);
@@ -185,7 +204,7 @@ bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev)
     } else if (strcmp(t, "cfg") == 0) {
         ev->type = WB_EV_CFG;
         ev->beep_vol = json_int(root, "beep_vol", -1);
-        ev->beep_test = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "beep_test"));
+        ev->beep_test = json_bool(root, "beep_test", false);
         ok = ev->beep_vol >= 0;
     } else if (strcmp(t, "msg") == 0) {
         ev->type = WB_EV_MSG;

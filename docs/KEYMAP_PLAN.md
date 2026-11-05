@@ -658,3 +658,60 @@ y=274 三键栏：UP/DOWN 移动 | OK 进入 | 长按DOWN 关闭
 （`eepse…4.1-`）。加宽到 92px 也只能多放 1 个字符，无法根治 —— 240px 宽的
 屏装不下「名字 + 条 + 数字」三者。要彻底静态可读，只能让主机端为设备单独发
 更短的名字（≤10 字符），需改协议，留待后续。
+
+### B.8.8 试听提示音失效 + 重连补推 cfg（2026-11-06 00:40 修，实机通过）
+
+**现象**：控制台点「试听」按钮，`/api/test-beep` 返回 `ok:true`，设备却不出声。
+
+**根因：JSON 类型不匹配，不是链路问题。**
+
+| 侧 | 行为 |
+|---|---|
+| 主机 `wb_app.py:_send_beep_cfg` | 落帧 `{"type":"cfg","beep_vol":100,"beep_test":1}` —— **数字 1** |
+| 固件 `wb_proto.c` | `ev->beep_test = cJSON_IsTrue(...)` —— `cJSON_IsTrue` 只认字面量 `true`，对 `cJSON_Number` **恒返回 false** |
+
+于是 `s_test_beep` 从不置位，`wb_biz_take_test_beep()` 恒 false，
+`app_wb.cc` 的 `wb_audio_play(WB_SFX_CONNECTED)` 分支永远进不去。
+主机已成功写出帧、设备也回了 `OK_CFG`，所以从日志上完全看不出异常。
+
+**为什么只有这条固件线坏**：`firmware/main/wb_proto.c` 用的是自研
+`wb_json_bool()`，`WB_JSON_NUM` 分支返回 `num != 0.0`，数字 1 一直是 true。
+移植到 passport-fw 时换成 cJSON 的 `cJSON_IsTrue`，语义被悄悄缩窄了。
+同一个 `wb_app.py` 里 `_build_host_frame` 的注释早就写过「设备固件用
+cJSON_IsTrue 解析 secret/cli，所以必须发 JSON bool，不能发 0/1」——
+`beep_test` 漏了这条约定。
+
+**修法（两端都改）**：
+
+| 文件 | 改动 |
+|---|---|
+| `host/wb_app.py` | `beep_test: 1` → `beep_test: True`，与 `secret`/`cli` 约定对齐；老固件的 `wb_json_bool` 也认 true，不退化 |
+| `passport-fw/main/wb/wb_proto.c` | 新增 `json_bool()`，兼容 bool / 非 0 数字 / `"1"` / `"true"`；cfg 分支改用它。**即使主机没重启、仍在发数字 1，试听也能用** |
+| `passport-fw/main/wb/wb_biz.c` | cfg 处理加一行 `提示音配置 vol=%d test=%d` 日志，现场能直接区分「补推」和「试听」 |
+
+**「重连自动下发」的行为澄清**：`_device_watch_loop` 用连接代次判重，
+每次新链路只补推一帧 `cfg`（`_push_beep_cfg`，**不带 beep_test**），
+目的是把 PC 侧持久化的音量写回设备（设备不落 NVS，断电回默认 100）。
+它本来就**不该响**。实测复位后拿到 `test=0`，符合预期。
+
+**实机验证**（`fw 1.3.0-passport` / 0 error，日志证据）：
+
+```
+[复位 → BLE 重连]
+I (10658) wb_biz:   提示音配置 vol=100 test=0        ← 自动补推，不响
+[点试听 ×2]
+I (40961) wb_biz:   提示音配置 vol=100 test=1
+I (41267) wb_audio: 播放 CONNECTED: 4160 帧(260ms), 累计 played=2
+I (45161) wb_biz:   提示音配置 vol=100 test=1
+I (45459) wb_audio: 播放 CONNECTED: 4160 帧(260ms), 累计 played=3
+```
+
+`played` 单调递增证明不是「收到帧但没播」，且试听可重复触发。
+
+**注意**：host daemon（PID 4713）本次**没有重启** —— macOS 蓝牙 TCC 权限要求
+由 GUI 终端启动，从后台 shell 拉起会 `TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION`。
+所以本次实测走的是「主机发数字 1 + 新固件兼容」这条路径；主机侧改成
+`true` 的改动要等下次正常重启才生效，届时固件同样认得。**不重启也能用。**
+
+**验证脚本**：`/tmp/wb_verify_beep.py`（RTS 脉冲强制复位制造真实重连，
+再两次 POST `/api/test-beep`，比对 `test=` 标记与 `played` 计数）。
