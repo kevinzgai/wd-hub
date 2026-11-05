@@ -1,0 +1,106 @@
+{
+  "success": true,
+  "outcome": "passed",
+  "repairable": true,
+  "terminalViolations": [],
+  "terminalBlockingSummary": null,
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.10.13.09.48.16",
+    "version_source": "skill-release-manifest.json",
+    "runtime_skill_dir": null,
+    "recorded_at": null,
+    "expected_version": "2026.10.13.09.48.16",
+    "status": "matched",
+    "read_status": "loaded"
+  },
+  "operatingMode": "free-explore",
+  "renderBlockingErrorCount": 0,
+  "softWarningCount": 2,
+  "renderBlockingErrors": [],
+  "errorSignatures": [],
+  "softWarnings": [
+    "[repair-ledger] validationRepairLedger[0].repairActions[0].preEditFileHashes[] is missing (legacy optional evidence)",
+    "[repair-ledger] validationRepairLedger[0].repairActions[0].postEditFileHashes[] is missing (legacy optional evidence)"
+  ],
+  "repairPlanHints": [],
+  "repairActionTable": [],
+  "errorCount": 0,
+  "warningCount": 2,
+  "errors": [],
+  "warnings": [
+    "[repair-ledger] validationRepairLedger[0].repairActions[0].preEditFileHashes[] is missing (legacy optional evidence)",
+    "[repair-ledger] validationRepairLedger[0].repairActions[0].postEditFileHashes[] is missing (legacy optional evidence)"
+  ],
+  "validationRunDisciplineStatus": {
+    "declared": true,
+    "restoreMode": false,
+    "maxFullValidationRuns": null,
+    "validationHistoryCount": 2,
+    "repairLedgerCount": 1,
+    "softWarningsTriggerRepair": null,
+    "terminalState": null,
+    "nextAction": null,
+    "violations": [],
+    "success": true
+  },
+  "terminalState": null,
+  "nextCheck": {
+    "type": "finish-readiness",
+    "command": "node '/Users/kevin/.trae-cn/plugins/trae-remote-official/trae-design/0.1.3/skills/solo-design/shared-runtime/deterministic-tooling/validate-finish-readiness.mjs' '/Users/kevin/WebstormProjects/xiaozhi-workbuddy-board/wd-hub-design' --check=all",
+    "fullValidationAllowed": false,
+    "reason": "workspace validation passed; run complete finish readiness before final delivery"
+  },
+  "repairBatch": [],
+  "repairContextPacket": {
+    "schema_version": "1.0",
+    "purpose": "small-context repair packet; read this before full validation-report.json",
+    "success": true,
+    "terminalState": null,
+    "skillProvenance": {
+      "name": "solo-design",
+      "version": "2026.10.13.09.48.16",
+      "version_source": "skill-release-manifest.json",
+      "runtime_skill_dir": null,
+      "recorded_at": null,
+      "expected_version": "2026.10.13.09.48.16",
+      "status": "matched",
+      "read_status": "loaded"
+    },
+    "renderBlockingErrorCount": 0,
+    "softWarningCount": 2,
+    "renderBlockingErrors": [],
+    "repairActionTable": [],
+    "nextCheck": {
+      "type": "finish-readiness",
+      "command": "node '/Users/kevin/.trae-cn/plugins/trae-remote-official/trae-design/0.1.3/skills/solo-design/shared-runtime/deterministic-tooling/validate-finish-readiness.mjs' '/Users/kevin/WebstormProjects/xiaozhi-workbuddy-board/wd-hub-design' --check=all",
+      "fullValidationAllowed": false,
+      "reason": "workspace validation passed; run complete finish readiness before final delivery"
+    },
+    "forbidden": [
+      "do not read validator source",
+      "do not rerun full validation when nextCheck.fullValidationAllowed=false",
+      "do not start preview/browser unless user explicitly asks",
+      "do not hand-edit repair ledger fields"
+    ]
+  },
+  "projectFileHashes": {
+    "wd-hub-design.design": "b1a95457f9c9eef3c52d3862d825c5640d921342c875f696e9a972e8c1b0320a",
+    "colors_and_type.css": "ff349e2e57f959704b1aa6338fd9a07dfbb7a73f866aebbb112eb68edd7bd825",
+    "runtime-orchestration-summary.json": "61eaf59956d2537e7bc91f3f0e90959eb88f3268011da851c0034c084126689e",
+    "pages/approval.html": "925a738bb61d26fc531d8fcfe031952cc01ec1906300e613ddc7494bbc954f28",
+    "pages/ask.html": "c5df0f86db9fcfb06e4d6083358c7249eb3a68ad27ed33ef8d672d2433c4c47c",
+    "pages/direction-cyber.html": "9c1745c79d081aa26a69590e46d97ad193c62ee8f84b9a10097c7baffcd6fcd4",
+    "pages/direction-minimal.html": "1441e28b21d69bf1eadb0522e3da9e6bfc358ce5c8a19e886aad451a86b2fbe3",
+    "pages/direction-pixel.html": "6a16ad9e31c1478eb8f3468b8ddc183d9bdcd9fcc1fa8ef5a660b23402352426",
+    "pages/link.html": "e7d2af0f48569aff0aaa4b13f8166b49a40d578dc39d5575e564be56fc348ca6",
+    "pages/sessions.html": "70e3372e01a8cca0fc9cd72173d3b5eb5dee42b676ad0b696677e95bf5fae90f",
+    "pages/standby.html": "554cb265f68545e41b2aa9cefa2f3f2eae02436afc214c1875f00437d829649a",
+    "pages/status.html": "8220ef644920f195a56d163f7beebf410206053c3ac53d278d5c928bc9eee4c2",
+    "pages/usage.html": "f98ba1043a9464799b8b3c9ca1c105afd8b637f2f14b2365bc35ee65d8fd169f"
+  },
+  "designDir": "/Users/kevin/WebstormProjects/xiaozhi-workbuddy-board/wd-hub-design",
+  "expectedPages": null,
+  "requireInteractions": null,
+  "checkedAt": "2026-11-03T13:47:46.016Z"
+}

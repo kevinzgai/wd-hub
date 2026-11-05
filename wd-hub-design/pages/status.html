@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>01 状态总览 · WD Hub</title>
+    <style id="theme-vars">
+:root {
+  /* Official passport-os travel palette, unchanged hue family. */
+  --wd-background: #181B1C;
+  --wd-foreground: #EEE7D6;
+  --wd-card: #202526;
+  --wd-card-foreground: #EEE7D6;
+  --wd-primary: #DDB36C;
+  --wd-primary-foreground: #181B1C;
+  --wd-muted: #303738;
+  --wd-muted-foreground: #B3B2A5;
+  --wd-border: #59605D;
+  --wd-input: #303738;
+  --wd-ring: #DDB36C;
+  --wd-destructive: #F09B87;
+  --wd-destructive-foreground: #181B1C;
+
+  /* Real semantic states only. */
+  --state-success: #9DB89A;
+  --state-warning: #DDB36C;
+  --state-error: #F09B87;
+  --state-info: #B3B2A5;
+
+  /* Pixel geometry tokens. */
+  --wd-radius-sm: 0px;
+  --wd-radius-md: 4px;
+  --wd-radius-lg: 6px;
+
+  --wd-font-cjk: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --wd-font-num: "Montserrat", "DIN Alternate", "Helvetica Neue", Arial, sans-serif;
+  --wd-font-command: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+
+/* ---------- Device board ---------- */
+.board {
+  width: 240px;
+  height: 320px;
+  position: relative;
+  overflow: hidden;
+  background: var(--wd-background);
+  color: var(--wd-foreground);
+  font-family: var(--wd-font-cjk);
+  font-size: 16px;
+  line-height: 20px;
+  letter-spacing: 0;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+}
+
+.board *,
+.board *::before,
+.board *::after {
+  box-sizing: border-box;
+}
+
+.abs {
+  position: absolute;
+}
+
+/* ---------- Header 0..32 ---------- */
+.hd {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 240px;
+  height: 32px;
+  background: var(--wd-muted);
+  border-bottom: 1px solid var(--wd-border);
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+}
+
+.hd-idx {
+  width: 22px;
+  height: 18px;
+  flex: 0 0 22px;
+  background: var(--wd-primary);
+  color: var(--wd-primary-foreground);
+  font-size: 16px;
+  line-height: 18px;
+  text-align: center;
+  font-family: var(--wd-font-num);
+}
+
+.hd-title {
+  margin-left: 6px;
+  color: var(--wd-foreground);
+  font-size: 16px;
+  line-height: 20px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.hd-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  color: var(--wd-muted-foreground);
+  font-size: 16px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.hd-meta.is-ok {
+  color: var(--state-success);
+}
+
+.hd-meta.is-warn {
+  color: var(--state-warning);
+}
+
+.hd-meta.is-danger {
+  color: var(--state-error);
+}
+
+/* ---------- Footer 294..316 ---------- */
+.ft {
+  position: absolute;
+  left: 4px;
+  top: 294px;
+  width: 232px;
+  height: 22px;
+  background: var(--wd-card);
+  border: 1px solid var(--wd-border);
+  border-radius: var(--wd-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wd-muted-foreground);
+  font-size: 16px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.ft .on {
+  color: var(--wd-primary);
+}
+
+/* ---------- Content primitives ---------- */
+.card {
+  background: var(--wd-card);
+  border: 1px solid var(--wd-border);
+  border-radius: var(--wd-radius-md);
+}
+
+.card.rail-primary {
+  border-left: 3px solid var(--wd-primary);
+}
+
+.card.rail-danger {
+  border-left: 3px solid var(--state-error);
+}
+
+.card.rail-success {
+  border-left: 3px solid var(--state-success);
+}
+
+.label {
+  color: var(--wd-muted-foreground);
+  font-size: 16px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.label.on {
+  color: var(--wd-primary);
+}
+
+.num16 {
+  font-family: var(--wd-font-cjk);
+  font-size: 16px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.label.strong {
+  color: var(--wd-foreground);
+}
+
+.num {
+  font-family: var(--wd-font-num);
+  font-size: 32px;
+  line-height: 32px;
+  font-weight: 500;
+  letter-spacing: -0.5px;
+  color: var(--wd-primary);
+}
+
+.num.ink {
+  color: var(--wd-foreground);
+}
+
+.num.danger {
+  color: var(--state-error);
+}
+
+.rule {
+  background: var(--wd-border);
+  height: 1px;
+}
+
+.dot {
+  width: 4px;
+  height: 4px;
+  flex: 0 0 4px;
+  background: var(--wd-muted-foreground);
+  display: inline-block;
+  margin-right: 5px;
+}
+
+.dot.ok { background: var(--state-success); }
+.dot.warn { background: var(--state-warning); }
+.dot.err { background: var(--state-error); }
+.dot.idle { background: var(--wd-muted-foreground); }
+
+/* ---------- Progress / usage bars ---------- */
+.bar {
+  position: relative;
+  height: 8px;
+  background: var(--wd-muted);
+  border: 1px solid var(--wd-border);
+}
+
+.bar > i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  display: block;
+  background: var(--wd-primary);
+}
+
+.bar.thin {
+  height: 6px;
+}
+
+/* ---------- Option rows ---------- */
+.opt {
+  display: flex;
+  align-items: center;
+  background: var(--wd-card);
+  border: 1px solid var(--wd-border);
+  color: var(--wd-foreground);
+  font-size: 16px;
+  line-height: 16px;
+  padding: 0 6px;
+}
+
+.opt.sel {
+  background: var(--wd-primary);
+  border-color: var(--wd-primary);
+  color: var(--wd-primary-foreground);
+}
+
+.opt-key {
+  width: 16px;
+  flex: 0 0 16px;
+  font-family: var(--wd-font-num);
+  font-size: 16px;
+  line-height: 16px;
+  color: var(--wd-muted-foreground);
+}
+
+.opt.sel .opt-key {
+  color: var(--wd-primary-foreground);
+}
+
+.opt-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.opt-mark {
+  margin-left: auto;
+  width: 4px;
+  height: 4px;
+  flex: 0 0 4px;
+  background: var(--wd-primary);
+}
+
+.opt.sel .opt-mark {
+  background: var(--wd-background);
+}
+
+/* ---------- Command lines ---------- */
+.cmd {
+  font-family: var(--wd-font-command);
+  font-size: 16px;
+  line-height: 20px;
+  color: var(--wd-foreground);
+}
+
+.cmdline {
+  display: flex;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+.cmdline .ln {
+  width: 22px;
+  flex: 0 0 22px;
+  color: var(--wd-muted-foreground);
+}
+
+.cmdline .tx {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Action blocks ---------- */
+.act {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 16px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.act.allow {
+  background: var(--state-success);
+  border-color: var(--state-success);
+  color: var(--wd-primary-foreground);
+}
+
+.act.deny {
+  background: var(--state-error);
+  border-color: var(--state-error);
+  color: var(--wd-primary-foreground);
+}
+
+.act.quiet {
+  background: var(--wd-card);
+  border-color: var(--wd-border);
+  color: var(--wd-muted-foreground);
+}
+
+/* ---------- Standby ---------- */
+.clock {
+  font-family: var(--wd-font-num);
+  font-size: 32px;
+  line-height: 32px;
+  font-weight: 500;
+  letter-spacing: 1px;
+  color: var(--wd-primary);
+}
+
+.brand {
+  font-family: var(--wd-font-num);
+  font-size: 16px;
+  line-height: 16px;
+  letter-spacing: 4px;
+  color: var(--wd-muted-foreground);
+}
+
+.standby-hint {
+  color: var(--wd-muted-foreground);
+  font-size: 16px;
+  line-height: 16px;
+  text-align: center;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--wd-background);
+    --color-foreground: var(--wd-foreground);
+    --color-card: var(--wd-card);
+    --color-card-foreground: var(--wd-card-foreground);
+    --color-primary: var(--wd-primary);
+    --color-primary-foreground: var(--wd-primary-foreground);
+    --color-muted: var(--wd-muted);
+    --color-muted-foreground: var(--wd-muted-foreground);
+    --color-destructive: var(--wd-destructive);
+    --color-destructive-foreground: var(--wd-destructive-foreground);
+    --color-border: var(--wd-border);
+    --color-input: var(--wd-input);
+    --color-ring: var(--wd-ring);
+    --radius-sm: var(--wd-radius-sm);
+    --radius-md: var(--wd-radius-md);
+    --radius-lg: var(--wd-radius-lg);
+  }
+  @layer base {
+    body { background: var(--wd-background); color: var(--wd-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--wd-background); }
+      .text-background { color: var(--wd-background); }
+      .border-background { border-color: var(--wd-background); }
+      .ring-background { --tw-ring-color: var(--wd-background); }
+      .bg-foreground { background-color: var(--wd-foreground); }
+      .text-foreground { color: var(--wd-foreground); }
+      .border-foreground { border-color: var(--wd-foreground); }
+      .ring-foreground { --tw-ring-color: var(--wd-foreground); }
+      .bg-card { background-color: var(--wd-card); }
+      .text-card { color: var(--wd-card); }
+      .border-card { border-color: var(--wd-card); }
+      .ring-card { --tw-ring-color: var(--wd-card); }
+      .bg-card-foreground { background-color: var(--wd-card-foreground); }
+      .text-card-foreground { color: var(--wd-card-foreground); }
+      .border-card-foreground { border-color: var(--wd-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--wd-card-foreground); }
+      .bg-primary { background-color: var(--wd-primary); }
+      .text-primary { color: var(--wd-primary); }
+      .border-primary { border-color: var(--wd-primary); }
+      .ring-primary { --tw-ring-color: var(--wd-primary); }
+      .bg-primary-foreground { background-color: var(--wd-primary-foreground); }
+      .text-primary-foreground { color: var(--wd-primary-foreground); }
+      .border-primary-foreground { border-color: var(--wd-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--wd-primary-foreground); }
+      .bg-muted { background-color: var(--wd-muted); }
+      .text-muted { color: var(--wd-muted); }
+      .border-muted { border-color: var(--wd-muted); }
+      .ring-muted { --tw-ring-color: var(--wd-muted); }
+      .bg-muted-foreground { background-color: var(--wd-muted-foreground); }
+      .text-muted-foreground { color: var(--wd-muted-foreground); }
+      .border-muted-foreground { border-color: var(--wd-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--wd-muted-foreground); }
+      .bg-destructive { background-color: var(--wd-destructive); }
+      .text-destructive { color: var(--wd-destructive); }
+      .border-destructive { border-color: var(--wd-destructive); }
+      .ring-destructive { --tw-ring-color: var(--wd-destructive); }
+      .bg-destructive-foreground { background-color: var(--wd-destructive-foreground); }
+      .text-destructive-foreground { color: var(--wd-destructive-foreground); }
+      .border-destructive-foreground { border-color: var(--wd-destructive-foreground); }
+      .ring-destructive-foreground { --tw-ring-color: var(--wd-destructive-foreground); }
+      .bg-border { background-color: var(--wd-border); }
+      .text-border { color: var(--wd-border); }
+      .border-border { border-color: var(--wd-border); }
+      .ring-border { --tw-ring-color: var(--wd-border); }
+      .bg-input { background-color: var(--wd-input); }
+      .text-input { color: var(--wd-input); }
+      .border-input { border-color: var(--wd-input); }
+      .ring-input { --tw-ring-color: var(--wd-input); }
+      .bg-ring { background-color: var(--wd-ring); }
+      .text-ring { color: var(--wd-ring); }
+      .border-ring { border-color: var(--wd-ring); }
+      .ring-ring { --tw-ring-color: var(--wd-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased" style="margin:0;background:var(--wd-background);display:flex;justify-content:center;align-items:flex-start;">
+    <main style="width:240px;height:320px;flex:0 0 240px;">
+      <div class="board">
+        <header class="hd">
+          <span class="hd-idx">1</span>
+          <span class="hd-title">状态总览</span>
+          <span class="hd-meta is-ok"><i class="dot ok"></i>已连接</span>
+        </header>
+
+        <section class="card rail-primary abs" style="left:4px;top:38px;width:232px;height:92px;">
+          <div class="abs label" style="left:8px;top:6px;">剩余额度</div>
+          <div class="abs label" style="right:8px;top:6px;display:flex;align-items:center;color:var(--state-success);"><i class="dot ok"></i>正常</div>
+          <div class="abs num" style="left:8px;top:24px;">820</div>
+          <div class="abs label" style="right:8px;top:26px;width:80px;text-align:right;">总额 1000</div>
+          <div class="abs label" style="right:8px;top:46px;width:80px;text-align:right;">已用 180</div>
+          <div class="abs bar" style="left:8px;top:72px;width:214px;"><i style="width:82%;"></i></div>
+        </section>
+
+        <section class="card abs" style="left:4px;top:136px;width:232px;height:100px;">
+          <div class="abs label" style="left:8px;top:4px;">会话</div>
+          <div class="abs label" style="right:8px;top:4px;display:flex;align-items:center;color:var(--state-success);"><i class="dot ok"></i>2 运行</div>
+          <div class="abs rule" style="left:8px;top:26px;width:216px;"></div>
+
+          <div class="abs" style="left:8px;right:8px;top:31px;height:20px;display:flex;align-items:center;">
+            <span class="label" style="width:22px;">01</span>
+            <span class="label strong" style="width:108px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Trae 编码</span>
+            <span class="label" style="margin-left:auto;display:flex;align-items:center;color:var(--state-success);"><i class="dot ok"></i>运行</span>
+            <span class="num16" style="width:40px;text-align:right;padding-left:4px;color:var(--wd-primary);">12.4</span>
+          </div>
+
+          <div class="abs" style="left:8px;right:8px;top:53px;height:20px;display:flex;align-items:center;">
+            <span class="label" style="width:22px;">02</span>
+            <span class="label strong" style="width:108px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Claude Code</span>
+            <span class="label" style="margin-left:auto;display:flex;align-items:center;color:var(--state-success);"><i class="dot ok"></i>运行</span>
+            <span class="num16" style="width:40px;text-align:right;padding-left:4px;color:var(--wd-primary);">4.8</span>
+          </div>
+
+          <div class="abs" style="left:8px;right:8px;top:75px;height:20px;display:flex;align-items:center;">
+            <span class="label" style="width:22px;">03</span>
+            <span class="label strong" style="width:108px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Local Shell</span>
+            <span class="label" style="margin-left:auto;display:flex;align-items:center;"><i class="dot err"></i>等待</span>
+            <span class="num16" style="width:36px;text-align:right;color:var(--wd-muted-foreground);">0.0</span>
+          </div>
+        </section>
+
+        <section class="card abs" style="left:4px;top:242px;width:232px;height:44px;">
+          <div class="abs" style="left:8px;right:8px;top:4px;height:20px;display:flex;align-items:center;">
+            <span class="label" style="width:64px;">主机时间</span>
+            <span class="num16" style="color:var(--wd-primary);margin-left:4px;">14:32:08</span>
+            <span class="label" style="margin-left:auto;">下行 128</span>
+          </div>
+          <div class="abs" style="left:8px;right:8px;top:24px;height:16px;display:flex;align-items:center;">
+            <span class="label" style="width:64px;">最近事件</span>
+            <span class="label strong" style="display:flex;align-items:center;margin-left:4px;"><i class="dot err"></i>审批 · Bash</span>
+          </div>
+        </section>
+
+        <footer class="ft"><span class="on">OK</span>&nbsp;总览&nbsp;&nbsp;·&nbsp;&nbsp;↑↓ 翻页</footer>
+      </div>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

@@ -1,0 +1,239 @@
+{
+  "data": [
+    {
+      "id": "page-direction-pixel",
+      "title": "方向 A · 仪表像素（推荐）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-dbae00d6",
+          "measuredAt": 1793713904368
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/direction-pixel.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-direction-cyber",
+      "title": "方向 B · 赛博终端",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 293,
+        "y": 0,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-0b78152d",
+          "measuredAt": 1793713904368
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/direction-cyber.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-direction-minimal",
+      "title": "方向 C · 极简深色",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 586,
+        "y": 0,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-a62475cd",
+          "measuredAt": 1793713904368
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/direction-minimal.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-status",
+      "title": "01 状态总览",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 0,
+        "y": 285,
+        "group": 1,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-fe75133d",
+          "measuredAt": 1793713904368
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/status.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-sessions",
+      "title": "02 会话列表",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 293,
+        "y": 285,
+        "group": 1,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-11cab198",
+          "measuredAt": 1793713904368
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/sessions.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-usage",
+      "title": "03 今日消耗",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 586,
+        "y": 285,
+        "group": 1,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-d7badf9b",
+          "measuredAt": 1793713904368
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/usage.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-link",
+      "title": "04 关于 / 链路",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 879,
+        "y": 285,
+        "group": 1,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-de94c006",
+          "measuredAt": 1793713904368
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/link.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-approval",
+      "title": "05 审批",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 1172,
+        "y": 285,
+        "group": 1,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-becaef9d",
+          "measuredAt": 1793719547187
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/approval.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-ask",
+      "title": "06 提问",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 1465,
+        "y": 285,
+        "group": 1,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-826c4c2b",
+          "measuredAt": 1793713904368
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/ask.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-standby",
+      "title": "07 待机",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1793664000000,
+      "canvasData": {
+        "x": 1758,
+        "y": 285,
+        "group": 1,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 600,
+          "viewportWidth": 800,
+          "sourceHash": "fnv1a-44f21cf3",
+          "measuredAt": 1793719547187
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/standby.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "freeSize",
+    "projectName": "WD Hub 界面设计"
+  }
+}

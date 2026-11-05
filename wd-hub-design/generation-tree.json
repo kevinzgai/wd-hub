@@ -1,0 +1,25 @@
+{
+  "project": "wd-hub-design",
+  "generationStrategy": "shared-css-only",
+  "sharedResources": [
+    {
+      "path": "colors_and_type.css",
+      "role": "brand tokens, device-board primitives, header/footer/card/option/bar/action classes",
+      "consumers": "all pages"
+    }
+  ],
+  "leafPages": [
+    { "pageId": "page-direction-pixel", "htmlSrc": "pages/direction-pixel.html", "group": 0, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-direction-cyber", "htmlSrc": "pages/direction-cyber.html", "group": 0, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-direction-minimal", "htmlSrc": "pages/direction-minimal.html", "group": 0, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-status", "htmlSrc": "pages/status.html", "group": 1, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-sessions", "htmlSrc": "pages/sessions.html", "group": 1, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-usage", "htmlSrc": "pages/usage.html", "group": 1, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-link", "htmlSrc": "pages/link.html", "group": 1, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-approval", "htmlSrc": "pages/approval.html", "group": 1, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-ask", "htmlSrc": "pages/ask.html", "group": 1, "inherits": ["colors_and_type.css"] },
+    { "pageId": "page-standby", "htmlSrc": "pages/standby.html", "group": 1, "inherits": ["colors_and_type.css"] }
+  ],
+  "pageSubAgents": [],
+  "notes": "Generated in-context by the Main Agent because the 240x320 pixel geometry is a single shared constraint and ten independent page agents would risk coordinate drift. No partial HTML fragments are needed."
+}

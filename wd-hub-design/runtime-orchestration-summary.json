@@ -1,0 +1,712 @@
+{
+  "schemaVersion": "1.0",
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.10.13.09.48.16",
+    "version_source": "skill-release-manifest.json",
+    "schema_version": "1.0",
+    "release": "canonical-image-node-append-plugin-0.1.3",
+    "read_status": "loaded"
+  },
+  "project": {
+    "projectName": "WD Hub 界面设计",
+    "resolvedLane": "complex_html_page",
+    "intentProfile": "multi-page embedded device UI, fixed 240x320, physical-key navigation",
+    "selectedIntentWorkflowRead": true,
+    "deviceType": "freeSize",
+    "contextRequirementsLoaded": [
+      {
+        "path": "intent-workflows/intent-project-complex-build/INTENT_WORKFLOW.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "shared-runtime/runtime-boundaries/lane-runtime-contracts.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "shared-runtime/agent-dispatch-runtime/lane-dispatch-index.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "shared-runtime/agent-dispatch-runtime/shared-page-rendering-kernel.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "shared-runtime/orchestration-summary-contract/orchestration-summary-contract.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "shared-runtime/orchestration-summary-contract/generalized-flow-control-fields.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "shared-runtime/design-artifact-formats/design-project-file-format.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "shared-runtime/html-rendering-primitives/shared-html-rendering-primitives.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "intent-workflows/intent-project-complex-build/02-page-composition.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "intent-workflows/intent-project-complex-build/03-interaction-validation-delivery.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "intent-workflows/intent-project-complex-build/orchestration-summary-fields.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "delivery-quality/page-rendering-quality-gate.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "delivery-quality/design-artifact-validation.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "delivery-quality/delivery-evidence-contract.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "visual-experience/visual-checkpoint-protocol.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      },
+      {
+        "path": "visual-experience/visual-experience-guidelines.md",
+        "readStatus": "loaded",
+        "bodyRead": true,
+        "recordedAt": "2026-11-03T19:40:00+08:00"
+      }
+    ],
+    "contextReadScope": "Selected complex_html_page lane only, plus the declared shared runtime references. No other lane workflow was read. Existing firmware files were read only for palette, geometry, and seven-page content constraints.",
+    "readScopeLedger": [
+      {
+        "scope": "selected-lane-only",
+        "paths": [
+          "intent-workflows/intent-project-complex-build/**",
+          "shared-runtime/runtime-boundaries/lane-runtime-contracts.md",
+          "shared-runtime/agent-dispatch-runtime/**",
+          "shared-runtime/orchestration-summary-contract/**",
+          "shared-runtime/design-artifact-formats/design-project-file-format.md",
+          "shared-runtime/html-rendering-primitives/shared-html-rendering-primitives.md",
+          "delivery-quality/**",
+          "visual-experience/**"
+        ],
+        "declaredAt": "2026-11-03T19:40:00+08:00"
+      }
+    ],
+    "dispatchPreflightManifest": [],
+    "expectedDispatches": [],
+    "inContextGenerationReason": "Ten 240x320 boards share one exact pixel grid and one token sheet. Independent page sub-agents would have to duplicate coordinate decisions and would risk drift at the 1px level, so the Main Agent generated the static pages in-context. This is the workflow's permitted fallback when a fully constrained dispatch cannot be assembled; no sub-agent wrote any file.",
+    "generationTree": {
+      "project": "wd-hub-design",
+      "generationStrategy": "shared-css-only",
+      "sharedResources": [
+        {
+          "path": "colors_and_type.css",
+          "role": "brand tokens, device-board primitives, header/footer/card/option/bar/action classes",
+          "consumers": "all pages"
+        }
+      ],
+      "leafPages": [
+        {
+          "pageId": "page-direction-pixel",
+          "htmlSrc": "pages/direction-pixel.html",
+          "group": 0,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-direction-cyber",
+          "htmlSrc": "pages/direction-cyber.html",
+          "group": 0,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-direction-minimal",
+          "htmlSrc": "pages/direction-minimal.html",
+          "group": 0,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-status",
+          "htmlSrc": "pages/status.html",
+          "group": 1,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-sessions",
+          "htmlSrc": "pages/sessions.html",
+          "group": 1,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-usage",
+          "htmlSrc": "pages/usage.html",
+          "group": 1,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-link",
+          "htmlSrc": "pages/link.html",
+          "group": 1,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-approval",
+          "htmlSrc": "pages/approval.html",
+          "group": 1,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-ask",
+          "htmlSrc": "pages/ask.html",
+          "group": 1,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        },
+        {
+          "pageId": "page-standby",
+          "htmlSrc": "pages/standby.html",
+          "group": 1,
+          "inherits": [
+            "colors_and_type.css"
+          ]
+        }
+      ],
+      "pageSubAgents": [],
+      "notes": "Static HTML pages; no partials; no image assets."
+    },
+    "cssPreflightEvidence": {
+      "script": "shared-runtime/deterministic-tooling/apply-html-head-contract.mjs",
+      "status": "passed",
+      "tailwindInfrastructure": "browser CDN present per contract; page visuals use project CSS, not Tailwind utilities",
+      "themeVarsInlined": true,
+      "brandPrimary": "#DDB36C",
+      "semanticStateTokens": [
+        "--state-success",
+        "--state-warning",
+        "--state-error",
+        "--state-info"
+      ],
+      "secondaryOrAccentTokens": "not defined (free-explore single-primary policy)",
+      "runAt": "2026-11-03T19:55:00+08:00"
+    },
+    "mobileNavigation": {
+      "applicable": false,
+      "reason": "Fixed 240x320 embedded board, no touch screen, no scroll container. Navigation is physical UP/DOWN/OK only; preview page switching happens via canvas thumbnails."
+    },
+    "sourceAuthorityLock": {
+      "visualAuthority": "user-brief + official passport-os pixel palette and 240x320 geometry",
+      "contentSupplement": "main/ui/ui_pixel.c, main/ui/ui_palette.h, main/console/wb_view.c",
+      "browserObservationRole": "targeted-verification-only",
+      "mayOverrideVisualAuthority": false,
+      "lockedBeforeDispatch": true
+    },
+    "visualQualityCheckpoints": [
+      {
+        "checkpointId": "vq-anchor",
+        "dimension": "visual-anchor",
+        "expected": "Quota number 820 and its progress bar are the first-read anchor on status; tool+command is the anchor on approval",
+        "evidenceTarget": "pages/status.html#quota-card"
+      },
+      {
+        "checkpointId": "vq-hierarchy",
+        "dimension": "information-hierarchy",
+        "expected": "Header 32 / content 38-288 / footer 22; one 32px numeral per page, 16px for all supporting copy",
+        "evidenceTarget": "pages/status.html"
+      },
+      {
+        "checkpointId": "vq-structure",
+        "dimension": "composition-structure",
+        "expected": "Cards align to x=4 w=232; 6px rhythm; no scroll; one-screen completion",
+        "evidenceTarget": "pages/sessions.html"
+      },
+      {
+        "checkpointId": "vq-implementation",
+        "dimension": "implementation-strategy",
+        "expected": "Flat fills, 1px strokes, 3px rails and rectangles; no blur, gradient, or large images",
+        "evidenceTarget": "colors_and_type.css"
+      }
+    ],
+    "validationRunDiscipline": {
+      "workspaceValidator": "shared-runtime/deterministic-tooling/validate-design-workspace.mjs",
+      "reportPath": "wd-hub-design/validation-report.json",
+      "readinessValidator": "shared-runtime/deterministic-tooling/validate-finish-readiness.mjs",
+      "rule": "Run workspace validation once after all pages exist; record compact history; repair only blocking findings."
+    },
+    "lowValueCallWatchdog": {
+      "applies": true,
+      "noProgressSignals": [
+        "no_tool_call",
+        "no_artifact_diff",
+        "no_structured_decision"
+      ],
+      "noProgressNextAction": "enter_readiness_or_blocked_summary",
+      "recordedAt": "2026-11-03T19:40:00+08:00"
+    },
+    "validationHistory": [
+      {
+        "reportPath": "validation-report.json",
+        "reportHash": "46428e4a7075da79ea6630c10d12830c7c7d0d31b6d9e69cd6f63ab5083bc2ea",
+        "checkedAt": "2026-11-03T13:31:31.111Z",
+        "success": false,
+        "exitCode": 1,
+        "renderBlockingErrorCount": 9,
+        "repairPlanHints": [],
+        "errorSignatures": [
+          {
+            "errorClass": "directory-structure",
+            "normalized": "[directory-structure] Missing required directory: assets/",
+            "signature": "c78e26a864205b3d5e2ce8a2a5ce7a295d7b1ae82a70af3e0bbf90d6fe191bc2"
+          },
+          {
+            "errorClass": "graphic-layout-completeness",
+            "normalized": "[graphic-layout-completeness] deliverableCompletenessChecklist.requiredPagesOrAssets must be an array",
+            "signature": "c598476bdf136ae9f5488d1a3f9e29792c9ecd78d224ae40d2c9195ea9de8caa"
+          },
+          {
+            "errorClass": "graphic-layout-completeness",
+            "normalized": "[graphic-layout-completeness] deliverableCompletenessChecklist.requiredCopyBlocks must be an array",
+            "signature": "2acf89b3216390bfb8e499ca049546815238198bf635714746984304ca47e4c7"
+          },
+          {
+            "errorClass": "graphic-layout-completeness",
+            "normalized": "[graphic-layout-completeness] deliverableCompletenessChecklist.requiredInfoTypes must be an array",
+            "signature": "165b6a8fbe88261d95028b23e136b52f0fbe05fd39806b8571c16d08ed98093a"
+          },
+          {
+            "errorClass": "graphic-layout-completeness",
+            "normalized": "[graphic-layout-completeness] deliverableCompletenessChecklist.expectedPageCount must be a positive integer",
+            "signature": "221e3891c7bdb4ab4f4abd70a9d065d7e85689cd506908e48bcabd1a2c6d804b"
+          },
+          {
+            "errorClass": "graphic-layout-completeness",
+            "normalized": "[graphic-layout-completeness] deliverableCompletenessChecklist.actualPageCount must be a non-negative integer",
+            "signature": "94e63078ef0562bed0e7cda47b0b85dbf14182e9d2c187f489f4d7034f1d7a87"
+          },
+          {
+            "errorClass": "graphic-layout-completeness",
+            "normalized": "[graphic-layout-completeness] deliverableCompletenessChecklist.sourceMaterialCoverage must be complete or partial",
+            "signature": "2c8553ba88dd403bf79cab0f21a30672ff602b9cdcd8bca3fb8a4ac9fd8716ec"
+          },
+          {
+            "errorClass": "graphic-layout-completeness",
+            "normalized": "[graphic-layout-completeness] text-critical layout-static deliverables require complete sourceMaterialCoverage unless userApprovedReduction=true",
+            "signature": "c23f72f096c0b8c60d53c00c23c9d30ca763c8af4b6f65836b71e61243337dab"
+          },
+          {
+            "errorClass": "text-critical-layout",
+            "normalized": "[text-critical-layout] text-critical layout requires deliverableCompletenessChecklist.requiredCopyBlocks[]",
+            "signature": "e676bf26fcbe6ff0cb18eea2f74021be9140d0a3cd3e44d92b7f0f1cc7639573"
+          }
+        ],
+        "terminalState": null
+      },
+      {
+        "reportPath": "validation-report.json",
+        "reportHash": "727374cfebb7fde443c6f160b2f8f500411278fcf302d16063287ba861d054ba",
+        "checkedAt": "2026-11-03T13:47:46.016Z",
+        "success": true,
+        "exitCode": 0,
+        "renderBlockingErrorCount": 0,
+        "repairPlanHints": [],
+        "errorSignatures": [],
+        "terminalState": "passed"
+      }
+    ],
+    "validationRepairLedger": [
+      {
+        "failedReportPath": "validation-report.json",
+        "failedReportHash": "46428e4a7075da79ea6630c10d12830c7c7d0d31b6d9e69cd6f63ab5083bc2ea",
+        "repairWorkflowReadPath": "intent-workflows/intent-project-mutation/main-agent-repair-workflow.md",
+        "repairStartedAt": "2026-11-03T13:32:05.547Z",
+        "repairEntryStatus": "action-recorded-awaiting-revalidation",
+        "ownerTriage": [
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [],
+            "repairScope": "read validation report, classify owner, then use the narrowest targeted repair",
+            "strategy": "no validator source read; targeted affected-file excerpt only"
+          },
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [],
+            "repairScope": "read validation report, classify owner, then use the narrowest targeted repair",
+            "strategy": "no validator source read; targeted affected-file excerpt only"
+          },
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [],
+            "repairScope": "read validation report, classify owner, then use the narrowest targeted repair",
+            "strategy": "no validator source read; targeted affected-file excerpt only"
+          },
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [],
+            "repairScope": "read validation report, classify owner, then use the narrowest targeted repair",
+            "strategy": "no validator source read; targeted affected-file excerpt only"
+          },
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [],
+            "repairScope": "read validation report, classify owner, then use the narrowest targeted repair",
+            "strategy": "no validator source read; targeted affected-file excerpt only"
+          },
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [],
+            "repairScope": "read validation report, classify owner, then use the narrowest targeted repair",
+            "strategy": "no validator source read; targeted affected-file excerpt only"
+          },
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [],
+            "repairScope": "read validation report, classify owner, then use the narrowest targeted repair",
+            "strategy": "no validator source read; targeted affected-file excerpt only"
+          },
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [],
+            "repairScope": "read validation report, classify owner, then use the narrowest targeted repair",
+            "strategy": "no validator source read; targeted affected-file excerpt only"
+          }
+        ],
+        "repairPlanHints": [],
+        "repairActions": [
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [
+              "runtime-orchestration-summary.json",
+              "assets/"
+            ],
+            "action": "fix_assets_dir_and_deliverable_completeness_checklist_schema",
+            "observedFileHashes": [
+              {
+                "path": "runtime-orchestration-summary.json",
+                "hash": "2712bd4aba9dae4a8111243f9acdefb2f08273bbe8203b512ce25c7ebd9135cd"
+              }
+            ],
+            "preEditFileHashes": [],
+            "postEditFileHashes": [],
+            "repairOwnedFields": [
+              "unknown-blocking"
+            ],
+            "recordedAt": "2026-11-03T13:32:16.189Z",
+            "repairActionTableRequired": true
+          }
+        ],
+        "revalidationReportPath": "validation-report.json",
+        "revalidationReportHash": "727374cfebb7fde443c6f160b2f8f500411278fcf302d16063287ba861d054ba",
+        "revalidationSuccess": true,
+        "blockedReason": null
+      }
+    ],
+    "validationSnapshot": {
+      "status": "passed",
+      "reportPath": "validation-report.json",
+      "reportHash": "727374cfebb7fde443c6f160b2f8f500411278fcf302d16063287ba861d054ba",
+      "checkedAt": "2026-11-03T13:47:46.016Z",
+      "success": true,
+      "errorCount": 0,
+      "warningCount": 5,
+      "repairScopeRemaining": 0,
+      "nextAction": "NONE"
+    },
+    "artifactReadinessEvidence": {
+      "status": "passed",
+      "designFiles": ["wd-hub-design.design"],
+      "registeredPageCount": 10,
+      "registeredImageCount": 0,
+      "finishReadinessCheck": "all",
+      "finishReadinessSuccess": true,
+      "checkedAt": "2026-11-03T13:48:00.000Z"
+    },
+    "repairEntryEvidence": [
+      {
+        "failedReportPath": "validation-report.json",
+        "failedReportHash": "46428e4a7075da79ea6630c10d12830c7c7d0d31b6d9e69cd6f63ab5083bc2ea",
+        "repairWorkflowReadPath": "intent-workflows/intent-project-mutation/main-agent-repair-workflow.md",
+        "repairStartedAt": "2026-11-03T13:32:05.547Z",
+        "ledgerIndex": 0,
+        "ownerTriageCount": 8,
+        "repairActionCount": 1,
+        "revalidationReportPath": "validation-report.json",
+        "revalidationReportHash": "727374cfebb7fde443c6f160b2f8f500411278fcf302d16063287ba861d054ba",
+        "revalidationSuccess": true
+      }
+    ]
+  },
+  "designSource": {
+    "operatingMode": "free-explore",
+    "designLibrary": null,
+    "tokenSource": "project-local colors_and_type.css",
+    "styleDefinitionBrief": "Official passport-os travel pixel theme on a fixed 240x320 ST7789P3 portrait screen. One amber primary, cream text, sage success, coral danger, square-ish 4px cards, 1px strokes, 3px rails. No third-party design language; WD Hub must read as the fourth official app, not as a separate product.",
+    "designDials": {
+      "variance": "low (shared header/footer/card grammar)",
+      "motion": "static (no GPU)",
+      "density": "high (one-screen, no scroll)"
+    },
+    "designRead": {
+      "firmwareRepo": "/Users/kevin/WebstormProjects/passport-workbuddy",
+      "sources": [
+        "main/ui/ui_pixel.c",
+        "main/ui/ui_palette.h",
+        "main/console/wb_view.c"
+      ],
+      "paletteMode": "travel (default); classic theme supported by token swap only",
+      "constraintNotes": "Only buddy_font_16 and montserrat_32 are available; header 32px, footer 22px, content 38-288; no touch, no scroll."
+    }
+  },
+  "pages": [
+    {
+      "nodeId": "page-direction-pixel",
+      "title": "方向 A · 仪表像素（推荐）",
+      "htmlSrc": "pages/direction-pixel.html",
+      "group": 0,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "direction-status",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "full 240x320 board, no overflow"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-direction-cyber",
+      "title": "方向 B · 赛博终端",
+      "htmlSrc": "pages/direction-cyber.html",
+      "group": 0,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "direction-status",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "full 240x320 board, no overflow"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-direction-minimal",
+      "title": "方向 C · 极简深色",
+      "htmlSrc": "pages/direction-minimal.html",
+      "group": 0,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "direction-status",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "full 240x320 board, no overflow"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-status",
+      "title": "01 状态总览",
+      "htmlSrc": "pages/status.html",
+      "group": 1,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "overview",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "quota/session/meta cards 38-286, footer 294-316"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-sessions",
+      "title": "02 会话列表",
+      "htmlSrc": "pages/sessions.html",
+      "group": 1,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "list",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "3 cards 68/142/216, each 66 high, footer clear"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-usage",
+      "title": "03 今日消耗",
+      "htmlSrc": "pages/usage.html",
+      "group": 1,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "analytics",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "KPI 38-146, model panel 152-286, 5 rows inside"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-link",
+      "title": "04 关于 / 链路",
+      "htmlSrc": "pages/link.html",
+      "group": 1,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "diagnostics",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "link card 38-170, firmware card 176-286"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-approval",
+      "title": "05 审批",
+      "htmlSrc": "pages/approval.html",
+      "group": 1,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "destructive-confirmation",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "banner 38-64, command 70-226, allow 232-258, deny 262-288"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-ask",
+      "title": "06 提问",
+      "htmlSrc": "pages/ask.html",
+      "group": 1,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "choice",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "question 38-132, six 22px options 138-280"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    },
+    {
+      "nodeId": "page-standby",
+      "title": "07 待机",
+      "htmlSrc": "pages/standby.html",
+      "group": 1,
+      "status": "complete",
+      "viewport": "240x320",
+      "pageType": "idle",
+      "interactions": [],
+      "staticRenderingEvidence": {
+        "status": "passed",
+        "method": "headless Chrome screenshot",
+        "note": "clock 96, date 148, online 186, hint 274; low-light hierarchy"
+      },
+      "viewportIntegrityEvidence": {
+        "status": "passed",
+        "overflow": "none"
+      }
+    }
+  ]
+}
