@@ -1,0 +1,130 @@
+// passport-fw/main/wb/wd_core.h —— wb_view.c 的只读状态快照（适配层用的形状）。
+//
+// 从另一工程 passport-workbuddy/main/console/wb_core.h 摘出**纯类型部分**：
+// 那边 wb_view.c 消费 wb_state_t，本工程业务层给的是 wb_view_t（wb_biz.h）。
+// 为了让 1019 行视觉层原样复用、一行不改，这里保留 wb_state_t 的完整形状，
+// 由 wb_ui.cc 里的 adapt_view() 做一次字段搬运。
+//
+// 本工程不链接 wb_core.c：状态机规则留在 wb_biz.c，这里只提供类型和
+// wb_view.c 唯一用到的 wb_core_running_count()（内联实现）。
+#pragma once
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "wb_proto.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ---- 今日消耗页：按模型分布（规范 §6.3，最多 5 行）----
+// 当前主机端 usage 帧只给了 models 的**数量**，没有逐模型 token 明细。
+// 本轮按约定先留占位（valid=false / n_model=0），协议扩展后续再补。
+#define WB_USAGE_MODELS   5
+#define WB_USAGE_NAME_LEN 20
+
+typedef struct {
+    char name[WB_USAGE_NAME_LEN];
+    int64_t tokens;
+    int64_t cached;
+} wb_usage_model_t;
+
+typedef struct {
+    bool valid;
+    int64_t today;
+    int req;
+    int64_t cached;
+    int n_model;
+    wb_usage_model_t model[WB_USAGE_MODELS];
+} wb_usage_t;
+
+typedef enum {
+    WB_BEEP_ASK = 0,
+    WB_BEEP_APPROVAL,
+    WB_BEEP_DONE,
+    WB_BEEP_KIND_COUNT,
+} wb_beep_kind_t;
+
+typedef struct {
+    bool valid;
+    double remain;
+    double total;
+    uint8_t level;      // 0 主色 / 1 橙 / 2 红
+} wb_credit_t;
+
+typedef struct {
+    bool active;
+    int id;
+    char tool[WB_TOOL_LEN];
+    char hint[WB_HINT_LEN];
+    int64_t deadline_ms;
+} wb_approval_t;
+
+typedef struct {
+    bool active;
+    int id;
+    int ans;
+    int multi;
+    char tool[WB_TOOL_LEN];
+    char text[WB_TEXT_LEN];
+    int n_opts;
+    char opt[WB_OPT_MAX][WB_OPT_LEN];
+    int cursor;
+    unsigned mask;
+    int64_t deadline_ms;
+} wb_ask_t;
+
+typedef struct {
+    wb_credit_t credit;
+
+    wb_sess_t sess[WB_MAX_SESS];
+    int n_sess;
+    int count;
+
+    wb_approval_t appr;
+    wb_ask_t ask;
+
+    bool linked;
+    bool offline;
+    int64_t last_rx_ms;
+
+    bool rack_page;
+    bool run_page;
+    bool usage_page;
+    bool run_manual;
+    bool auto_suppressed;
+    bool run_seen;
+    int64_t run_start_ms;
+    int64_t run_idle_since;
+
+    bool standby_page;
+    int64_t idle_since_ms;
+
+    // 主机墙钟快照：clock_local_s <= 0 表示还没校时。
+    int64_t clock_local_s;
+    int64_t clock_sync_ms;
+
+    wb_usage_t usage;
+
+    int beep_vol;
+    uint8_t skin;
+    int soc;
+
+    int64_t boot_ms;
+    int64_t last_beep_ms[WB_BEEP_KIND_COUNT];
+} wb_state_t;
+
+static inline int wb_core_running_count(const wb_state_t *st)
+{
+    int n = 0;
+    for (int i = 0; i < st->n_sess; i++) {
+        if (strcmp(st->sess[i].state, "RUNNING") == 0) n++;
+    }
+    return n;
+}
+
+#ifdef __cplusplus
+}
+#endif

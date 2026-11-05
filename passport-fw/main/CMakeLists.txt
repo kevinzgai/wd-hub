@@ -75,6 +75,7 @@ idf_component_register(
         "wb/wb_power.c"
         "wb/wb_audio.c"
         "wb/wb_ui.cc"
+        "wb/wb_view.c"
     INCLUDE_DIRS
         "."
         "launcher"

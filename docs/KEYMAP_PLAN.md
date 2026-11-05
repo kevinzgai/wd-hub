@@ -492,3 +492,62 @@ y=274 三键栏：UP/DOWN 移动 | OK 进入 | 长按DOWN 关闭
 **新增可观测日志**：设备侧 `wb_biz` 现在会打印 `积分 remain=%.2f total=%.0f`，
 与既有的 `大盘用量 today=...` / `主机大盘 gw=... up=...` 对齐，
 三条帧链路都能在串口日志里直接确认到货。
+
+---
+
+## B.8 WD Hub 方向 A「仪表像素」移植（2026-11-05 晚）
+
+> **本节起，B.3 / B.5 描述的菜单交互与「大字流」视觉已废止。**
+> 用户裁决：采用 `wd-hub-design/` 的 UI，且**完全按设计稿改**交互模型。
+
+### B.8.1 来源与做法
+
+设计稿 `wd-hub-design/WD-Hub-样式规范.md`（240×320、travel 琥珀像素风、LVGL 9）
+在另一工程 `/Users/kevin/WebstormProjects/passport-workbuddy` 已有实机实现。
+本轮**原样移植视觉层 + 加一层适配**，不重画：
+
+| 文件 | 作用 |
+|---|---|
+| `main/wb/wb_view.c/h` | 7 页渲染（上游 1019 行），仅改 4 类：include 名、背景色覆盖、按需建屏、提问游标 setter 与 2 处文案宽度 |
+| `main/wb/wb_theme.h` | 设计 token，直接写死规范 §3 的 hex，**不复用** launcher 的 playful 主题 |
+| `main/wb/wd_core.h` | 摘出 `wb_state_t` 类型 + 内联 `wb_core_running_count()`，不链接上游 `wb_core.c` |
+| `main/wb/wb_ui.cc` | 约 190 行适配层：`wb_view_t` → `wb_state_t`、三键映射，`wb_ui.h` 契约不变 |
+
+**没动**：`wb_biz.c` / `wb_proto.c` / `wb_link.c` / `wb_power.c` / `host/wb_app.py`。
+旧 1596 行 UI 备份在 `passport-fw/.tmp/ui-rewrite-20261105/wb_ui_legacy.cc`（gitignored）。
+
+### B.8.2 交互模型（替代方案 B 菜单）
+
+- 前 4 页 `状态总览 → 会话列表 → 今日消耗 → 关于 / 链路` 用 ↑↓ 轮转，OK 回总览。
+- 审批 / 提问由 `appr.active` / `ask.active` 事件驱动，待机由 `wb_power` 空闲触发，三者不进轮转环。
+- 提问页设计稿是「OK 下项 · 长↓ 提交」，业务层原本是「OK 提交 · 长↓ skip」。适配层显式消费按键：OK 调 `wb_biz_move()` 并同步视觉游标，长↓ 调 `wb_biz_confirm()`。审批页沿用业务层，与设计稿一致。
+- **删掉**：菜单 5 项、声音设置页、积分页、主机大盘屏、离线/低电覆盖页。
+
+### B.8.3 堆：一次踩坑与修复
+
+上游 `wb_view_build()` 一次建齐 7 屏（约 490 个 LVGL 对象）。本机 ESP32-C3 无 PSRAM，
+直接导致 `E (BLE_INIT) Malloc failed` + 反复 `Guru Meditation` 重启。
+
+按设计稿 §7.7 改成 `ensure_page()`：**进屏才建、退屏即删**，任意时刻只驻留 1 屏
+（先建新屏 → `lv_scr_load()` → 再删旧屏，避免删掉正在显示的 screen）。
+`refresh_chrome()` 与 `set_text()` / `badge_set()` 本就判空，切页 memset 后不会悬空。
+
+结果：`Initial Free Heap 34 KB → 56 KB`（比旧 UI 还多 22 KB），boot 0 panic / 0 error。
+
+### B.8.4 实机验证
+
+5 次抓屏（4 页 + 回环）画面各不相同，短 DOWN 轮转闭环正确，0 error。
+视觉符合方向 A：深色 `#181B1C` 底、琥珀索引块/大数字、鼠尾草绿「已连接」、
+1px 描边卡片、22px 页脚。修掉两处静态截断：
+`-- 次...` → `-- 次请求`（文本框 162/62 → 150/80）、`1.3...` → 完整版本号（184/40 → 110/114）。
+
+### B.8.5 后续待办（本轮按约定不做）
+
+| 级别 | 项 |
+|---|---|
+| P1 | 今日消耗页 5 行模型用量显示「等待主机统计」—— 需扩 `usage` 帧带逐模型 token 明细 |
+| P1 | 「关于 / 链路」的最近事件 / 下行帧数仍是 `—` / `0 帧`；可把 `host` 帧的网关、连接时长接进来 |
+| P1 | 「能力」行仍写「审批 / 提问」，未反映 `caps=0x43`；且 bit6 与另一工程 `WB_CAP_PROFILE` 语义冲突，两条固件线需统一 |
+| P1 | 离线 / 低电无覆盖页（目前只有页头红色「离线」徽标）；声音设置随菜单删除后不可达 |
+| P2 | 会话名跑马灯是上游既有行为，设计稿 §8 不推荐持续动画，截图会抓到滚动中间态 |
+| P2 | 待机页、审批页、提问页未用真实事件 / 3 分钟空闲实机验证 |
