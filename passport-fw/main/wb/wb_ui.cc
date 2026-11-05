@@ -6,9 +6,11 @@
 //   2. 把三键映射到「前 4 页 ↑↓ 轮转 + 审批/提问事件页 + 待机覆盖」；
 //   3. 维持 wb_ui.h 的对外 API 不变，app_wb.cc 一行不用改。
 //
-// 本轮按约定「只移植已有实现」：主机端协议未提供的字段（逐模型用量明细、
-// 最近事件、下行帧数、审批倒计时）留占位，界面会显示「暂无数据」类文案，
-// 不伪造数字。协议扩展、离线/低电覆盖页留待后续。
+// 本轮按约定「只移植已有实现」：主机端协议未提供的字段（最近事件、下行帧数、
+// 审批倒计时）留占位，界面会显示「暂无数据」类文案，不伪造数字。
+// 逐模型用量明细原先也在占位之列，现已打通（usage 帧 models[].n/v/hit →
+// wb_proto → wb_biz → wb_state_t.usage.model[]），不在本层编造任何值。
+// 离线/低电覆盖页仍留待后续。
 //
 // 旧 V2 实现（1596 行、10 屏预创建 + 共享 chrome）备份在
 // passport-fw/.tmp/ui-rewrite-20261105/wb_ui_legacy.cc。
@@ -101,13 +103,22 @@ void adapt(const wb_view_t *v, bool standby)
     s_st.clock_local_s = v->clock_s;
     s_st.clock_sync_ms = now_ms();
 
-    // usage 帧只有合计值，没有逐模型明细：n_model=0 让今日消耗页显示
-    // 「今日暂无模型数据」，不编造 5 行进度条。
+    // usage 帧：合计值 + 逐模型明细都要搬过去。明细以前被协议层丢掉了
+    // （只留数组长度），屏幕上 5 行进度条因此永远是空的。
     s_st.usage.valid = v->have_usage;
     s_st.usage.today = (int64_t)v->usage_today;
     s_st.usage.req = v->usage_req;
     s_st.usage.cached = (int64_t)v->usage_cache;
-    s_st.usage.n_model = 0;
+    int n_model = v->usage_models;
+    if (n_model > WB_USAGE_MODELS) n_model = WB_USAGE_MODELS;
+    if (n_model < 0) n_model = 0;
+    s_st.usage.n_model = n_model;
+    for (int i = 0; i < n_model; ++i) {
+        copy_str(s_st.usage.model[i].name, sizeof(s_st.usage.model[i].name),
+                 v->usage_model[i].name);
+        s_st.usage.model[i].tokens = v->usage_model[i].tokens;
+        s_st.usage.model[i].cached = v->usage_model[i].cached;
+    }
 
     s_st.beep_vol = v->beep_vol;
     s_st.skin = 1;

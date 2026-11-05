@@ -203,10 +203,13 @@ static void handle_frame(const wb_frame_msg_t *msg)
         s_view.usage_cache = ev.usage_cache;
         s_view.usage_req = ev.usage_req;
         s_view.usage_models = ev.usage_models;
+        memcpy(s_view.usage_model, ev.usage_model, sizeof(s_view.usage_model));
         s_view.have_usage = true;
         changed = true;
-        ESP_LOGI(TAG, "大盘用量 today=%lld req=%d models=%d",
-                 (long long)ev.usage_today, ev.usage_req, ev.usage_models);
+        ESP_LOGI(TAG, "大盘用量 today=%lld req=%d models=%d 首项=%s/%lld",
+                 (long long)ev.usage_today, ev.usage_req, ev.usage_models,
+                 ev.usage_models > 0 ? ev.usage_model[0].name : "-",
+                 ev.usage_models > 0 ? (long long)ev.usage_model[0].tokens : 0LL);
         break;
     case WB_EV_HOST:
         s_view.gw_ports = ev.gw_ports;

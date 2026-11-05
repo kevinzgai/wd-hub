@@ -27,6 +27,19 @@ extern "C" {
 #define WB_FW_VERSION    "1.3.0-passport"
 #define WB_PROTO_VERSION 2
 
+// usage 帧的逐模型明细。主机端 wb_app.py 的 USAGE_MODELS_MAX 也是 5
+// （TOP4 + 合并后的「其它」占第 5 行），两边必须同值，否则末尾会被丢。
+// 名字长度 20 是**字节**：主机按 16 个**字符**预截断，纯 ASCII 只需 17B，
+// 留 3B 冗余；万一上游混入汉字，parsing 侧会按 UTF-8 边界回退，不切半个字。
+#define WB_USAGE_MODELS   5
+#define WB_USAGE_NAME_LEN 20
+
+typedef struct {
+    char name[WB_USAGE_NAME_LEN];
+    int64_t tokens;
+    int64_t cached;
+} wb_usage_model_t;
+
 // 能力位：本工程只做看板 + 审批 + 提问（与 S3 看板固件同一口径）。
 // bit6 = 主机大盘：设备能解析 usage / host 帧。主机只在声明该位时推 host 帧，
 // 旧固件（caps=0x3）不会收到不认识的帧而回 ERR_JSON。
@@ -91,6 +104,9 @@ typedef struct {
     double usage_cache;
     int usage_req;
     int usage_models;
+    /* models[] 的逐模型明细（主机字段 n / v / hit）。以前只取数组长度，
+     * 屏幕上 5 行进度条永远是空的 —— 「模型用量」卡片因此全白。 */
+    wb_usage_model_t usage_model[WB_USAGE_MODELS];
 
     /* host 帧：Web 大盘里主机侧独有的信息（status_list 帧已 488B，塞不下）。 */
     int gw_ports;

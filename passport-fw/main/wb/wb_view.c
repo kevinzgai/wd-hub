@@ -67,6 +67,8 @@ typedef struct {
     lv_obj_t *us_name[WB_USAGE_MODELS];
     lv_obj_t *us_bar[WB_USAGE_MODELS];
     lv_obj_t *us_val[WB_USAGE_MODELS];
+    lv_obj_t *us_empty;              // 空态主提示（居中，替代 5 行空条）
+    lv_obj_t *us_empty2;             // 空态副说明
 
     // 04 关于 / 链路
     wd_badge_t ab_badge;
@@ -488,13 +490,15 @@ static void build_usage(void)
     mk_rect(kpi, 0, 0, 3, 108, WD_PRIMARY);
     mk_text(kpi, "今日 tokens", WD_TEXT_DIM, 11, 6, 96);
     s_ui.us_today = mk_big(kpi, "--", WD_PRIMARY, 11, 24, 120);
-    // 16px 中文下 "126 次请求" 约 72px，原 x=162 w=62 会截成 "次..."；
-    // 左侧大数字占到 x=131，这里从 150 起给 80px，卡内右边界 230 < 232。
-    s_ui.us_req = mk_text_at(kpi, "-- 次请求", WD_TEXT_DIM, 150, 6, 80,
+    // 16px 中文下 "126 次请求" 约 72px，原 x=162 w=62 会截成 "次..."。
+    // 额度实测值可达 3629.8（"额度 3629.8" ≈ 84px），x=150 w=80 会被省略成
+    // "额度 362..."；这里整体左移到 136 给 94px，右边界仍 230 < 232，
+    // 且左侧大数字实际只画到 x≈90（w 只是布局上限），不会撞上。
+    s_ui.us_req = mk_text_at(kpi, "-- 次请求", WD_TEXT_DIM, 136, 6, 94,
                              LV_TEXT_ALIGN_RIGHT);
-    s_ui.us_cache = mk_text_at(kpi, "缓存 --", WD_TEXT_DIM, 150, 26, 80,
+    s_ui.us_cache = mk_text_at(kpi, "缓存 --", WD_TEXT_DIM, 136, 26, 94,
                                LV_TEXT_ALIGN_RIGHT);
-    s_ui.us_quota = mk_text_at(kpi, "额度 --", WD_TEXT_DIM, 150, 50, 80,
+    s_ui.us_quota = mk_text_at(kpi, "额度 --", WD_TEXT_DIM, 136, 50, 94,
                                LV_TEXT_ALIGN_RIGHT);
     mk_text(kpi, "缓存命中", WD_TEXT_DIM, 11, 74, 64);
     s_ui.us_cache_bar = mk_bar(kpi, 76, 78, 146, 6);
@@ -509,6 +513,12 @@ static void build_usage(void)
         s_ui.us_val[i] = mk_text_at(models, "", WD_PRIMARY, 185, y, 38,
                                     LV_TEXT_ALIGN_RIGHT);
     }
+    // 空态占位：5 行隐掉后卡片里会剩一大片空白，改成两行居中说明。
+    // 主提示说「为什么没有」，副提示说「怎么才会有」。
+    s_ui.us_empty = mk_text_at(models, "", WD_TEXT, 0, 58, 232,
+                               LV_TEXT_ALIGN_CENTER);
+    s_ui.us_empty2 = mk_text_at(models, "", WD_TEXT_DIM, 0, 82, 232,
+                                LV_TEXT_ALIGN_CENTER);
 
     mk_footer(WB_VIEW_USAGE, "OK", " 总览 · ", "上下", " 翻页");
 }
@@ -923,8 +933,17 @@ static void refresh_usage(const wb_state_t *st)
     }
     set_text(s_ui.us_cache, buf);
 
-    if (st->credit.valid) snprintf(buf, sizeof(buf), "额度 %.1f", st->credit.remain);
-    else snprintf(buf, sizeof(buf), "额度 --");
+    if (st->credit.valid) {
+        // 额度是积分，可能上万。94px 放得下 "额度 9999.9"（≈84px），
+        // 再大就压成 K，避免又被 DOTS 截成 "额度 123..."。
+        if (st->credit.remain >= 10000.0) {
+            snprintf(buf, sizeof(buf), "额度 %.1fK", st->credit.remain / 1000.0);
+        } else {
+            snprintf(buf, sizeof(buf), "额度 %.1f", st->credit.remain);
+        }
+    } else {
+        snprintf(buf, sizeof(buf), "额度 --");
+    }
     set_text(s_ui.us_quota, buf);
 
     int cache_pct = 0;
@@ -935,12 +954,23 @@ static void refresh_usage(const wb_state_t *st)
     }
     lv_bar_set_value(s_ui.us_cache_bar, cache_pct * 10, LV_ANIM_OFF);
 
+    // ---- 按模型分布：有明细才画行，一条都没有就整块换成空态说明 ----
+    // 以前这里只按 n_model 判空，而协议层从来没填过明细，于是 5 行永远是
+    // 空的、标题变成「今日暂无模型数据」，卡片中间留下 100px 白板。
     int64_t max_tok = 0;
-    for (int i = 0; i < u->n_model; i++) {
-        if (u->model[i].tokens > max_tok) max_tok = u->model[i].tokens;
+    if (u->valid) {
+        for (int i = 0; i < u->n_model && i < WB_USAGE_MODELS; i++) {
+            if (u->model[i].name[0] && u->model[i].tokens > max_tok) {
+                max_tok = u->model[i].tokens;
+            }
+        }
     }
+
+    int n_row = 0;
     for (int i = 0; i < WB_USAGE_MODELS; i++) {
-        if (u->valid && i < u->n_model && u->model[i].name[0]) {
+        const bool show = u->valid && i < u->n_model && u->model[i].name[0];
+        if (show) {
+            n_row++;
             const wb_usage_model_t *m = &u->model[i];
             set_roll(s_ui.us_name[i], m->name);
             fmt_tokens(buf, sizeof(buf), m->tokens);
@@ -959,10 +989,43 @@ static void refresh_usage(const wb_state_t *st)
             set_text(s_ui.us_val[i], "");
             lv_bar_set_value(s_ui.us_bar[i], 0, LV_ANIM_OFF);
         }
+        // 空行必须隐藏：留着 5 条零长轨道，卡片看起来像渲染坏了。
+        lv_obj_t *cell[3] = {s_ui.us_name[i], s_ui.us_bar[i], s_ui.us_val[i]};
+        for (int k = 0; k < 3; k++) {
+            if (!cell[k]) continue;
+            if (show) lv_obj_remove_flag(cell[k], LV_OBJ_FLAG_HIDDEN);
+            else lv_obj_add_flag(cell[k], LV_OBJ_FLAG_HIDDEN);
+        }
     }
-    set_text(s_ui.us_head, (u->valid && u->n_model > 0)
-                               ? "模型用量" : (u->valid ? "今日暂无模型数据"
-                                                        : "等待主机统计"));
+
+    const bool empty = (n_row == 0);
+    if (empty) {
+        const char *hint = "等待主机连接";
+        const char *hint2 = "打开主机端后自动同步";
+        if (u->valid) {
+            if (u->today <= 0) {
+                hint = "今日暂无模型数据";
+                hint2 = "今天还没有请求记录";
+            } else {
+                // 有合计值却没有 models[]：旧版主机只发总量，不编造分项。
+                hint = "主机未下发模型明细";
+                hint2 = "仅显示合计，升级主机后可见";
+            }
+        } else if (st->linked && !st->offline) {
+            // 页头已经显示「已连接」，这里再说「连上主机后」就自相矛盾了：
+            // 链路是通的，只是 30s 一跳的 usage 帧还没到（刚上电的常态）。
+            hint = "主机正在同步";
+            hint2 = "首次数据约 30 秒内到达";
+        }
+        set_text(s_ui.us_empty, hint);
+        set_text(s_ui.us_empty2, hint2);
+    }
+    lv_obj_t *ghost[2] = {s_ui.us_empty, s_ui.us_empty2};
+    for (int k = 0; k < 2; k++) {
+        if (!ghost[k]) continue;
+        if (empty) lv_obj_remove_flag(ghost[k], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(ghost[k], LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void refresh_about(const wb_state_t *st)

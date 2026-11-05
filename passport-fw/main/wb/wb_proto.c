@@ -16,6 +16,28 @@ static void copy_str(const cJSON *item, char *out, size_t cap)
     snprintf(out, cap, "%s", item->valuestring);
 }
 
+// snprintf 按**字节**截断，会把多字节 UTF-8 字符切成半个。
+// LVGL 拿到非法序列会画出方块或直接吞掉整行，比截短更难排查。
+// 这里只做一件事：若结尾那个字符不完整，就把它整个砍掉。
+static void utf8_trim_incomplete(char *s)
+{
+    if (!s) return;
+    const size_t n = strlen(s);
+    if (n == 0) return;
+
+    size_t i = n;                                  // 跳到最后一个字符的首字节
+    while (i > 0 && ((unsigned char)s[i - 1] & 0xC0) == 0x80) i--;
+    if (i == 0) { s[0] = '\0'; return; }            // 全是续字节，整串作废
+
+    const unsigned char lead = (unsigned char)s[i - 1];
+    size_t need = 1;
+    if (lead >= 0xF0) need = 4;
+    else if (lead >= 0xE0) need = 3;
+    else if (lead >= 0xC0) need = 2;
+
+    if (n - (i - 1) < need) s[i - 1] = '\0';        // 尾部字符被截断，丢掉
+}
+
 static int json_int(const cJSON *root, const char *key, int def)
 {
     const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
@@ -104,7 +126,28 @@ bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev)
             ev->usage_cache = json_double(root, "cache", 0.0);
             ev->usage_req = json_int(root, "req", 0);
             const cJSON *models = cJSON_GetObjectItemCaseSensitive(root, "models");
-            ev->usage_models = cJSON_IsArray(models) ? cJSON_GetArraySize(models) : 0;
+            // models[] 形如 [{"n":"deepseek-v4.1-f…","v":123456,"hit":789}, ...]
+            // 主机 wb_app.py 已按用量降序、最多 5 项（TOP4 + 「其它」），
+            // 名字也按 16 字符预截断；这里只做容量兜底，不重排。
+            // 以前这里只取 cJSON_GetArraySize()，名字与 token 数全丢，
+            // 「模型用量」卡片的 5 行进度条因此永远是空的。
+            ev->usage_models = 0;
+            if (cJSON_IsArray(models)) {
+                const cJSON *it = NULL;
+                cJSON_ArrayForEach(it, models) {
+                    if (ev->usage_models >= WB_USAGE_MODELS) break;
+                    if (!cJSON_IsObject(it)) continue;
+                    wb_usage_model_t *m = &ev->usage_model[ev->usage_models];
+                    copy_str(cJSON_GetObjectItemCaseSensitive(it, "n"),
+                             m->name, sizeof(m->name));
+                    utf8_trim_incomplete(m->name);
+                    // 没名字的行直接跳过：宁可少一行，也不要一条无标签空条。
+                    if (m->name[0] == '\0') continue;
+                    m->tokens = json_i64(it, "v", 0);
+                    m->cached = json_i64(it, "hit", 0);
+                    ev->usage_models++;
+                }
+            }
         } else if (cJSON_GetObjectItemCaseSensitive(root, "host")) {
             // Web 大盘的主机侧信息：status_list 已 488B 塞不下，走独立小帧。
             ev->type = WB_EV_HOST;

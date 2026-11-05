@@ -59,7 +59,8 @@ typedef struct {
     double usage_today;
     double usage_cache;
     int usage_req;
-    int usage_models;
+    int usage_models;      // usage_model[] 里有效条数（已剔除无名项）
+    wb_usage_model_t usage_model[WB_USAGE_MODELS];
     bool have_host;
     int gw_ports;
     int gw_sessions;

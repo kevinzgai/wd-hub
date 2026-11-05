@@ -20,17 +20,9 @@ extern "C" {
 #endif
 
 // ---- 今日消耗页：按模型分布（规范 §6.3，最多 5 行）----
-// 当前主机端 usage 帧只给了 models 的**数量**，没有逐模型 token 明细。
-// 本轮按约定先留占位（valid=false / n_model=0），协议扩展后续再补。
-#define WB_USAGE_MODELS   5
-#define WB_USAGE_NAME_LEN 20
-
-typedef struct {
-    char name[WB_USAGE_NAME_LEN];
-    int64_t tokens;
-    int64_t cached;
-} wb_usage_model_t;
-
+// WB_USAGE_MODELS / WB_USAGE_NAME_LEN / wb_usage_model_t 已下沉到 wb_proto.h
+// （那是协议契约的一部分：主机 models[] 的容量上限）。本文件 include 它即可，
+// 不再重复定义，否则会与协议头冲突。
 typedef struct {
     bool valid;
     int64_t today;
