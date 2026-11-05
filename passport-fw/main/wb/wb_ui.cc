@@ -29,6 +29,18 @@ wb_state_t s_st;
 int s_soc = -1;
 int64_t s_boot_ms;
 
+// 提问页交互软状态。
+//   commit_* —— OK 确认后先让「已提交」在屏上停一帧以上再真正上行，
+//               否则业务层会立刻把页切回总览，用户看不到确认结果。
+//   edge_*   —— 撞到首/末项时页脚提示的到期时刻（到期后恢复默认文案）。
+struct {
+    int commit_id;          // 已确认的题号，0 = 没有
+    int commit_idx;         // 已确认的选项下标
+    int64_t commit_ms;
+    bool drawn;             // 「已提交」态是否已渲染过至少一帧
+    int64_t edge_until_ms;
+} s_ask;
+
 int64_t now_ms(void)
 {
     return esp_timer_get_time() / 1000LL;
@@ -103,6 +115,31 @@ void adapt(const wb_view_t *v, bool standby)
     s_st.boot_ms = s_boot_ms;
 }
 
+// 「已提交」态渲染完这一帧之后才上行：业务层 confirm 会立刻把页切回总览，
+// 先画后发才能让人看见确认结果。要求至少历经一次 sync（drawn），避免
+// 按键正好卡在两帧之间时「已提交」一闪而过；再停留 HOLD 毫秒，让这一态
+// 真的可读（UI 重绘由 1s 的 lv_timer 驱动，停留太短人眼只会看到闪一下）。
+constexpr int64_t kAskCommitHoldMs = 3500;
+
+// 撞到首/末项时页脚提示的停留时长。UI 重绘是 1s 一拍，2s 以下容易被下一帧
+// 直接盖掉；3s 既够人读完，也不会把常态提示挤掉太久。
+constexpr int64_t kAskEdgeHintMs = 3000;
+
+void ask_after_sync(void)
+{
+    if (s_ask.commit_id <= 0) return;
+    if (!s_ask.drawn) {
+        s_ask.drawn = true;
+        return;
+    }
+    if (now_ms() - s_ask.commit_ms < kAskCommitHoldMs) return;
+    wb_biz_confirm();                 // 上行 index，业务层清 ask 并回总览
+    s_ask.commit_id = 0;
+    s_ask.commit_idx = -1;
+    s_ask.drawn = false;
+    wb_view_set_ask_committed(0, -1);
+}
+
 }  // namespace
 
 extern "C" {
@@ -136,6 +173,7 @@ void wb_ui_sync(const wb_view_t *view, bool standby)
     if (!s_inited || !view) return;
     adapt(view, standby);
     wb_view_refresh(&s_st, now_ms());
+    ask_after_sync();
 }
 
 bool wb_ui_key(wb_ui_key_t key, bool long_press)
@@ -150,20 +188,56 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
     // 审批页：OK 允许 / 长 DOWN 拒绝，交给业务层原有的 confirm / back。
     if (page == WB_VIEW_APPROVAL) return false;
 
-    // 提问页：OK 下一项，长 DOWN 提交。业务层短 OK 是「提交」、长 DOWN 是
-    // 「skip」，与设计稿页脚相反，所以这里由 UI 层消费并显式调用。
+    // 提问页：↑↓ 切换选项、OK 确认当前项、长 DOWN 跳过。
+    // 业务层短 OK 本来就是 confirm，这里只在「确认前先显示已提交态」上做
+    // 一层包装；游标仍由业务层 wb_biz_move 钳制，UI 只镜像到视觉层。
     if (page == WB_VIEW_ASK) {
-        if (key == WB_UI_KEY_OK && long_press) return false;  // 长 OK 留给底座关机
         if (long_press) {
-            if (key == WB_UI_KEY_DOWN) wb_biz_confirm();
+            if (key == WB_UI_KEY_OK) return false;   // 长 OK 留给底座关机
+            // 长 DOWN = 跳过（业务层既定语义）；已提交后不再重复上报。
+            if (key == WB_UI_KEY_DOWN && s_ask.commit_id <= 0) wb_biz_back();
             return true;
         }
-        if (key == WB_UI_KEY_OK || key == WB_UI_KEY_DOWN || key == WB_UI_KEY_UP) {
-            const int delta = (key == WB_UI_KEY_UP) ? -1 : 1;
-            wb_biz_move(delta);
-            wb_view_t snap;
-            wb_biz_snapshot(&snap);
-            wb_view_set_ask_cursor(snap.sel);
+
+        wb_view_t view;
+        wb_biz_snapshot(&view);
+        const int n_opts = view.n_opts > WB_OPT_MAX ? WB_OPT_MAX : view.n_opts;
+
+        // 已进入「已提交」态：锁住所有键，避免二次上报造成状态不一致。
+        if (s_ask.commit_id > 0) return true;
+
+        if (key == WB_UI_KEY_UP || key == WB_UI_KEY_DOWN) {
+            if (n_opts <= 0) {
+                s_ask.edge_until_ms = now_ms() + kAskEdgeHintMs;
+                wb_view_set_ask_edge(0, s_ask.edge_until_ms);   // 仅提示无选项
+                return true;
+            }
+            const int before = view.sel;
+            wb_biz_move(key == WB_UI_KEY_UP ? -1 : 1);
+            wb_biz_snapshot(&view);
+            wb_view_set_ask_cursor(view.sel);
+            if (view.sel == before) {            // 已经顶到首项 / 末项
+                s_ask.edge_until_ms = now_ms() + kAskEdgeHintMs;
+                wb_view_set_ask_edge(key == WB_UI_KEY_UP ? -1 : 1,
+                                     s_ask.edge_until_ms);
+            } else {
+                s_ask.edge_until_ms = 0;
+                wb_view_set_ask_edge(0, 0);
+            }
+            return true;
+        }
+
+        if (key == WB_UI_KEY_OK) {
+            if (n_opts <= 0) {                   // 无选项：不提交，只提示
+                s_ask.edge_until_ms = now_ms() + kAskEdgeHintMs;
+                wb_view_set_ask_edge(0, s_ask.edge_until_ms);
+                return true;
+            }
+            s_ask.commit_id = view.ask_id;
+            s_ask.commit_idx = view.sel;
+            s_ask.commit_ms = now_ms();
+            s_ask.drawn = false;
+            wb_view_set_ask_committed(s_ask.commit_id, s_ask.commit_idx);
             return true;
         }
         return true;
@@ -192,9 +266,21 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
 bool wb_ui_tick(void)
 {
     if (!s_inited) return false;
+
     // 待机页的时钟靠 now_ms 推进，需要每秒触发一次 sync；其余页由业务层
     // 的 dirty 标志驱动，不额外重绘。
-    return wb_view_current_page(&s_st) == WB_VIEW_STANDBY;
+    bool need = wb_view_current_page(&s_st) == WB_VIEW_STANDBY;
+
+    // 「已提交」待上行：连续两帧，保证这一态至少被渲染一次（见 ask_after_sync）。
+    if (s_ask.commit_id > 0) need = true;
+
+    // 边界提示到期：清掉并请求一帧，把页脚恢复成默认文案。
+    if (s_ask.edge_until_ms && now_ms() >= s_ask.edge_until_ms) {
+        s_ask.edge_until_ms = 0;
+        wb_view_set_ask_edge(0, 0);
+        need = true;
+    }
+    return need;
 }
 
 }  // extern "C"

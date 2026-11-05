@@ -47,6 +47,14 @@ void wb_view_ask_move(int delta, int n_opts);
 int  wb_view_ask_cursor(void);
 void wb_view_set_ask_cursor(int cursor);
 
+// 提问页交互态（只写 int，渲染在下次 wb_view_refresh 里生效）：
+//   committed —— 已确认的题号与选项下标，id<=0 表示清除。用于把落选项画成
+//                绿色并压暗其余项，同时告知用户「提交的是哪一项」。
+//   edge      —— +1 撞末项 / -1 撞首项 / 0 清除，until_ms 到期后恢复默认
+//                页脚文案。游标本身由业务层钳制，这里只负责提示。
+void wb_view_set_ask_committed(int id, int idx);
+void wb_view_set_ask_edge(int dir, int64_t until_ms);
+
 // 给“关于/链路”页补充服务层统计(下行帧数、最近事件、BLE 省电档)。
 void wb_view_set_activity(int frames, const char *last_event, bool low_power);
 

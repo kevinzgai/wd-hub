@@ -87,6 +87,9 @@ typedef struct {
     lv_obj_t *ak_letter[WB_OPT_MAX];
     lv_obj_t *ak_opt[WB_OPT_MAX];
     lv_obj_t *ak_mark[WB_OPT_MAX];
+    lv_obj_t *ak_rail[WB_OPT_MAX];   // 选中项左侧光标条（切换即移动）
+    lv_obj_t *ak_fk;                 // 页脚左段（键名 / 状态，琥珀或绿）
+    lv_obj_t *ak_fd;                 // 页脚右段（说明，灰）
 
     // 07 待机
     lv_obj_t *sb_clock;
@@ -101,6 +104,13 @@ static int s_loaded = -1;
 static wb_view_page_t s_manual = WB_VIEW_STATUS;
 static int s_ask_cursor;
 static int s_last_ask_id = -1;
+
+// 提问页的「已确认」与「撞到首/末项」两个软状态。只存 int / 时间戳，
+// 不碰 LVGL，允许在按键上下文里直接写；渲染统一在 refresh_ask() 里做。
+static int s_ask_commit_id;         // 已确认的题号，0 = 没有
+static int s_ask_commit_idx = -1;   // 已确认的选项下标
+static int s_ask_edge_dir;          // 0 无 / -1 撞首项 / +1 撞末项
+static int64_t s_ask_edge_until_ms; // 边界提示的到期时刻
 
 static int s_frames;
 static char s_last_event[20] = "无";
@@ -595,13 +605,26 @@ static void build_ask(void)
         const int y = 138 + i * 24;                      // 138 / 162 / 186 / 210 / 234 / 258
         lv_obj_t *row = mk_panel(scr, 4, y, 232, 22, WD_CARD, WD_BORDER, 0);
         s_ui.ak_row[i] = row;
+        // 选中项左侧 2px 光标条：琥珀实心底上的一枚深色刻度，↑↓ 切换时随
+        // 选中位置移动，给「当前项」一个除配色外的一级指示。未选中隐藏。
+        s_ui.ak_rail[i] = mk_rect(row, 2, 2, 2, 18, WD_ON_PRIMARY);
+        lv_obj_add_flag(s_ui.ak_rail[i], LV_OBJ_FLAG_HIDDEN);
         char key[2] = {(char)('A' + i), '\0'};
         s_ui.ak_letter[i] = mk_text(row, key, WD_TEXT_DIM, 6, 1, 14);
         s_ui.ak_opt[i] = mk_roll_text(row, "", WD_TEXT, 26, 1, 188);
         s_ui.ak_mark[i] = mk_rect(row, 222, 9, 4, 4, WD_TEXT_DIM);
     }
 
-    mk_footer(WB_VIEW_ASK, "OK", " 下项 · ", "长按DOWN", " 提交");
+    // 页脚手建（不用 mk_footer）：文案要随「切换 / 撞到首末项 / 已提交 /
+    // 暂无选项」四种状态变化，必须持有两个 label 的句柄。
+    lv_obj_t *bar = mk_panel(scr, WD_FOOT_X, WD_FOOT_Y, WD_FOOT_W, WD_FOOT_H,
+                             WD_CARD, WD_BORDER, WD_RADIUS);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(bar, 0, 0);
+    s_ui.ak_fk = ui_pixel_label(bar, "OK 确认", &buddy_font_16, WD_PRIMARY);
+    s_ui.ak_fd = ui_pixel_label(bar, " · ↑↓ 切换", &buddy_font_16, WD_TEXT_DIM);
 }
 
 static void build_standby(void)
@@ -673,6 +696,12 @@ void wb_view_build(void)
     memset(&s_ui, 0, sizeof(s_ui));
     s_loaded = -1;
     s_ask_cursor = 0;
+    // 屏是按需建/删的，重建后旧控件句柄全失效，交互态一并清零。
+    s_ask_commit_id = 0;
+    s_ask_commit_idx = -1;
+    s_ask_edge_dir = 0;
+    s_ask_edge_until_ms = 0;
+    s_last_ask_id = -1;
     s_built = true;
     ensure_page(WB_VIEW_STATUS);
 }
@@ -714,6 +743,18 @@ int wb_view_ask_cursor(void) { return s_ask_cursor; }
 void wb_view_set_ask_cursor(int cursor)
 {
     s_ask_cursor = cursor < 0 ? 0 : cursor;
+}
+
+void wb_view_set_ask_committed(int id, int idx)
+{
+    s_ask_commit_id = id > 0 ? id : 0;
+    s_ask_commit_idx = s_ask_commit_id ? idx : -1;
+}
+
+void wb_view_set_ask_edge(int dir, int64_t until_ms)
+{
+    s_ask_edge_dir = (dir < 0) ? -1 : (dir > 0 ? 1 : 0);
+    s_ask_edge_until_ms = s_ask_edge_dir ? until_ms : 0;
 }
 
 void wb_view_set_activity(int frames, const char *last_event, bool low_power)
@@ -958,7 +999,7 @@ static void refresh_approval(const wb_state_t *st)
     set_text(s_ui.ap_req, buf);
 }
 
-static void refresh_ask(const wb_state_t *st)
+static void refresh_ask(const wb_state_t *st, int64_t now_ms)
 {
     const wb_ask_t *a = &st->ask;
     // 每道新题从第一项开始;同一题的重推(主机 30s 保活)不重置游标。
@@ -971,6 +1012,11 @@ static void refresh_ask(const wb_state_t *st)
 
     if (s_ask_cursor >= a->n_opts) s_ask_cursor = a->n_opts > 0 ? a->n_opts - 1 : 0;
 
+    // 已确认态：只认同一题；题号变了（新题 / 主机重推换了 id）自动失效。
+    const bool committed = (s_ask_commit_id > 0 && a->id == s_ask_commit_id);
+    const bool no_opt = (a->n_opts <= 0);
+    const bool at_edge = (s_ask_edge_dir != 0 && now_ms < s_ask_edge_until_ms);
+
     for (int i = 0; i < WB_OPT_MAX; i++) {
         if (i >= a->n_opts) {
             lv_obj_add_flag(s_ui.ak_row[i], LV_OBJ_FLAG_HIDDEN);
@@ -978,18 +1024,61 @@ static void refresh_ask(const wb_state_t *st)
         }
         lv_obj_remove_flag(s_ui.ak_row[i], LV_OBJ_FLAG_HIDDEN);
 
-        const bool sel = (i == s_ask_cursor);
-        lv_obj_set_style_bg_color(s_ui.ak_row[i],
-                                  lv_color_hex(sel ? WD_PRIMARY : WD_CARD), 0);
-        lv_obj_set_style_border_color(s_ui.ak_row[i],
-                                      lv_color_hex(sel ? WD_PRIMARY : WD_BORDER), 0);
+        bool active;
+        uint32_t bg, border, fg;
+        if (committed) {
+            // 已提交：落选项转鼠尾草绿并保留反白字，其余选项压暗，
+            // 明确「提交的是哪一项」，也防止再按 OK 造成二次上报。
+            active = (i == s_ask_commit_idx);
+            bg = active ? WD_SUCCESS : WD_CARD;
+            border = active ? WD_SUCCESS : WD_BORDER;
+            fg = active ? WD_ON_PRIMARY : WD_TEXT_DIM;
+        } else {
+            active = (i == s_ask_cursor);
+            bg = active ? WD_PRIMARY : WD_CARD;
+            border = active ? WD_PRIMARY : WD_BORDER;
+            fg = active ? WD_ON_PRIMARY : WD_TEXT;
+        }
+
+        lv_obj_set_style_bg_color(s_ui.ak_row[i], lv_color_hex(bg), 0);
+        lv_obj_set_style_border_color(s_ui.ak_row[i], lv_color_hex(border), 0);
         set_roll(s_ui.ak_opt[i], a->opt[i]);
-        lv_obj_set_style_text_color(s_ui.ak_opt[i],
-                                    lv_color_hex(sel ? WD_ON_PRIMARY : WD_TEXT), 0);
+        lv_obj_set_style_text_color(s_ui.ak_opt[i], lv_color_hex(fg), 0);
         lv_obj_set_style_text_color(s_ui.ak_letter[i],
-                                    lv_color_hex(sel ? WD_ON_PRIMARY : WD_TEXT_DIM), 0);
+                                    lv_color_hex(active ? WD_ON_PRIMARY : WD_TEXT_DIM), 0);
         lv_obj_set_style_bg_color(s_ui.ak_mark[i],
-                                  lv_color_hex(sel ? WD_ON_PRIMARY : WD_TEXT_DIM), 0);
+                                  lv_color_hex(active ? WD_ON_PRIMARY : WD_TEXT_DIM), 0);
+        if (active) lv_obj_remove_flag(s_ui.ak_rail[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(s_ui.ak_rail[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // 页脚四态：已提交 / 暂无选项 / 撞到首末项 / 正常切换提示。
+    char buf[48];
+    if (!s_ui.ak_fk || !s_ui.ak_fd) return;
+    if (committed) {
+        set_text(s_ui.ak_fk, "已提交");
+        lv_obj_set_style_text_color(s_ui.ak_fk, lv_color_hex(WD_SUCCESS), 0);
+        snprintf(buf, sizeof(buf), " · 选项 %d/%d", s_ask_commit_idx + 1, a->n_opts);
+        set_text(s_ui.ak_fd, buf);
+        lv_obj_set_style_text_color(s_ui.ak_fd, lv_color_hex(WD_TEXT_DIM), 0);
+    } else if (no_opt) {
+        set_text(s_ui.ak_fk, "暂无选项");
+        lv_obj_set_style_text_color(s_ui.ak_fk, lv_color_hex(WD_DANGER), 0);
+        set_text(s_ui.ak_fd, " · 等待主机下发");
+        lv_obj_set_style_text_color(s_ui.ak_fd, lv_color_hex(WD_TEXT_DIM), 0);
+    } else if (at_edge) {
+        // 撞到首/末项：两段都用琥珀，和常态的「灰说明」拉开，一眼能认出
+        // 「已经到顶了」而不是「按了没反应」。
+        set_text(s_ui.ak_fk, "OK 确认");
+        lv_obj_set_style_text_color(s_ui.ak_fk, lv_color_hex(WD_PRIMARY), 0);
+        set_text(s_ui.ak_fd, s_ask_edge_dir < 0 ? " · 已到首项" : " · 已到末项");
+        lv_obj_set_style_text_color(s_ui.ak_fd, lv_color_hex(WD_PRIMARY), 0);
+    } else {
+        set_text(s_ui.ak_fk, "OK 确认");
+        lv_obj_set_style_text_color(s_ui.ak_fk, lv_color_hex(WD_PRIMARY), 0);
+        snprintf(buf, sizeof(buf), " · ↑↓ 切换 %d/%d", s_ask_cursor + 1, a->n_opts);
+        set_text(s_ui.ak_fd, buf);
+        lv_obj_set_style_text_color(s_ui.ak_fd, lv_color_hex(WD_TEXT_DIM), 0);
     }
 }
 
@@ -1036,7 +1125,7 @@ void wb_view_refresh(const wb_state_t *st, int64_t now_ms)
     case WB_VIEW_USAGE:    refresh_usage(st); break;
     case WB_VIEW_ABOUT:    refresh_about(st); break;
     case WB_VIEW_APPROVAL: refresh_approval(st); break;
-    case WB_VIEW_ASK:      refresh_ask(st); break;
+    case WB_VIEW_ASK:      refresh_ask(st, now_ms); break;
     case WB_VIEW_STANDBY:  refresh_standby(st, now_ms); break;
     default: break;
     }
