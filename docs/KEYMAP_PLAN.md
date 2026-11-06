@@ -508,7 +508,7 @@ y=274 三键栏：UP/DOWN 移动 | OK 进入 | 长按DOWN 关闭
 
 | 文件 | 作用 |
 |---|---|
-| `main/wb/wb_view.c/h` | 7 页渲染（上游 1019 行），仅改 4 类：include 名、背景色覆盖、按需建屏、提问游标 setter 与 2 处文案宽度 |
+| `main/wb/wb_view.c/h` | 渲染层（上游 1019 行移植 + 本机新增「主机资源」页），仅改 4 类：include 名、背景色覆盖、按需建屏、提问游标 setter 与 2 处文案宽度 |
 | `main/wb/wb_theme.h` | 设计 token，直接写死规范 §3 的 hex，**不复用** launcher 的 playful 主题 |
 | `main/wb/wd_core.h` | 摘出 `wb_state_t` 类型 + 内联 `wb_core_running_count()`，不链接上游 `wb_core.c` |
 | `main/wb/wb_ui.cc` | 约 190 行适配层：`wb_view_t` → `wb_state_t`、三键映射，`wb_ui.h` 契约不变 |
@@ -735,3 +735,64 @@ CMake 源文件/包含目录、HLS 测试开关、内存与省电档位策略中
 
 `main.cc` 的串口 `y`/`Y` = 长按 UP 是通用调试通道，保留。
 此前 B.8.9 的电台实机记录随本次下架一并删除，需要时可查 git 历史。
+
+### B.9.1 新增第 5 页「主机资源」：电脑 CPU / 内存 / 磁盘（2026-11-07 02:10）
+
+设备看板原来 4 个导航页（状态总览 / 会话列表 / 今日消耗 / 关于链路）。本轮
+在「关于/链路」之后插入第 5 页，显示**电脑侧**的 CPU、内存、磁盘占用，
+`↑↓` 轮转从 4 页变 5 页，`OK` 回总览语义不变。
+
+**数据链路**（复用已有的 30s host 帧，不新增帧类型）：
+
+| 层 | 改动 |
+|---|---|
+| `host/wb_hostres.py`（新增） | 纯标准库采集，**不引入 psutil**：macOS 读 mach `host_cpu_load_info` + `vm_stat`，Linux 读 `/proc/stat` + `/proc/meminfo`，Windows 走 `GlobalMemoryStatusEx`；磁盘 `shutil.disk_usage`。装了 psutil 才用它 |
+| `host/wb_app.py` | `_build_host_frame` 末尾 `payload.update(wb_hostres.collect())`；帧体积 100B→232B，仍远低于 512B 上限 |
+| `wb_proto.h/.c` | `wb_hostres_t` + host 帧可选键 `cpu_pct/mem_pct/mem_used_mb/mem_total_mb/disk_pct/disk_used_mb/disk_total_mb` |
+| `wb_biz.h/.c` | 转存到快照，`has_res` 由三项占用率任一有效推定 |
+| `wd_core.h` / `wb_view.c` | 新增 `WB_VIEW_HOSTRES` 页 + `build_hostres/refresh_hostres` |
+| `wb_ui.cc` | 适配层搬 `has_res/res`；翻页上界改用 `wb_view_nav_page_count()`（不再写死 `WB_VIEW_ABOUT+1`） |
+
+**关键设计取舍**
+
+- **缺键必须是 -1，不能是 0**。`wb_ev_t` 在解码入口被 memset 成 0，若用 0 兜底，
+  「主机没下发」和「占用 0%」在屏上一模一样。新增 `json_pct()` / `json_opt_int()`
+  统一返回 -1，界面据此写「--」。占用率钳制到 0..100，负容量按「未下发」处理。
+- **CPU 不用 `getloadavg`**。load average 含等待 IO 的线程，磁盘忙时会读到 80%
+  而 CPU 其实闲；mach 的 tick 差值才是真实占用率。首次调用无基线，返回 -1
+  （界面写「--」），第二轮起才有值。
+- **`mach_host_self()` 必须 `mach_port_deallocate`**。不回收就是每 30s 泄漏一个
+  port 引用，长跑一年约百万个。
+- **不做「更新于 X 秒前」**。本工程按需重绘，资源页只在收到新 host 帧时才刷帧，
+  中间不跑定时器，秒数恒为 0 等于没写。改为直接说明节奏「实时同步 · 每 30 秒刷新」。
+- **三张卡不用 32px 大数字**。既有规范每页只允许一个 montserrat_32 锚点，三卡并排
+  就是 3 个；且 32px 会把卡内三行挤成两行，明细只能丢。百分比用 16px 琥珀贴右上。
+
+**版面**（内容区 38..288）：三张卡各 74 高、间距 6 → 38/118/198，末卡到 272；
+272..292 放时效行，页脚从 294 起，不撞。卡内三行：标题+百分比(y6) / 条 h8(y32) /
+明细(y46，20 高到 66 < 74)。
+
+**踩到的两个坑（均为实机抓屏发现，编译期看不出来）**
+
+1. 初版卡高 78、间距 84，末卡到 284，且时效行放 268 —— 结果「更新于 0 秒前」
+   压进磁盘卡内部。改回 74/80 后正常。
+2. 打开串口会拉 DTR/RTS 让 C3 复位（USB-Serial-JTAG 既定行为），且复位后**第一按
+   只唤醒屏幕并被底座吞掉**。抓屏脚本必须先等 12s，再空发一次 `o` 消耗唤醒键，
+   否则连按 4 次 `d` 仍然停在第 1 页。
+
+**实机验证**（fw 1.3.0-passport，烧录 3 轮）
+
+| 项 | 结果 |
+|---|---|
+| 主机日志 | `主机大盘帧已推（成功）… CPU 43% 内存 81% 磁盘 26%` |
+| 设备日志 | `主机大盘 gw=10 live=2 up=70s secret=1 cli=1 \| cpu=43% mem=79%(12426/15661MB) disk=26%(249910/948584MB)` |
+| 屏幕 | CPU 46% / 内存 81%（已用 12.4 / 15.3 GB）/ 磁盘 26%（已用 244.1 / 926.4 GB），条形比例与数值一致 |
+| 版面 | 三卡无压叠、无裁剪；底部「实时同步 · 每 30 秒刷新」独立成行 |
+| 回归 | `test_wb_hostres_frame`（新增）PASS；编译 0 warning；固件分区剩余 59% |
+
+**空态分档**（主机版本不支持时）：未连接 → 「等待主机数据 / 每 30 秒刷新一次」；
+已连接但无资源键 → 「主机未下发资源信息 / 升级主机端后可见」。两档都把三张卡整卡
+隐藏，不画三排 0% 条（那会被误读成「电脑完全空闲」）。
+
+**截图**：`docs/hub_05_hostres.png`（240×320 原始抓屏）。
+抓屏工具新增 `passport-fw/tools/capture_screen.py`（纯标准库收 hex 码流还原 PNG）。

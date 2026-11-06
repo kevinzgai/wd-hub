@@ -5387,13 +5387,16 @@ class UnifiedDaemon:
                     ok_host = await self._write(host)
                     # 30s 一跳，内容不变时别刷屏；首次/变化时留一条证据。
                     sig = (host["gw_ports"], host["gw_sessions"],
-                           host["secret"], host["cli"])
+                           host["secret"], host["cli"],
+                           host.get("cpu_pct"), host.get("mem_pct"),
+                           host.get("disk_pct"))
                     if sig != getattr(self, "_last_host_sig", None):
                         self._last_host_sig = sig
                         self._log(
                             f"[daemon] 主机大盘帧已推（{'成功' if ok_host else '写帧失败'}）"
                             f"网关 {sig[0]} 端口 / 活会话 {sig[1]} / "
-                            f"密钥 {'有' if sig[2] else '无'}")
+                            f"密钥 {'有' if sig[2] else '无'} / "
+                            f"CPU {sig[4]}% 内存 {sig[5]}% 磁盘 {sig[6]}%")
                 except Exception as exc:
                     self._log(f"[daemon] 主机大盘帧组装失败：{exc}")
 
@@ -5426,6 +5429,12 @@ class UnifiedDaemon:
         对应控制台：网关卡片的端口数 / 活会话数 / 密钥 / CLI，
         以及顶栏「已连接」时长。设备固件用 cJSON_IsTrue 解析 secret/cli，
         所以这里必须发 JSON bool，不能发 0/1。
+
+        2026-11 新增：设备第 5 页「主机资源」的 CPU / 内存 / 磁盘读数。
+        同帧下发而不另开一帧，因为这组数据与网关信息同频（30s 一跳，
+        status_list 装不下），合并后帧体积仍只有约 220B，远低于 512B 上限。
+        采集走 wb_hostres（纯标准库，无第三方依赖），任何一项拿不到就发 -1，
+        设备按「--」显示，绝不发 0 冒充「占用为零」。
         """
         try:
             gw = wb_gateway_state()
@@ -5436,12 +5445,23 @@ class UnifiedDaemon:
         except Exception:
             live = []
         since = getattr(self, "_ble_since", 0.0) or getattr(self, "_start_time", time.time())
-        return {"host": 1,
-                "gw_ports": int(gw.get("count") or 0),
-                "gw_sessions": len(live),
-                "secret": bool(gw.get("secret")),
-                "cli": bool(gw.get("cli")),
-                "uptime": max(0, int(time.time() - since))}
+        payload = {"host": 1,
+                   "gw_ports": int(gw.get("count") or 0),
+                   "gw_sessions": len(live),
+                   "secret": bool(gw.get("secret")),
+                   "cli": bool(gw.get("cli")),
+                   "uptime": max(0, int(time.time() - since))}
+
+        # 采集本身已全包 try/except，这里再加一层是因为「能连上设备」比
+        # 「能看到 CPU 读数」重要得多：资源采集炸了不能连累网关帧。
+        # 延迟导入与 wb_credential 同一约定：模块缺失/损坏只影响这一块，
+        # 不能让整个 daemon 起不来。
+        try:
+            import wb_hostres
+            payload.update(wb_hostres.collect())
+        except Exception as exc:
+            self._log(f"[daemon] 资源采集失败（本帧只发网关信息）：{exc}")
+        return payload
 
     # ---- 审批遥控 ----
 

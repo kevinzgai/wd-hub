@@ -34,6 +34,22 @@ extern "C" {
 #define WB_USAGE_MODELS   5
 #define WB_USAGE_NAME_LEN 20
 
+// 主机资源页（第 5 页）：占用率统一用「0..100 的整数百分比」，由主机端
+// 量化后下发，固件不做浮点换算 —— C3 上每帧多做几次除法没有意义，而
+// 整数百分比在 240px 屏上已经完全够用（1% 分辨率约等于 2px 条长）。
+// 容量一律用 MB 的整数：内存 16GB = 16384，磁盘 1TB ≈ 1024000，都在 int32
+// 范围内；固件显示 GB 时自己除 1024，避免主机端再约定「放大了几倍」。
+// 值为 -1 表示该键主机没下发，界面写「--」而不是伪造 0。
+typedef struct {
+    int cpu_pct;        // CPU 总占用率 0..100，-1 = 未下发
+    int mem_pct;        // 内存占用率 0..100，-1 = 未下发
+    int mem_used_mb;    // 已用内存 MB，-1 = 未下发
+    int mem_total_mb;   // 总内存 MB，-1 = 未下发
+    int disk_pct;       // 磁盘占用率 0..100，-1 = 未下发
+    int disk_used_mb;   // 已用磁盘 MB，-1 = 未下发
+    int disk_total_mb;  // 总磁盘 MB，-1 = 未下发
+} wb_hostres_t;
+
 typedef struct {
     char name[WB_USAGE_NAME_LEN];
     int64_t tokens;
@@ -114,6 +130,10 @@ typedef struct {
     int uptime_s;
     bool gw_secret;
     bool gw_cli;
+
+    /* host 帧的新增可选键：电脑的 CPU / 内存 / 磁盘占用。老主机会整块不发，
+     * 此时 pct 全为 -1，界面显示「未下发」而不是伪造 0%。 */
+    wb_hostres_t res;
 } wb_ev_t;
 
 bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev);

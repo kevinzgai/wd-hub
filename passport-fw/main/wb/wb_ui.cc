@@ -3,14 +3,15 @@
 // 视觉全部交给 wb_view.c（wd-hub-design 方向 A「仪表像素」的实机实现，
 // 从 passport-workbuddy 工程原样移植）。本文件只做三件事：
 //   1. 把业务层快照 wb_view_t 适配成 wb_view.c 需要的 wb_state_t；
-//   2. 把三键映射到「前 4 页 ↑↓ 轮转 + 审批/提问事件页 + 待机覆盖」；
+//   2. 把三键映射到「前 5 页 ↑↓ 轮转 + 审批/提问事件页 + 待机覆盖」；
 //   3. 维持 wb_ui.h 的对外 API 不变，app_wb.cc 一行不用改。
 //
 // 本轮按约定「只移植已有实现」：主机端协议未提供的字段（最近事件、下行帧数、
 // 审批倒计时）留占位，界面会显示「暂无数据」类文案，不伪造数字。
 // 逐模型用量明细原先也在占位之列，现已打通（usage 帧 models[].n/v/hit →
 // wb_proto → wb_biz → wb_state_t.usage.model[]），不在本层编造任何值。
-// 离线/低电覆盖页仍留待后续。
+// 「主机资源」页同样是纯搬运：host 帧的 cpu/mem/disk 字段经 wb_proto →
+// wb_biz → wb_state_t.res，缺字段时不编造 0。
 //
 // 旧 V2 实现（1596 行、10 屏预创建 + 共享 chrome）备份在
 // passport-fw/.tmp/ui-rewrite-20261105/wb_ui_legacy.cc。
@@ -124,6 +125,10 @@ void adapt(const wb_view_t *v, bool standby)
     s_st.skin = 1;
     s_st.soc = s_soc;
     s_st.boot_ms = s_boot_ms;
+
+    // 第 5 页「主机资源」：has_res 与 res 一起搬，缺数据时视觉层自己写空态。
+    s_st.has_res = v->has_res;
+    s_st.res = v->res;
 }
 
 // 「已提交」态渲染完这一帧之后才上行：业务层 confirm 会立刻把页切回总览，
@@ -254,10 +259,11 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
         return true;
     }
 
-    // 前 4 个导航页：↑↓ 轮转，OK 回总览。长按不翻页。
+    // 导航页（STATUS / RACK / USAGE / ABOUT / HOSTRES）：↑↓ 轮转，OK 回总览。
+    // 长按不翻页。页数由 wb_view 统一提供，这里不再写死常量。
     if (long_press) return false;
 
-    const int n = WB_VIEW_ABOUT + 1;   // STATUS / RACK / USAGE / ABOUT
+    const int n = wb_view_nav_page_count();
     const int cur = (int)wb_view_manual_page();
     if (key == WB_UI_KEY_UP) {
         wb_view_set_manual_page((wb_view_page_t)((cur + n - 1) % n));

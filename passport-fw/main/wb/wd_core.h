@@ -100,6 +100,11 @@ typedef struct {
 
     wb_usage_t usage;
 
+    // 第 5 页「主机资源」：电脑侧 CPU / 内存 / 磁盘占用。
+    // has_res=false（主机还没推 hostres 键）时整页显示说明文案，不画空条。
+    bool has_res;
+    wb_hostres_t res;
+
     int beep_vol;
     uint8_t skin;
     int soc;

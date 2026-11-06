@@ -221,10 +221,19 @@ static void handle_frame(const wb_frame_msg_t *msg)
         s_view.gw_secret = ev.gw_secret;
         s_view.gw_cli = ev.gw_cli;
         s_view.have_host = true;
+        // 电脑资源：只要任一占用率有效就算「有数据」，避免主机只发了一半
+        // 字段时整页被判成空态。全 -1 说明该主机版本还不采集，保持空态。
+        s_view.res = ev.res;
+        s_view.has_res = ev.res.cpu_pct >= 0 || ev.res.mem_pct >= 0 ||
+                         ev.res.disk_pct >= 0;
         changed = true;
-        ESP_LOGI(TAG, "主机大盘 gw=%d live=%d up=%ds secret=%d cli=%d",
+        ESP_LOGI(TAG, "主机大盘 gw=%d live=%d up=%ds secret=%d cli=%d | "
+                 "cpu=%d%% mem=%d%%(%d/%dMB) disk=%d%%(%d/%dMB)",
                  ev.gw_ports, ev.gw_sessions, ev.uptime_s,
-                 (int)ev.gw_secret, (int)ev.gw_cli);
+                 (int)ev.gw_secret, (int)ev.gw_cli,
+                 ev.res.cpu_pct, ev.res.mem_pct,
+                 ev.res.mem_used_mb, ev.res.mem_total_mb,
+                 ev.res.disk_pct, ev.res.disk_used_mb, ev.res.disk_total_mb);
         break;
     case WB_EV_NONE:
     default:

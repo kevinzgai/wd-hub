@@ -1,4 +1,4 @@
-// main/console/wb_view.c —— WD Hub 看板 7 页(240x320, LVGL 9)。
+// main/console/wb_view.c —— WD Hub 看板 8 页(240x320, LVGL 9)。
 //
 // 版式来源:xiozhi-workbuddy-board/wd-hub-design/WD-Hub-样式规范.md 第 6 节,
 // 方向 A「仪表像素」。硬约束:
@@ -75,6 +75,18 @@ typedef struct {
     lv_obj_t *ab_state;
     lv_obj_t *ab_power;
     lv_obj_t *ab_frames;
+
+    // 05 主机资源（电脑 CPU / 内存 / 磁盘）
+    // 每张卡：标题行右侧是百分比（不设状态胶囊，一行放不下三样东西），
+    // 状态靠条的颜色 + 百分比数值本身表达，符合「不能只靠颜色」的另一半
+    // ——数值永远在，颜色只是辅助。
+    lv_obj_t *hr_pct[3];
+    lv_obj_t *hr_bar[3];
+    lv_obj_t *hr_detail[3];   // 「12.3 / 16 GB」这类绝对值
+    lv_obj_t *hr_card[3];     // 空态时要整卡隐藏
+    lv_obj_t *hr_age;         // 底部一行：数据时效
+    lv_obj_t *hr_empty;       // 空态主提示（未下发时替代三张卡）
+    lv_obj_t *hr_empty2;      // 空态副说明
 
     // 05 审批
     lv_obj_t *ap_tool;
@@ -570,6 +582,54 @@ static void build_about(void)
     mk_footer(WB_VIEW_ABOUT, "OK", " 总览 · ", "上下", " 翻页");
 }
 
+// 05 主机资源：电脑侧 CPU / 内存 / 磁盘。
+//
+// 版面预算：内容区 38..288（250px），但底部还要留一行「更新于…」。
+//   三张卡各 74 高、卡间距 6 → 38 / 118 / 198，最后一张到 272；
+//   272..292 放时效行（20px 行高），页脚从 294 开始，正好不撞。
+//
+// 每张卡内部三行（buddy_font_16 行高 20，卡内默认裁剪子对象，必须算准）：
+//   ① y=6   标题 + 右侧百分比（同一行，省掉一个大数字的高度）
+//   ② y=32  占用条 h=8（到 40）
+//   ③ y=46  「12.3 / 16 GB」明细，20 高到 66 < 卡高 74 ✓
+//
+// 为什么不用 montserrat_32 大数字：既有 4 页每页只允许一个 32px 锚点
+// （规范 §5.3），而这里三张卡并排，各放一个就是 3 个锚点，直接违反规范；
+// 而且 32px 字形会把卡内三行挤成两行，明细只能丢掉。
+static void build_hostres(void)
+{
+    lv_obj_t *scr = s_ui.scr[WB_VIEW_HOSTRES];
+    mk_header(WB_VIEW_HOSTRES, "主机资源");
+
+    static const char *const k_titles[3] = {"CPU 占用", "内存占用", "磁盘占用"};
+    static const uint32_t k_rail[3] = {WD_PRIMARY, WD_SUCCESS, WD_TEXT_DIM};
+
+    for (int i = 0; i < 3; i++) {
+        const int y = 38 + i * 80;                       // 38 / 118 / 198
+        lv_obj_t *card = mk_card(scr, 4, y, 232, 74);
+        s_ui.hr_card[i] = card;
+        mk_rect(card, 0, 0, 3, 74, k_rail[i]);
+        mk_text(card, k_titles[i], WD_TEXT_DIM, 11, 6, 90);
+        s_ui.hr_pct[i] = mk_text_at(card, "--", WD_PRIMARY, 106, 6, 117,
+                                    LV_TEXT_ALIGN_RIGHT);
+        s_ui.hr_bar[i] = mk_bar(card, 11, 32, 214, 8);
+        s_ui.hr_detail[i] = mk_text(card, "", WD_TEXT_DIM, 11, 46, 214);
+    }
+
+    // 空态：主机版本还不采集资源时，把三张卡隐掉换成两行说明，
+    // 避免三排 0% 条看起来像"电脑完全空闲"。
+    s_ui.hr_empty = mk_text_at(scr, "", WD_TEXT, 0, 132, WD_SCR_W,
+                               LV_TEXT_ALIGN_CENTER);
+    s_ui.hr_empty2 = mk_text_at(scr, "", WD_TEXT_DIM, 0, 156, WD_SCR_W,
+                                LV_TEXT_ALIGN_CENTER);
+
+    // 底部一行「数据时效」：272..292，与第三张卡（到 272）严丝合缝。
+    s_ui.hr_age = mk_text_at(scr, "", WD_TEXT_DIM, 0, 272, WD_SCR_W,
+                             LV_TEXT_ALIGN_CENTER);
+
+    mk_footer(WB_VIEW_HOSTRES, "OK", " 总览 · ", "上下", " 翻页");
+}
+
 static void build_approval(void)
 {
     lv_obj_t *scr = s_ui.scr[WB_VIEW_APPROVAL];
@@ -689,6 +749,7 @@ static void ensure_page(wb_view_page_t page)
     case WB_VIEW_RACK:     build_rack();     break;
     case WB_VIEW_USAGE:    build_usage();    break;
     case WB_VIEW_ABOUT:    build_about();    break;
+    case WB_VIEW_HOSTRES:  build_hostres();  break;
     case WB_VIEW_APPROVAL: build_approval(); break;
     case WB_VIEW_ASK:      build_ask();      break;
     case WB_VIEW_STANDBY:  build_standby();  break;
@@ -729,10 +790,14 @@ void wb_view_teardown(void)
 
 void wb_view_set_manual_page(wb_view_page_t page)
 {
-    if (page <= WB_VIEW_ABOUT) s_manual = page;
+    if (page <= WB_VIEW_HOSTRES) s_manual = page;
 }
 
 wb_view_page_t wb_view_manual_page(void) { return s_manual; }
+
+// 导航页是 STATUS..HOSTRES 这一段连续的枚举值（5 页）。用枚举本身算上界，
+// 以后再加页只需在枚举里插一项，调用方的轮转范围自动跟上。
+int wb_view_nav_page_count(void) { return (int)WB_VIEW_HOSTRES + 1; }
 
 void wb_view_ask_move(int delta, int n_opts)
 {
@@ -1047,6 +1112,126 @@ static void refresh_about(const wb_state_t *st)
     set_text(s_ui.ab_frames, buf);
 }
 
+// 05 主机资源：三张卡按「占用率」画条 + 右侧百分比 + 明细绝对值。
+//
+// 三档降级顺序（以前几页踩过的同类问题，这里一次说清）：
+//   1) 主机从没下发 res（老主机版本）→ 隐藏三张卡，写「主机未下发资源」
+//      和「升级主机端后可见」；
+//   2) 已连接但这一帧还没到 → 「等待主机数据 / 每 30 秒刷新」；
+//   3) 有数据 → 正常画卡，底部补一行「更新于 xx 秒前」。
+// 任何一档都不伪造数值：缺项只是那一行写「--」，条保持 0。
+static void refresh_hostres(const wb_state_t *st)
+{
+    char buf[80];
+    const bool linked = st->linked && !st->offline;
+    const bool has = st->has_res;
+
+    for (int i = 0; i < 3; i++) {
+        if (!s_ui.hr_card[i]) continue;
+        if (has) lv_obj_remove_flag(s_ui.hr_card[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(s_ui.hr_card[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (!has) {
+        const char *hint = "等待主机数据";
+        const char *hint2 = "每 30 秒刷新一次";
+        if (linked) {
+            hint = "主机未下发资源信息";
+            hint2 = "升级主机端后可见";
+        }
+        set_text(s_ui.hr_empty, hint);
+        set_text(s_ui.hr_empty2, hint2);
+        for (int k = 0; k < 2; k++) {
+            lv_obj_t *g = k ? s_ui.hr_empty2 : s_ui.hr_empty;
+            if (!g) continue;
+            lv_obj_remove_flag(g, LV_OBJ_FLAG_HIDDEN);
+        }
+        set_text(s_ui.hr_age, "");
+        return;
+    }
+
+    for (int k = 0; k < 2; k++) {
+        lv_obj_t *g = k ? s_ui.hr_empty2 : s_ui.hr_empty;
+        if (!g) continue;
+        lv_obj_add_flag(g, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    const wb_hostres_t *r = &st->res;
+
+    // ---- CPU ----
+    if (r->cpu_pct >= 0) {
+        snprintf(buf, sizeof(buf), "%d%%", r->cpu_pct);
+        set_text(s_ui.hr_pct[0], buf);
+        lv_bar_set_value(s_ui.hr_bar[0], r->cpu_pct * 10, LV_ANIM_OFF);
+        // 单核 C3 上不按颜色告警：主机 CPU 高不代表设备异常，只做数值呈现。
+        lv_obj_set_style_bg_color(s_ui.hr_bar[0], lv_color_hex(WD_PRIMARY),
+                                  LV_PART_INDICATOR);
+        set_text(s_ui.hr_detail[0], "整机平均占用");
+    } else {
+        set_text(s_ui.hr_pct[0], "--");
+        lv_bar_set_value(s_ui.hr_bar[0], 0, LV_ANIM_OFF);
+        set_text(s_ui.hr_detail[0], "主机未上报");
+    }
+
+    // ---- 内存 ----
+    if (r->mem_pct >= 0) {
+        snprintf(buf, sizeof(buf), "%d%%", r->mem_pct);
+        set_text(s_ui.hr_pct[1], buf);
+        lv_bar_set_value(s_ui.hr_bar[1], r->mem_pct * 10, LV_ANIM_OFF);
+        const uint32_t col = r->mem_pct >= 90 ? WD_DANGER
+                           : r->mem_pct >= 75 ? WD_PRIMARY : WD_SUCCESS;
+        lv_obj_set_style_bg_color(s_ui.hr_bar[1], lv_color_hex(col),
+                                  LV_PART_INDICATOR);
+    } else {
+        set_text(s_ui.hr_pct[1], "--");
+        lv_bar_set_value(s_ui.hr_bar[1], 0, LV_ANIM_OFF);
+    }
+    // 绝对值：总量缺失就只写已用量，两个都缺再退成「主机未上报」。
+    if (r->mem_used_mb >= 0 && r->mem_total_mb > 0) {
+        snprintf(buf, sizeof(buf), "已用 %.1f / %.1f GB",
+                 r->mem_used_mb / 1024.0, r->mem_total_mb / 1024.0);
+    } else if (r->mem_used_mb >= 0) {
+        snprintf(buf, sizeof(buf), "已用 %d MB", r->mem_used_mb);
+    } else {
+        snprintf(buf, sizeof(buf), "%s",
+                 r->mem_pct >= 0 ? "总量未知" : "主机未上报");
+    }
+    set_text(s_ui.hr_detail[1], buf);
+
+    // ---- 磁盘 ----
+    // 容量统一按 MB 下发（见 wb_hostres_t 注释），这里除 1024 显示成 GB。
+    if (r->disk_pct >= 0) {
+        snprintf(buf, sizeof(buf), "%d%%", r->disk_pct);
+        set_text(s_ui.hr_pct[2], buf);
+        lv_bar_set_value(s_ui.hr_bar[2], r->disk_pct * 10, LV_ANIM_OFF);
+        const uint32_t col = r->disk_pct >= 90 ? WD_DANGER
+                           : r->disk_pct >= 75 ? WD_PRIMARY : WD_SUCCESS;
+        lv_obj_set_style_bg_color(s_ui.hr_bar[2], lv_color_hex(col),
+                                  LV_PART_INDICATOR);
+    } else {
+        set_text(s_ui.hr_pct[2], "--");
+        lv_bar_set_value(s_ui.hr_bar[2], 0, LV_ANIM_OFF);
+    }
+    if (r->disk_used_mb >= 0 && r->disk_total_mb > 0) {
+        snprintf(buf, sizeof(buf), "已用 %.1f / %.1f GB",
+                 r->disk_used_mb / 1024.0, r->disk_total_mb / 1024.0);
+    } else if (r->disk_used_mb >= 0) {
+        snprintf(buf, sizeof(buf), "已用 %.1f GB", r->disk_used_mb / 1024.0);
+    } else {
+        snprintf(buf, sizeof(buf), "%s",
+                 r->disk_pct >= 0 ? "容量未知" : "主机未上报");
+    }
+    set_text(s_ui.hr_detail[2], buf);
+
+    // 数据时效。
+    // 这里不做「更新于 X 秒前」：本工程按需重绘，资源页只在收到新 host 帧
+    // （30s 一跳）时才刷一帧，中间不跑定时器 —— 于是 X 恒为 0，那行字等于
+    // 没写。要让秒数真的走，就得每秒重绘一次整页，C3 上为一行小字付这个
+    // 代价不划算。改成直接说明刷新节奏，并保留断链提示。
+    set_text(s_ui.hr_age, linked ? "实时同步 · 每 30 秒刷新"
+                                 : "链路断开 · 显示最后一次收到的数据");
+}
+
 static void refresh_approval(const wb_state_t *st)
 {
     char buf[32];
@@ -1187,6 +1372,7 @@ void wb_view_refresh(const wb_state_t *st, int64_t now_ms)
     case WB_VIEW_RACK:     refresh_rack(st); break;
     case WB_VIEW_USAGE:    refresh_usage(st); break;
     case WB_VIEW_ABOUT:    refresh_about(st); break;
+    case WB_VIEW_HOSTRES:  refresh_hostres(st); break;
     case WB_VIEW_APPROVAL: refresh_approval(st); break;
     case WB_VIEW_ASK:      refresh_ask(st, now_ms); break;
     case WB_VIEW_STANDBY:  refresh_standby(st, now_ms); break;

@@ -67,6 +67,10 @@ typedef struct {
     int uptime_s;
     bool gw_secret;
     bool gw_cli;
+    // 电脑资源（host 帧可选键）。has_res=false 表示主机没下发整组数据，
+    // 与「占用 0」区分开：前者界面写「--」，后者画空条。
+    bool has_res;
+    wb_hostres_t res;
 } wb_view_t;
 
 typedef void (*wb_biz_change_cb_t)(void);

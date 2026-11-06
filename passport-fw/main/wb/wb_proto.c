@@ -44,6 +44,27 @@ static int json_int(const cJSON *root, const char *key, int def)
     return cJSON_IsNumber(it) ? (int)it->valuedouble : def;
 }
 
+// 主机资源字段：缺失键必须落成 -1，不能落 0。
+// ev 在解码入口被 memset 成 0，若直接用 0 兜底，「主机没下发」和「占用 0%」
+// 在界面上会长得一模一样 —— 前者该显示「--」，后者才是真的空载。
+static int json_pct(const cJSON *root, const char *key)
+{
+    const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
+    if (!cJSON_IsNumber(it)) return -1;
+    int v = (int)it->valuedouble;
+    if (v < 0) v = 0;          // 主机给负数说明采集异常，钳到 0 而不是显示负占用
+    if (v > 100) v = 100;
+    return v;
+}
+
+static int json_opt_int(const cJSON *root, const char *key)
+{
+    const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
+    if (!cJSON_IsNumber(it)) return -1;
+    int v = (int)it->valuedouble;
+    return v < 0 ? -1 : v;     // 负值按「未下发」处理，避免画出负长度条
+}
+
 static int64_t json_i64(const cJSON *root, const char *key, int64_t def)
 {
     const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
@@ -175,6 +196,14 @@ bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev)
             ev->uptime_s = json_int(root, "uptime", 0);
             ev->gw_secret = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "secret"));
             ev->gw_cli = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "cli"));
+            // 电脑资源：新增可选键。老主机不发这些键 → 全 -1 → 界面显示「--」。
+            ev->res.cpu_pct = json_pct(root, "cpu_pct");
+            ev->res.mem_pct = json_pct(root, "mem_pct");
+            ev->res.mem_used_mb = json_opt_int(root, "mem_used_mb");
+            ev->res.mem_total_mb = json_opt_int(root, "mem_total_mb");
+            ev->res.disk_pct = json_pct(root, "disk_pct");
+            ev->res.disk_used_mb = json_opt_int(root, "disk_used_mb");
+            ev->res.disk_total_mb = json_opt_int(root, "disk_total_mb");
         } else if (cJSON_HasObjectItem(root, "remain")) {
             ev->type = WB_EV_CREDIT;
             ev->remain = cJSON_GetObjectItemCaseSensitive(root, "remain")->valuedouble;

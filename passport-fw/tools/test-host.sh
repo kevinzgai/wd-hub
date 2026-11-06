@@ -72,11 +72,20 @@ python3 tests/test_avatar_upload.py
     -Itests/home_mocks -Itests/http_mocks -Imain \
     tests/test_home_storage.c "$GC_SECTIONS" -lm -o "$test_dir/home-storage"
 "$test_dir/home-storage"
-"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -Wno-deprecated \
-    -fsanitize=address,undefined -g \
+"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
     -Itests/vendor/cjson -Icomponents/esp-wifi-connect/include \
     tests/test_phone_time.cc tests/vendor/cjson/cJSON.c -o "$test_dir/phone-time"
 "$test_dir/phone-time"
+# host 帧「电脑资源」字段：老/新/半新三种主机形态与越界钳制。
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+    -Imain/wb -Itests/vendor/cjson -c main/wb/wb_proto.c -o "$test_dir/wb-proto.o"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+    -Itests/vendor/cjson -c tests/vendor/cjson/cJSON.c -o "$test_dir/wb-cjson.o"
+"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+    -Imain/wb -Itests/vendor/cjson \
+    tests/test_wb_hostres_frame.cc "$test_dir/wb-proto.o" "$test_dir/wb-cjson.o" \
+    -o "$test_dir/wb-hostres"
+"$test_dir/wb-hostres"
 python3 tests/test_city_catalog.py
 python3 tests/test_home_weather.py
 python3 tests/test_home_weather_schedule.py

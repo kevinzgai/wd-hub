@@ -1,5 +1,5 @@
 // passport-fw/main/wb/wb_ui.h —— WD Hub 看板对外 API（应用 ↔ 视觉层契约）。
-// 实现：wb_ui.cc 适配业务快照与三键，wb_view.c 负责方向 A「仪表像素」7 页渲染。
+// 实现：wb_ui.cc 适配业务快照与三键，wb_view.c 负责方向 A「仪表像素」8 页渲染。
 #pragma once
 
 #include <stdbool.h>
