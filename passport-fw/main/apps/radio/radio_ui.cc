@@ -912,9 +912,11 @@ void apply_station_list() {
     lv_obj_set_style_text_color(s_list_state_label, lv_color_hex(state_color), 0);
 
     if (s_list_hint) {
-        lv_label_set_text(s_list_hint,
-            s_list_load_state == RadioListState::Loading
-                ? "稍候 · 长按下返回" : "上下选择  确定播放/切换");
+        // 断网时加载态不会自己推进，继续显示「稍候」会误导用户以为只是慢。
+        const char *hint_text = "上下选择  确定播放/切换";
+        if (!s_network_connected) hint_text = "确定切换  长按下返回";
+        else if (s_list_load_state == RadioListState::Loading) hint_text = "稍候 · 长按下返回";
+        lv_label_set_text(s_list_hint, hint_text);
     }
 
     const std::size_t total = station_list_total();
@@ -923,18 +925,24 @@ void apply_station_list() {
         std::min(s_list_selected > 2 ? s_list_selected - 2 : 0,
                  total - kStationVisibleRows);
 
+    // 无电台数据（未联网 / 加载中 / 查无结果）时只剩「切换城市」「返回主屏」
+    // 两行：隐藏多余空框，并把这两行挪到列表区中部，避免顶部两行 + 三块空白。
+    const int base_y = total <= 2 ? 128 : 68;
     for (std::size_t row = 0; row < kStationVisibleRows; ++row) {
         const std::size_t index = first + row;
         const bool present = index < total;
         const bool active = present && index == s_list_selected;
+        lv_obj_set_pos(s_list_row_box[row], 12, base_y + static_cast<int>(row) * 40);
         ui_pixel_set_selected(s_list_row_box[row], active, true);
         lv_obj_set_style_bg_color(s_list_row_box[row],
                                   lv_color_hex(active ? kAmberSoft : kPanel), 0);
         if (!present) {
+            lv_obj_add_flag(s_list_row_box[row], LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(s_list_row_name[row], "");
             lv_label_set_text(s_list_row_detail[row], "");
             continue;
         }
+        lv_obj_clear_flag(s_list_row_box[row], LV_OBJ_FLAG_HIDDEN);
 
         char detail[96];
         if (index < s_list_count) {
@@ -970,13 +978,14 @@ void build_station_list() {
     s_list_state_label = make_label(s_screen, "", 12, 42, 216, kMuted);
     set_centered(s_list_state_label);
 
+    // buddy_font_16 的 line_height 是 20px：显式把 label 压成 15/18px 只会让
+    // 字形画到框外、上下两行压叠（实机抓屏确认过）。这里不设 label 高度，
+    // 让它自适应 20px，行框与行距都取 40px，两行正好铺满且互不重叠。
     for (std::size_t row = 0; row < kStationVisibleRows; ++row) {
-        const int y = 68 + static_cast<int>(row) * 38;
-        s_list_row_box[row] = make_box(s_screen, 12, y, 216, 34, kPanel, 5);
-        s_list_row_name[row] = make_label(s_list_row_box[row], "", 8, 2, 200, kText);
-        lv_obj_set_height(s_list_row_name[row], 15);
-        s_list_row_detail[row] = make_label(s_list_row_box[row], "", 8, 17, 200, kMuted);
-        lv_obj_set_height(s_list_row_detail[row], 15);
+        const int y = 68 + static_cast<int>(row) * 40;
+        s_list_row_box[row] = make_box(s_screen, 12, y, 216, 40, kPanel, 5);
+        s_list_row_name[row] = make_label(s_list_row_box[row], "", 8, 0, 200, kText);
+        s_list_row_detail[row] = make_label(s_list_row_box[row], "", 8, 20, 200, kMuted);
     }
 
     make_taskbar(s_screen);

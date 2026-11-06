@@ -254,6 +254,12 @@ static void handle_serial_command(int c) {
         ESP_LOGI(TAG, "[SerialCmd] LONG DOWN (-) button triggered");
         KeyMessage msg = {.button = BSP_BTN_DOWN, .event = BTN_EVT_LONG, .mv = 1060};
         app_registry_dispatch_key(msg.button, msg.event, msg.mv);
+    } else if (c == 'y' || c == 'Y') {
+        // 调试用:长按上键。电台 App 的「城市电台列表」入口绑在这个手势上
+        // (主屏短按上仍是换台),与上面的长按下键同理,便于脱离真机按键抓屏。
+        ESP_LOGI(TAG, "[SerialCmd] LONG UP (+) button triggered");
+        KeyMessage msg = {.button = BSP_BTN_UP, .event = BTN_EVT_LONG, .mv = 15};
+        app_registry_dispatch_key(msg.button, msg.event, msg.mv);
     } else if (c == '[' || c == ']') {
         // Diagnostic PTT pair: same event queue and handler as the physical UP key.
         ESP_LOGI(TAG, "[SerialCmd] UP %s", c == '[' ? "press" : "release");

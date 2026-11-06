@@ -55,6 +55,7 @@ RadioStation s_station_rows[kStationCapacity] = {};
 // start_catalog() 之后。tests/test_radio_lifecycle.py 会按字符串切片把
 // catalog_cancelled()..start_catalog() 抽出来单独编译，切片里只应出现
 // 数据层已有的符号；列表页的状态变量不能渗进这段生产代码。
+bool radio_catalog_network_ready();
 void radio_catalog_fill_preference(const home_profile_t &profile,
                                    RadioLocation *preferred);
 void radio_catalog_apply_result(const char *city, std::size_t found);
@@ -71,6 +72,11 @@ void refresh_station_list() {
         s_station_rows[i] = radio_player_station(i);
     }
     const std::size_t shown = s_list_state == RadioListState::Ready ? count : 0;
+    // app 层必须与 UI 层用同一个上界：无网时目录为空、total 只有两条操作行，
+    // 而进入列表页时光标取的是当前电台索引(可能 5)。若这里不 clamp，
+    // UI 显示已回到第 0 行、app 层却仍算在第 5 行，上下键和 OK 会落错项。
+    const std::size_t total = shown + 2;
+    if (s_list_selected >= total) s_list_selected = 0;
     radio_ui_show_station_list(s_current_city, s_list_state, s_station_rows, shown,
                                s_list_selected, radio_player_station_index(),
                                s_list_detail);
@@ -112,6 +118,25 @@ void catalog_worker(void *arg) {
         s_catalog_running.store(false);
         xSemaphoreGive(s_catalog_commit);
         ESP_LOGE(TAG, "Unable to allocate station catalog");
+        vTaskDelete(nullptr);
+        return;
+    }
+    // BLE-only 启动 / 尚未配网时 lwIP 栈没起来(WifiManager: Not initialized)。
+    // 此时任何 HTTP/DNS 都会打在空 mbox 上，触发 tcpip_send_msg_wait_sem 的
+    // assert 并复位整机。切城市会重建 catalog worker，是最容易踩到的路径，
+    // 必须在发起目录查询前收口，直接落到「无数据」态。
+    if (!radio_catalog_network_ready()) {
+        ESP_LOGW(TAG, "Catalog skipped: Wi-Fi not connected");
+        xSemaphoreTake(s_catalog_commit, portMAX_DELAY);
+        const bool alive = !catalog_cancelled() && s_ui_alive.load();
+        if (alive) radio_catalog_apply_result(nullptr, 0);
+        std::free(stations);
+        if (alive) {
+            radio_player_set_playing(true);
+            radio_catalog_refresh_list();
+        }
+        xSemaphoreGive(s_catalog_commit);
+        s_catalog_running.store(false);
         vTaskDelete(nullptr);
         return;
     }
@@ -169,6 +194,10 @@ void start_catalog() {
         radio_player_set_playing(true);
     }
     xSemaphoreGive(s_catalog_commit);
+}
+
+bool radio_catalog_network_ready() {
+    return s_wifi_connected.load();
 }
 
 void radio_catalog_fill_preference(const home_profile_t &profile,
@@ -343,6 +372,9 @@ void radio_app_start(void) {
             radio_ui_set_playback(RadioPlaybackState::Error, "请在手机设置中配网");
         }
     } else {
+        // 启动时就已经连上 Wi-Fi 的情况不会走 on_wifi_event(Connected)，
+        // 这里必须同步 app 层状态，否则 catalog 会被误判为「无网」而跳过。
+        s_wifi_connected.store(true);
         radio_ui_set_network(true, "Wi-Fi已连接");
         radio_player_set_network(true);
         start_catalog();
@@ -428,6 +460,7 @@ void radio_app_on_key(uint8_t btn, app_btn_event_t event, uint16_t mv) {
 
         if (s_radio_page == RadioPage::StationList) {
             const std::size_t total = station_total();
+            if (s_list_selected >= total) s_list_selected = 0;
             const std::size_t shown = total - 2;   // 末尾两项是操作行
             if (btn == BSP_BTN_UP) {
                 s_list_selected = total ? (s_list_selected + total - 1) % total : 0;

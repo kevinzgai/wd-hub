@@ -715,3 +715,55 @@ I (45459) wb_audio: 播放 CONNECTED: 4160 帧(260ms), 累计 played=3
 
 **验证脚本**：`/tmp/wb_verify_beep.py`（RTS 脉冲强制复位制造真实重连，
 再两次 POST `/api/test-beep`，比对 `test=` 标记与 `played` 计数）。
+
+### B.8.9 城市电台列表页烧录实机：3 个问题（2026-11-07 00:05，全部通过）
+
+`8878c86` 当初只做了编译/单测/字库验证、没烧录。本轮烧录后用串口抓屏发现
+并修掉 3 个问题，其中 1 个是会让设备复位的 P0。
+
+**① 列表页两行文字压叠（P1）**
+`buddy_font_16` 的 `line_height = 20`，原实现却把两个 label 显式压成 15px
+（第一版改 18px 仍重叠）、行框只有 34/38px，字形画到框外必然上下叠。
+改为**不设 label 高度**（自适应 20px）、行框与行距都取 40px，两行正好铺满。
+顺带：无数据时隐藏多余空行框、两条功能行移到列表区中部；断网时页脚不再
+显示误导性的「稍候」，改成可操作的「确定切换  长按下返回」。
+
+**② 进入列表页后 OK 落到「返回主屏」（P1）**
+主屏长按 UP 进列表时把光标设成当前电台索引（`CH 06/06` → 5），但无网时
+`shown=0`、`total=2`。UI 层把显示 clamp 到 0，**app 层的值没同步**，
+按键仍按 5 算，上下键和 OK 全部落错项。在 `refresh_station_list()` 与
+`on_key` 的列表分支统一按 `shown + 2` clamp，两层共用同一个上界。
+
+**③ 切换城市触发 lwIP assert 并复位整机（P0）**
+```
+assert failed: tcpip_send_msg_wait_sem /IDF/.../lwip/src/api/tcpip.c:454 (Invalid mbox)
+rst:0xc (RTC_SW_CPU_RST)
+```
+BLE-only 启动不初始化 `WifiManager`/lwIP（`E WifiManager: Not initialized`）。
+首次 catalog worker 恰好被 `radio_player_wait_idle` 挡住没走网络；**切城市会
+重建 worker**，这次直接进 HTTP/DNS，打在空 mbox 上断言复位。修法：
+`catalog_worker` 在 `radio_catalog_discover_location()` 之前用
+`radio_catalog_network_ready()` 判断，无网直接落空态返回、不碰 lwIP；
+同时补 `radio_app_start()` 里「启动时 WiFi 已连接」分支遗漏的
+`s_wifi_connected.store(true)`，否则有网设备会被误判为无网而跳过查询。
+新 hook 定义在切片之外，`test_radio_lifecycle.py` 补 mock 恒 true，
+保持该测试按字符串切片抽源码的基线形状。
+
+**调试通道**：`main.cc` 串口命令加 `y`/`Y` = 长按 UP（与已有 `k` 长按下键
+同类）。没有它，「长按 UP 打开列表页」无法脱离真机按键抓屏；轮询长按判定
+读的是 ADC 电压，串口注入的 PRESS 不经过轮询，造不出 LONG。
+
+**实机验证**（fw 1.3.0-passport，5 轮烧录最终版）：
+- 0 `assert failed` / 0 `RTC_SW_CPU_RST` / 0 panic；`Catalog skipped:
+  Wi-Fi not connected` 1 次，切城市不再复位
+- 主屏页脚「长按上列表 · 长按下音量」生效；列表页文字分行清楚、空框消失
+- 城市页 8 项（自动定位/北京/上海/广州/深圳/长沙/杭州/成都），高亮北京
+- 选上海确认 → 标题变「城市电台 · 上海」，状态行与选中态同步刷新
+- 启动堆 49 KB、`free_heap=55292 / heap_ok=1`；复位回 WB 后 BLE 广播正常
+- 主机 daemon 重新拉起，25s 后 `/api/status connected=true`
+
+**限制**：设备未配网，列表页显示「网络未连接 · 先用手机配网」兜底，
+看不到真实电台行。要端到端验证名称/频率/播放状态，需先用手机配网。
+
+**截图**：`docs/radio_00_main.png`、`radio_01_station_list.png`、
+`radio_02_city_page.png`、`radio_03_after_city_switch.png`。
