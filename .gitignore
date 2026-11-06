@@ -231,3 +231,42 @@ audio/verify/
 .stages/
 .tmp/
 /video
+
+# ==================================================
+# 2026-11-06 补：本地排查产物 / 多平台构建 / 工具缓存
+# ==================================================
+# 排查积分口径、BLE 广播名时临时写过 host/_diag_credit.py、
+# _diag_credit2.py、_diag_summary.py：直接 import wb_app 打原始接口返回，
+# 结论已经写进 fetch_balance 的注释，脚本本身用完即删。
+# 只忽略 _diag_ 前缀，不用通配的 _*.py —— 项目里有下划线开头的正式模块。
+_diag_*.py
+**/_diag_*.py
+
+# 临时重定向出来的原始输出（ps-out.txt / run-out.txt 之类），非源码。
+# *.log 已在上面覆盖，这里补 .txt 形态的一次性输出。
+**/*-out.txt
+
+# 换机器 / 换 target 重新 configure 时会另起构建目录：
+#   idf.py -B build-win ...   （Windows，复制过来的 build/ 是 macOS 的 cache）
+#   build-s3 / build-c3-debug ...
+# 上面的 build/ 与 build-c3/ 只挡住这两个具体名字，这里统一兜住其余变体。
+# 注意末尾的 / 表示只匹配目录，不会误伤 toolchain/build-firmware.sh 等脚本。
+build-*/
+
+# Python 工具链缓存（跑 pytest / mypy / ruff / coverage 时生成）
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# 本地截图与取证目录：只在本机看，不进版本库。
+# 注意 .codebuddy/ 是项目数据、不是缓存，**刻意不忽略**。
+.screenshots/
+xiaozhiLed_evidence/
+
+# Windows 资源管理器杂项
+Desktop.ini
+*.lnk
+~$*

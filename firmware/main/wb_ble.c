@@ -32,7 +32,7 @@ static const char *TAG = "wb_ble";
 // 设备蓝牙名（BLE 广播里显示的 Device Name）。
 // ⚠ 改这里必须同步改主机侧 host/wb_app.py 的 DEVICE_NAME —— 主机是按名字
 // 扫描的（不按 service uuid），两边不一致就永远扫不到设备。
-#define WB_DEVICE_NAME "Workbuddy BOX"
+#define WB_DEVICE_NAME "Xiaozhi BOX"
 #define WB_RX_BUF      1024      // 512B 帧上限 + 余量,防主机误发长帧时越界
 #define WB_NO_CONN     0xFFFF
 #define WB_BLE_TASK_STACK 4096

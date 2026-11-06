@@ -3,7 +3,7 @@
 // 与主机的契约(需求 v1.1 §6.1):
 //   Service 4fafc201-1fb5-459e-8fcc-c5c9c331914b
 //   Char    beb5483e-36e1-4688-b7f5-ea07361b26a8  (写 = 下行帧,notify = 上行帧)
-//   设备名  Workbuddy BOX(主机按名字扫描,不按 service uuid)
+//   设备名  Xiaozhi BOX(主机按名字扫描,不按 service uuid)
 #pragma once
 
 #include <stdbool.h>

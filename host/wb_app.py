@@ -3,7 +3,7 @@
 """wb_app.py —— WorkBuddy 控制台（单一入口，daemon + 本地 Web UI）。
 
 运行 `python wb_app.py` 即完成：
-  * 拉起 daemon：BLE 连接 Workbuddy BOX + 状态推流 + 周期积分 + 审批遥控内核（TCP IPC :48765）
+  * 拉起 daemon：BLE 连接 Xiaozhi BOX + 状态推流 + 周期积分 + 审批遥控内核（TCP IPC :48765）
   * 启动内置 Web UI：浏览器打开 http://127.0.0.1:8080
        - 设备连接状态 + daemon 启停按钮
        - 数据看板（会话列表 + 积分余额/使用率）
@@ -63,7 +63,7 @@ except ImportError:
 
 SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-DEVICE_NAME = "Workbuddy BOX"
+DEVICE_NAME = "Xiaozhi BOX"
 CONNECT_TIMEOUT = 15.0
 # 单帧写 BLE 必须在此限内完成。Windows BLE 栈在链路异常时会让写调用
 # 永久挂起（不返回、不报错、连接仍显示已连），必须靠 wait_for 兜底，
@@ -241,6 +241,9 @@ SKIP_MAX_STORE = 500
 
 # ---- wb_balance ----
 BAL_API_URL = "https://copilot.tencent.com/v2/billing/meter/get-user-resource"
+# 官方客户端真正用来显示"积分余额"的汇总接口。⚠ 没有 /v2 前缀（实测 /v2/... 404）。
+# 返回 TotalCredits + Packages + CreditGroups（套餐基础/套餐赠送/购买/平台奖励）。
+BAL_SUMMARY_URL = "https://copilot.tencent.com/billing/meter/get-user-resource-summary"
 BAL_PRODUCT_CODE = "p_tcaca"
 BAL_RANGE_BEGIN = "2024-12-01 21:25:00"
 # 无凭据时的重试间隔：WorkBuddy 登录态为加密信封时靠它等用户补一次 login 后自愈，
@@ -2217,25 +2220,19 @@ def _origin_of(url: str) -> str:
     except ValueError:
         return "https://copilot.tencent.com"
 
-def fetch_balance(auth: dict, timeout: float = 15.0) -> tuple[float, float]:
-    token = auth["access_token"]
-    uid = auth["uid"]
-    if isinstance(token, dict) and token.get("$wbEncrypted"):
-        raise RuntimeError(
-            "WorkBuddy 登录态已加密（$wbEncrypted 信封），密钥运行时下发、磁盘不可得；"
-            "请执行 python wb_credential.py login 让 AIWK 持有自己的明文凭据")
-    if not token or not uid:
-        raise RuntimeError("WorkBuddy 登录信息不可用（accessToken/uid 缺失）")
+def _balance_headers(auth: dict) -> dict:
+    """billing 接口的公共请求头。
 
-    # 官方桌面端调 billing 接口会带浏览器形态的 Origin/Referer 与客户端标识；
-    # 缺失时网关的一致性校验会拒（返回 HTML 错误页而非 JSON）。
+    官方桌面端调 billing 会带浏览器形态的 Origin/Referer 与客户端标识，
+    缺失时网关的一致性校验会拒（返回 HTML 错误页而非 JSON）。
+    """
     origin = _origin_of(BAL_API_URL)
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/plain, */*",
         "User-Agent": "Go-http-client/1.1",
-        "Authorization": f"Bearer {token}",
-        "X-User-Id": str(uid),
+        "Authorization": f"Bearer {auth['access_token']}",
+        "X-User-Id": str(auth["uid"]),
         "X-Client-Platform": "web",
         "Origin": origin,
         "Referer": f"{origin}/profile/plans-usage",
@@ -2245,19 +2242,12 @@ def fetch_balance(auth: dict, timeout: float = 15.0) -> tuple[float, float]:
     if auth.get("enterprise_id"):
         headers["X-Enterprise-Id"] = str(auth["enterprise_id"])
         headers["X-Tenant-Id"] = str(auth["enterprise_id"])
+    return headers
 
-    body = {
-        "PageNumber": 1,
-        "PageSize": 100,
-        "ProductCode": BAL_PRODUCT_CODE,
-        "Status": [0, 3],
-        "PackageStartTimeRangeBegin": BAL_RANGE_BEGIN,
-        "PackageStartTimeRangeEnd": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
 
+def _balance_post(url: str, body: dict, headers: dict, timeout: float) -> dict:
     req = urllib.request.Request(
-        BAL_API_URL, data=json.dumps(body).encode("utf-8"),
-        headers=headers, method="POST")
+        url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
     proxy = _system_proxy()
     if proxy:
         opener = urllib.request.build_opener(
@@ -2268,12 +2258,60 @@ def fetch_balance(auth: dict, timeout: float = 15.0) -> tuple[float, float]:
         with opener.open(req, timeout=timeout) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"WorkBuddy 余额接口返回 {resp.status}")
-            payload = json.loads(resp.read().decode("utf-8"))
+            return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"WorkBuddy 余额接口返回 {exc.code}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"WorkBuddy 接口请求失败: {exc.reason}") from exc
 
+
+def _fetch_balance_summary(auth: dict, timeout: float) -> tuple[float, float]:
+    """按官方客户端口径取余额（汇总接口）。
+
+    客户端 plans-usage 页用的是 `/billing/meter/get-user-resource-summary`
+    —— 注意**没有 /v2 前缀**，写成 /v2/... 会 404（实测）。
+
+    它直接返回 `TotalCredits` = 积分余额（和客户端侧栏那个数完全一致），
+    并按用途拆成 4 组：套餐基础积分 / 套餐赠送积分 / 购买积分 / 平台奖励积分。
+
+    为什么不能用资源明细逐条加：明细接口（get-user-resource）按 `Status:[0,3]`
+    只给"资源记录"，同一个包的多条记录里既有已用尽的、也有还在有效期的，
+    累加出来是 3517，而真实余额是 6323 —— 差的那部分正是"平台奖励积分"
+    （76 个奖励包合并后的 3371）。客户端自己也只在三源都成功时才说完整
+    （代码里有 "credits are incomplete" 的告警）。
+    """
+    payload = _balance_post(BAL_SUMMARY_URL, {}, _balance_headers(auth), timeout)
+    data = payload.get("data") or {}
+    packages = data.get("Packages") or []
+    if not packages:
+        raise RuntimeError("余额汇总接口没有返回 Packages")
+
+    remain = data.get("TotalCredits")
+    if remain is None:
+        # 老版本可能没有 TotalCredits，按客户端 sumSummaryCapacity 的算法自己加。
+        remain = sum(float(p.get("CycleRemainCapacity") or 0.0) for p in packages)
+    remain = float(remain or 0.0)
+    total = sum(float(p.get("CycleTotalCapacity") or 0.0) for p in packages)
+    if total < remain:
+        total = remain
+    return remain, total
+
+
+def _fetch_balance_accounts(auth: dict, timeout: float) -> tuple[float, float]:
+    """资源明细口径（兜底用）：逐条累加 Status==0 的包。
+
+    只在汇总接口不可用时才走这里。注意这个口径会算少 —— 见
+    _fetch_balance_summary 的说明。
+    """
+    body = {
+        "PageNumber": 1,
+        "PageSize": 100,
+        "ProductCode": BAL_PRODUCT_CODE,
+        "Status": [0, 3],
+        "PackageStartTimeRangeBegin": BAL_RANGE_BEGIN,
+        "PackageStartTimeRangeEnd": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    payload = _balance_post(BAL_API_URL, body, _balance_headers(auth), timeout)
     try:
         accounts = payload["data"]["Response"]["Data"]["Accounts"]
     except (KeyError, TypeError):
@@ -2281,10 +2319,48 @@ def fetch_balance(auth: dict, timeout: float = 15.0) -> tuple[float, float]:
 
     remaining = 0.0
     total = 0.0
+    all_remaining = 0.0
+    all_total = 0.0
+    active = 0
     for account in accounts or []:
-        remaining += float(account.get("CycleCapacityRemainPrecise") or 0.0)
-        total += float(account.get("CycleCapacitySizePrecise") or 0.0)
+        remain = float(account.get("CycleCapacityRemainPrecise") or 0.0)
+        size = float(account.get("CycleCapacitySizePrecise") or 0.0)
+        all_remaining += remain
+        all_total += size
+        # 只累加 Status==0（当前有效）的包：失效包的 CycleCapacitySizePrecise
+        # 仍保留原值，全加会把分母撑大（实测 16054 vs 真实 4541）。
+        if int(account.get("Status") or 0) != 0:
+            continue
+        active += 1
+        remaining += remain
+        total += size
+    if active == 0:
+        remaining, total = all_remaining, all_total
+    if total < remaining:
+        total = remaining
     return remaining, total
+
+
+def fetch_balance(auth: dict, timeout: float = 15.0) -> tuple[float, float]:
+    """取 (剩余积分, 总额度)。优先走官方汇总口径，失败才退回资源明细。"""
+    token = auth["access_token"]
+    uid = auth["uid"]
+    if isinstance(token, dict) and token.get("$wbEncrypted"):
+        raise RuntimeError(
+            "WorkBuddy 登录态已加密（$wbEncrypted 信封），密钥运行时下发、磁盘不可得；"
+            "请执行 python wb_credential.py login 让 AIWK 持有自己的明文凭据")
+    if not token or not uid:
+        raise RuntimeError("WorkBuddy 登录信息不可用（accessToken/uid 缺失）")
+
+    try:
+        return _fetch_balance_summary(auth, timeout)
+    except Exception as exc:
+        summary_err = exc
+    try:
+        return _fetch_balance_accounts(auth, timeout)
+    except Exception as exc:
+        raise RuntimeError(
+            f"余额查询失败（汇总: {summary_err}；明细: {exc}）") from exc
 
 def _load_credit_auth() -> tuple[dict | None, str]:
     """解析周期积分所需凭据，返回 (auth, reason)。
@@ -4255,6 +4331,26 @@ class UnifiedDaemon:
     async def _send_voice_receipt(self, ok: bool, text: str) -> None:
         await self._write({"type": "msg", "ok": 1 if ok else 0, "text": text[:48]})
 
+    def _on_ble_disconnected(self, client) -> None:
+        """bleak 的断链回调：设备断电 / 走远时立刻作废句柄。
+
+        没有这个回调时，主机只能靠 is_connected 轮询 + 写超时三连才发现链路没了：
+        Windows 上链路监督超时要几十秒才判死，之后再拿旧地址连 3 次
+        （每次最多 CONNECT_TIMEOUT=15s）才肯清地址重新扫描，加起来一两分钟。
+        表现就是"换一台设备开机，主机像没反应、不会自动连"。
+
+        注意别把新链路误清：旧 client 迟到的回调要丢掉。
+        """
+        if self._ble is not None and client is not self._ble:
+            return
+        was_connected = self._ble is not None
+        self._ble = None
+        self._write_timeouts = 0
+        self._st.set(connected=False, device_caps=None,
+                     device_fw="", device_proto=0)
+        if was_connected:
+            self._log("[daemon] 链路已断开，立即重连/重扫")
+
     async def _ensure_ble(self) -> bool:
         if self._ble is not None and self._ble.is_connected:
             return True
@@ -4277,7 +4373,8 @@ class UnifiedDaemon:
                 return False
             try:
                 from bleak import BleakClient
-                client = BleakClient(self._address, timeout=CONNECT_TIMEOUT)
+                client = BleakClient(self._address, self._on_ble_disconnected,
+                                     timeout=CONNECT_TIMEOUT)
                 await client.connect()
                 # start_notify 会顺带做服务发现；但 macOS 上 connect() 返回时
                 # 特征表可能还没就绪，紧接着的第一次 write_gatt_char 会抛
@@ -7845,7 +7942,7 @@ def _ble_probe_subprocess(timeout: float = 12.0) -> str:
 def _macos_ble_precheck() -> str:
     """B-04：macOS 上后台进程碰 CoreBluetooth 会被 TCC 直接 SIGABRT。
 
-    现象：日志停在「扫描 Workbuddy BOX ...」，进程消失，退出码 134，
+    现象：日志停在「扫描 Xiaozhi BOX ...」，进程消失，退出码 134，
     崩溃报告里是 TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION。
 
     根因不是代码：蓝牙权限绑定在「有 GUI 会话的应用」上，从 launchd / IDE /
