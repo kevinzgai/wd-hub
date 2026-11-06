@@ -72,6 +72,11 @@ static void home_profile_get(home_profile_t*p){*p={};}
 static size_t radio_catalog_discover_location(RadioLocation,RadioStation*,size_t,RadioLocation*,bool(*)()){queries++;return 1;}
 static void radio_ui_set_location(const char*){}
 bool radio_player_replace_stations_resuming(const RadioStation*,size_t){installs++;return true;}
+// 城市电台列表的三个边界函数（定义在生产代码 start_catalog() 之后，不在
+// 本测试的切片里）。这里给空实现，让 catalog_worker 仍可与数据层一起编译。
+void radio_catalog_fill_preference(const home_profile_t&,RadioLocation*){}
+void radio_catalog_apply_result(const char*,size_t){}
+void radio_catalog_refresh_list(){}
 '''
 checks = r'''
 int main(){

@@ -54,6 +54,17 @@ constexpr int kDialNeedleHome = (kDialTrackLeft + kDialTrackRight) / 2;
 constexpr std::size_t kMeterCount = 18;
 constexpr std::size_t kWifiVisibleRows = 6;
 constexpr std::size_t kWifiMaxKeys = 35;
+// 城市电台列表：屏幕一次放 5 行，目录上限与 app_radio.cc 的
+// kDiscoveryCapacity 一致。多出来的行用和 WiFi 列表相同的滚动窗口。
+constexpr std::size_t kStationVisibleRows = 5;
+constexpr std::size_t kStationCapacity = 8;
+
+// 城市表只放一份：设置页的 RadioSettingsPage::City 和列表页的「切换城市」
+// 都读这里，业务层通过 radio_ui_city_name() 取名字后查目录。
+static constexpr const char *kCityItems[] = {
+    "自动定位", "北京", "上海", "广州", "深圳", "长沙", "杭州", "成都",
+};
+
 constexpr uint16_t kVideoWidth = 240;
 constexpr uint16_t kVideoHeight = 320;
 constexpr uint16_t kJpegMcuHeight = 16;
@@ -63,6 +74,7 @@ constexpr std::size_t kJpegWorkSize = 4096;
 enum class Page {
     Main,
     Settings,
+    StationList,
     Config,
     WifiList,
     WifiKeyboard,
@@ -107,6 +119,12 @@ lv_obj_t *s_wifi_key_label[kWifiMaxKeys];
 uint8_t *s_jpeg_work;
 uint16_t *s_video_stripe;
 bool s_video_color_pending;
+lv_obj_t *s_list_title;
+lv_obj_t *s_list_state_label;
+lv_obj_t *s_list_row_box[kStationVisibleRows];
+lv_obj_t *s_list_row_name[kStationVisibleRows];
+lv_obj_t *s_list_row_detail[kStationVisibleRows];
+lv_obj_t *s_list_hint;
 
 struct DirectJpegContext {
     const uint8_t *data;
@@ -142,6 +160,17 @@ uint32_t s_last_sleep_seconds = UINT32_MAX;
 uint32_t s_volume_until;
 uint16_t s_station_frequency;
 int32_t s_needle_x = kDialNeedleHome;
+
+// 列表页自己缓存一份目录快照：radio_ui_set_playback() / set_station() 在
+// 播放状态或当前台变化时可以直接重绘，不必让业务层再传一遍整个数组。
+// 静态数组走 BSS，不占 ESP32-C3 紧张的堆。
+char s_list_city[48] = "自动定位";
+char s_list_detail[64] = {};
+RadioListState s_list_load_state = RadioListState::Loading;
+RadioStation s_list_stations[kStationCapacity] = {};
+std::size_t s_list_count;
+std::size_t s_list_selected;
+std::size_t s_list_playing_index;
 
 bool drain_video_color_transfers() {
     if (!bsp_display_io()) return true;
@@ -577,7 +606,7 @@ void build_main() {
     auto *meter_panel=make_box(s_main_group,12,242,216,22,kBackground);
     for(std::size_t i=0;i<kMeterCount;i++){s_meter[i]=make_box(meter_panel,2+i*12,20,8,2,kGrid);lv_obj_set_style_bg_opa(s_meter[i],LV_OPA_TRANSP,0);}
     s_play_icon=make_label(s_main_group,"",0,0,1,kAmber);lv_obj_add_flag(s_play_icon,LV_OBJ_FLAG_HIDDEN);
-    s_main_hint=ui_pixel_footer(s_main_group,"上下换台 · 确定播放","长按：上下音量 · 确定返回",&buddy_font_16);
+    s_main_hint=ui_pixel_footer(s_main_group,"上下换台 · 确定播放","长按上列表 · 长按下音量",&buddy_font_16);
 
     apply_network();
     apply_station();
@@ -671,6 +700,12 @@ void reset_transient_objects(Page page) {
     }
     for (auto &box : s_wifi_key_box) box = nullptr;
     for (auto &label : s_wifi_key_label) label = nullptr;
+    s_list_title = nullptr;
+    s_list_state_label = nullptr;
+    s_list_hint = nullptr;
+    for (auto &box : s_list_row_box) box = nullptr;
+    for (auto &label : s_list_row_name) label = nullptr;
+    for (auto &label : s_list_row_detail) label = nullptr;
 }
 
 void apply_settings_selection() {
@@ -718,9 +753,6 @@ void build_settings(RadioSettingsPage page, std::size_t selected, uint8_t volume
     static constexpr const char *kMenuItems[] = {
         "音量", "城市电台", "定时播放", "屏幕设置", "网络设置", "蓝牙", "返回",
     };
-    static constexpr const char *kCityItems[] = {
-        "自动定位", "北京", "上海", "广州", "深圳", "长沙", "杭州", "成都",
-    };
     static constexpr const char *kSleepTimerItems[] = {
         "无定时", "15 分钟", "30 分钟", "60 分钟", "90 分钟", "返回",
     };
@@ -756,7 +788,7 @@ void build_settings(RadioSettingsPage page, std::size_t selected, uint8_t volume
             items = kCityItems;
             item_count = sizeof(kCityItems) / sizeof(kCityItems[0]);
             title_text = "城市电台";
-            hint_text = "确定选择  长按返回";
+            hint_text = "确定切换  长按下返回";
             break;
         case RadioSettingsPage::SleepTimer:
             items = kSleepTimerItems;
@@ -805,6 +837,155 @@ void build_settings(RadioSettingsPage page, std::size_t selected, uint8_t volume
     make_taskbar(s_screen);
     lv_obj_t *hint = make_label(s_screen, hint_text, 12, 291, 216, UI_TEXT);
     set_centered(hint);
+}
+
+// ---- 城市电台列表页 ----
+// 沿用 build_wifi_list 的「标题 + 状态行 + 5 行滚动列表 + 页脚」结构，
+// 每行两行文字：电台名 / 频率 + 当前播放状态。
+
+void format_station_freq(const RadioStation &station, std::size_t index,
+                         char *out, std::size_t cap) {
+    // 和主屏 apply_dial 同一口径：真实 FM 频率显示 94.7 MHz，目录里没带
+    // 频率的网络台退化为 NET 序号，不编造频率。
+    if (station.frequency_decihz >= kDialBandLow &&
+        station.frequency_decihz <= kDialBandHigh) {
+        std::snprintf(out, cap, "%u.%u MHz",
+                      static_cast<unsigned>(station.frequency_decihz / 10U),
+                      static_cast<unsigned>(station.frequency_decihz % 10U));
+    } else {
+        std::snprintf(out, cap, "NET %02u", static_cast<unsigned>(index + 1));
+    }
+}
+
+const char *station_row_state(std::size_t index) {
+    if (index != s_list_playing_index) return "未播放";
+    if (!s_network_connected) return "网络未连接";
+    switch (s_playback_state) {
+        case RadioPlaybackState::Playing: return "播放中";
+        case RadioPlaybackState::Connecting: return "连接中";
+        case RadioPlaybackState::Buffering: return "缓冲中";
+        case RadioPlaybackState::Reconnecting: return "重连中";
+        case RadioPlaybackState::Error: return "播放失败";
+        case RadioPlaybackState::Stopped: return "已暂停";
+    }
+    return "已暂停";
+}
+
+std::size_t station_list_total() {
+    // 末尾固定两行操作项，和设置菜单里放「返回」是同一套交互逻辑。
+    return s_list_count + 2;
+}
+
+void apply_station_list() {
+    if (s_page != Page::StationList || !s_list_state_label) return;
+
+    char title[80];
+    std::snprintf(title, sizeof(title), "城市电台 · %s", s_list_city);
+    lv_label_set_text(s_list_title, title);
+
+    const char *state_text = nullptr;
+    uint32_t state_color = kMuted;
+    static char ready_text[64];
+    if (!s_network_connected) {
+        // 断网时不能一直挂在「正在搜索」上，否则用户会以为查询卡死。
+        state_text = "网络未连接 · 先用手机配网";
+        state_color = kRed;
+    } else if (s_list_load_state == RadioListState::Loading) {
+        state_text = "正在搜索该城市电台…";
+        state_color = kAmber;
+    } else if (s_list_load_state == RadioListState::Empty) {
+        state_text = "该城市暂无可用电台";
+        state_color = kAmber;
+    } else if (s_list_load_state == RadioListState::Error ||
+               s_playback_state == RadioPlaybackState::Error) {
+        const char *reason = s_playback_state == RadioPlaybackState::Error &&
+                             s_playback_detail[0] ? s_playback_detail :
+                             s_list_detail[0] ? s_list_detail : "播放失败，请重试";
+        state_text = reason;
+        state_color = kRed;
+    } else {
+        std::snprintf(ready_text, sizeof(ready_text), "共 %u 台 · %s",
+                      static_cast<unsigned>(s_list_count), playback_text());
+        state_text = ready_text;
+    }
+    lv_label_set_text(s_list_state_label, state_text);
+    lv_obj_set_style_text_color(s_list_state_label, lv_color_hex(state_color), 0);
+
+    if (s_list_hint) {
+        lv_label_set_text(s_list_hint,
+            s_list_load_state == RadioListState::Loading
+                ? "稍候 · 长按下返回" : "上下选择  确定播放/切换");
+    }
+
+    const std::size_t total = station_list_total();
+    if (s_list_selected >= total) s_list_selected = 0;
+    const std::size_t first = total <= kStationVisibleRows ? 0 :
+        std::min(s_list_selected > 2 ? s_list_selected - 2 : 0,
+                 total - kStationVisibleRows);
+
+    for (std::size_t row = 0; row < kStationVisibleRows; ++row) {
+        const std::size_t index = first + row;
+        const bool present = index < total;
+        const bool active = present && index == s_list_selected;
+        ui_pixel_set_selected(s_list_row_box[row], active, true);
+        lv_obj_set_style_bg_color(s_list_row_box[row],
+                                  lv_color_hex(active ? kAmberSoft : kPanel), 0);
+        if (!present) {
+            lv_label_set_text(s_list_row_name[row], "");
+            lv_label_set_text(s_list_row_detail[row], "");
+            continue;
+        }
+
+        char detail[96];
+        if (index < s_list_count) {
+            const RadioStation &station = s_list_stations[index];
+            char freq[24];
+            format_station_freq(station, index, freq, sizeof(freq));
+            std::snprintf(detail, sizeof(detail), "%s · %s",
+                          freq, station_row_state(index));
+            lv_label_set_text(s_list_row_name[row], station.name);
+            lv_obj_set_style_text_color(s_list_row_name[row],
+                                        lv_color_hex(active ? kAmber : kText), 0);
+        } else {
+            const bool city_action = (index == s_list_count);
+            std::snprintf(detail, sizeof(detail), "%s",
+                          city_action ? "按城市重新搜索" : "回到播放主屏");
+            lv_label_set_text(s_list_row_name[row],
+                              city_action ? "切换城市" : "返回主屏");
+            lv_obj_set_style_text_color(s_list_row_name[row],
+                                        lv_color_hex(active ? kAmber : kMuted), 0);
+        }
+        lv_label_set_text(s_list_row_detail[row], detail);
+        lv_obj_set_style_text_color(s_list_row_detail[row],
+                                    lv_color_hex(active ? kText : kMuted), 0);
+    }
+}
+
+void build_station_list() {
+    reset_transient_objects(Page::StationList);
+    // 用 buddy_font_16：城市名/状态文案的汉字都在这套字库里（设置页的城市
+    // 列表也用它），换成 ui_font_20 会缺部分城市字形。
+    s_list_title = make_label(s_screen, "", 12, 12, 216, kText);
+    set_centered(s_list_title);
+    s_list_state_label = make_label(s_screen, "", 12, 42, 216, kMuted);
+    set_centered(s_list_state_label);
+
+    for (std::size_t row = 0; row < kStationVisibleRows; ++row) {
+        const int y = 68 + static_cast<int>(row) * 38;
+        s_list_row_box[row] = make_box(s_screen, 12, y, 216, 34, kPanel, 5);
+        s_list_row_name[row] = make_label(s_list_row_box[row], "", 8, 2, 200, kText);
+        lv_obj_set_height(s_list_row_name[row], 15);
+        s_list_row_detail[row] = make_label(s_list_row_box[row], "", 8, 17, 200, kMuted);
+        lv_obj_set_height(s_list_row_detail[row], 15);
+    }
+
+    make_taskbar(s_screen);
+    s_list_hint = make_label(s_screen, "", 12, 279, 216, UI_TEXT);
+    set_centered(s_list_hint);
+    lv_obj_t *hint = make_label(s_screen, "长按上音量+ · 长按下返回",
+                                12, 300, 216, UI_MUTED);
+    set_centered(hint);
+    apply_station_list();
 }
 
 void build_saved_wifi(const char *const *ssids, std::size_t count,
@@ -1262,6 +1443,7 @@ void radio_ui_set_network(bool connected, const char *detail) {
     apply_network();
     apply_playback();
     apply_sleep_timer();
+    if (s_page == Page::StationList) apply_station_list();
     bsp_lvgl_unlock();
 }
 
@@ -1283,6 +1465,10 @@ void radio_ui_set_station(std::size_t index, std::size_t count,
                   station.description);
     if (!s_screen || !bsp_lvgl_lock(250)) return;
     apply_station();
+    if (s_page == Page::StationList) {
+        s_list_playing_index = index;
+        apply_station_list();
+    }
     bsp_lvgl_unlock();
 }
 
@@ -1293,6 +1479,8 @@ void radio_ui_set_playback(RadioPlaybackState state, const char *detail) {
     if (!s_screen || !bsp_lvgl_lock(250)) return;
     apply_playback();
     apply_sleep_timer();
+    // 播放失败/重连时列表页的状态行与当前台那一行要同步变，不能只刷主屏。
+    if (s_page == Page::StationList) apply_station_list();
     bsp_lvgl_unlock();
 }
 
@@ -1318,6 +1506,42 @@ void radio_ui_show_settings(RadioSettingsPage page, std::size_t selected,
         build_settings(page, selected, volume);
     }
     bsp_lvgl_unlock();
+}
+
+void radio_ui_show_station_list(const char *city, RadioListState state,
+                                const RadioStation *stations, std::size_t count,
+                                std::size_t selected, std::size_t playing_index,
+                                const char *detail) {
+    std::snprintf(s_list_city, sizeof(s_list_city), "%s",
+                  city && city[0] ? city : "自动定位");
+    s_list_load_state = state;
+    s_list_count = std::min(count, kStationCapacity);
+    if (stations) {
+        for (std::size_t i = 0; i < s_list_count; ++i) {
+            s_list_stations[i] = stations[i];
+        }
+    }
+    s_list_selected = selected;
+    s_list_playing_index = playing_index;
+    std::snprintf(s_list_detail, sizeof(s_list_detail), "%s",
+                  detail ? detail : "");
+    if (!s_screen || !bsp_lvgl_lock(500)) return;
+    if (s_page == Page::StationList && s_list_state_label) {
+        // 已在列表页：只更新文字与选中态，避免每次上下键都重建 23 个对象。
+        apply_station_list();
+    } else {
+        build_station_list();
+        lv_screen_load(s_screen);
+    }
+    bsp_lvgl_unlock();
+}
+
+std::size_t radio_ui_city_count() {
+    return sizeof(kCityItems) / sizeof(kCityItems[0]);
+}
+
+const char *radio_ui_city_name(std::size_t index) {
+    return index < radio_ui_city_count() ? kCityItems[index] : nullptr;
 }
 
 void radio_ui_show_saved_wifi(const char *const *ssids, std::size_t count,
