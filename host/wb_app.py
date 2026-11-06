@@ -63,7 +63,12 @@ except ImportError:
 
 SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-DEVICE_NAME = "Xiaozhi BOX"
+# 主机端同时服务两套固件，扫描只按广播名匹配（不按 service uuid），所以不能
+# 写死单名：passport-fw(esp32c3) 广播 "Workbuddy BOX"，firmware(esp32s3)
+# 广播 "Xiaozhi BOX"。6f4b6d5 为 s3 改成后者后，本机 c3 一直「本轮未命中」。
+# DEVICE_NAME 保留为主显示名，供外部模块 import 时行为不变。
+DEVICE_NAMES = ("Workbuddy BOX", "Xiaozhi BOX")
+DEVICE_NAME = DEVICE_NAMES[0]
 CONNECT_TIMEOUT = 15.0
 # 单帧写 BLE 必须在此限内完成。Windows BLE 栈在链路异常时会让写调用
 # 永久挂起（不返回、不报错、连接仍显示已连），必须靠 wait_for 兜底，
@@ -5915,7 +5920,7 @@ async def find_device() -> str:
     带上 adv 才能读到本次广播里的 local_name。
     """
     from bleak import BleakScanner
-    print(f"扫描 {DEVICE_NAME} ...", flush=True)
+    print(f"扫描 {' / '.join(DEVICE_NAMES)} ...", flush=True)
     found = await BleakScanner.discover(timeout=SCAN_TIMEOUT, return_adv=True)
     # bleak 的返回形状随版本变：老版本是 [(BLEDevice, AdvertisementData), …]，
     # 新版本是 {地址: (BLEDevice, AdvertisementData)}。两种都摊平成对。
@@ -5926,13 +5931,14 @@ async def find_device() -> str:
         name = ((getattr(adv, "local_name", "") if adv else "") or d.name or "").strip()
         if name:
             seen.add(name)
-        if name == DEVICE_NAME or (name and DEVICE_NAME in name):
+        # 任一候选名精确相等或作为子串出现即命中（两套固件的广播名都认）。
+        if any(name == want or (name and want in name) for want in DEVICE_NAMES):
             print(f"  找到 {name} @ {d.address}", flush=True)
             return d.address
     # 扫不到时把看到的设备名打出来，便于判断"是名字不对还是设备没广播"。
     if seen:
         print(f"  本轮未命中，看到的设备: {', '.join(sorted(seen)[:8])}", flush=True)
-    raise RuntimeError(f"未找到设备 {DEVICE_NAME}（请先在设备上进入 WorkBuddy 页面）")
+    raise RuntimeError(f"未找到设备 {' / '.join(DEVICE_NAMES)}（请先在设备上进入 WorkBuddy 页面）")
 
 # ===================== Web UI 前端 =====================
 
