@@ -12,12 +12,11 @@ Thank you to everyone who has enjoyed the project and shared feedback. I started
 
 People have suggested many personal improvements. Because everyone uses the hardware differently, sharing the source lets you add what you need, remove what you do not, and make a version that fits you. Have fun using and modifying it.
 
-## Ten apps
+## Apps
 
 | App | What it does | Requirements |
 | --- | --- | --- |
 | Home | Clock, profile, portraits, cards, weather, and air quality | Network for weather and air quality |
-| Radio | City and station selection, playback, and sleep timer | Wi-Fi and available online stations |
 | AI Voice | Hardware microphone and configurable desktop hotkeys | Windows companion program |
 | Xiaozhi AI | Spoken conversations through the microphone and speaker | Network and Xiaozhi service configuration |
 | Muse | Send voice messages and read replies on screen | Phone pairing, your own account, and a working network |

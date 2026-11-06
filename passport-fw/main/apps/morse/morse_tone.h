@@ -2,7 +2,7 @@
 //
 // 内部有独立音频流任务;bsp_audio_write 会阻塞,故本模块不碰 LVGL、不入按键回调。
 // 音频所有权:begin 持 bsp_audio_init_playback(TX-only),end 在任务退出后
-// bsp_audio_deinit 归还堆 —— 与 radio_player 同一约定。
+// bsp_audio_deinit 归还堆 —— 与其它前台音频应用同一约定。
 #pragma once
 
 #include "esp_err.h"

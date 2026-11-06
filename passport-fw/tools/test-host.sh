@@ -3,6 +3,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 test_dir="$(mktemp -d /tmp/passport-host.XXXXXX)"
 trap 'rm -rf -- "$test_dir"' EXIT
+# macOS ld has no --gc-sections; -dead_strip is the equivalent drop-unused pass.
+if [ "$(uname -s)" = "Darwin" ]; then
+    GC_SECTIONS="-Wl,-dead_strip"
+else
+    GC_SECTIONS="-Wl,--gc-sections"
+fi
 "${CXX:-c++}" -std=c++20 -Wall -Wextra -Werror -Wno-unused-variable \
     -fsanitize=address,undefined -g -Itests/registry_mocks -Imain \
     tests/test_app_registry.cc -o "$test_dir/registry"
@@ -63,24 +69,17 @@ python3 tests/test_card_gallery.py
 python3 tests/test_avatar_upload.py
 "${CC:-cc}" -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -Wno-unused-variable \
     -fsanitize=address,undefined -g -ffunction-sections -fdata-sections \
-    -Itests/home_mocks -Itests/radio_mocks -Imain \
-    tests/test_home_storage.c -Wl,--gc-sections -lm -o "$test_dir/home-storage"
+    -Itests/home_mocks -Itests/http_mocks -Imain \
+    tests/test_home_storage.c "$GC_SECTIONS" -lm -o "$test_dir/home-storage"
 "$test_dir/home-storage"
-"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -Wno-deprecated \
+    -fsanitize=address,undefined -g \
     -Itests/vendor/cjson -Icomponents/esp-wifi-connect/include \
     tests/test_phone_time.cc tests/vendor/cjson/cJSON.c -o "$test_dir/phone-time"
 "$test_dir/phone-time"
 python3 tests/test_city_catalog.py
 python3 tests/test_home_weather.py
 python3 tests/test_home_weather_schedule.py
-python3 tests/test_radio_catalog.py
-"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
-    -Imain tests/test_radio_hls.cc -o "$test_dir/radio-hls"
-"$test_dir/radio-hls"
-python3 tests/test_radio_source.py
-"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -pthread \
-    -fsanitize=address,undefined -g -Imain tests/test_radio_stream_buffer.cc -o "$test_dir/radio-buffer"
-"$test_dir/radio-buffer"
 python3 tests/test_xiaozhi.py
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Icomponents/passport_muse/sdk -Icomponents/passport_muse/include \
     tests/test_muse_voice.c components/passport_muse/voice_helpers.c -o "$test_dir/muse-voice"
@@ -99,10 +98,9 @@ python3 tests/test_bsp_button.py
 python3 tests/test_muse_queue.py
 python3 tests/test_bsp_audio_profiles.py
 python3 tests/test_memory_telemetry.py
-python3 tests/test_radio_lifecycle.py
 python3 tests/test_home_portrait_lifecycle.py
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
-    -Itests/home_mocks -Itests/radio_mocks -Icomponents/passport_muse/sdk \
+    -Itests/home_mocks -Itests/http_mocks -Icomponents/passport_muse/sdk \
     tests/test_muse_config.c components/passport_muse/config_store.c -o "$test_dir/muse-config"
 "$test_dir/muse-config"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g \

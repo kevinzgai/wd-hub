@@ -141,7 +141,6 @@ void draw_icon_accents(lv_event_t *event) {
 // 不再是统一琥珀。travel 主题下 detail/warm 由主色向纸色/墨色混合得到层次。
 uint32_t retro_icon_color(passport_app_id_t id) {
     switch (id) {
-        case APP_ID_RADIO: return 0xB4703A;      // 赭石
         case APP_ID_XIAOZHI: return 0x6E7F5C;    // 橄榄绿
         case APP_ID_MUSE: return 0x8C5A57;       // 砖红
         case APP_ID_STOPWATCH: return 0x4F6A6B;  // 灰青
@@ -180,17 +179,6 @@ void draw_app_icon(passport_app_id_t id, uint32_t color) {
             set_frame(3, 20, 38, 48, 34, color, 4);
             set_part(4, 40, 50, 10, 22, color);   // 门
             set_part(5, 26, 44, 8, 8, color);     // 窗
-            break;
-        case APP_ID_RADIO:
-            // 收音机:机身 + 喇叭点阵 + 刻度窗 + 天线
-            set_frame(0, 10, 26, 68, 46, color, 4);
-            set_part(1, 18, 34, 24, 14, detail);   // 喇叭
-            set_part(2, 18, 54, 24, 4, color);
-            set_part(3, 18, 62, 24, 4, color);
-            set_part(4, 50, 34, 20, 8, color);    // 刻度窗
-            set_part(5, 50, 48, 20, 4, color);
-            set_part(6, 24, 14, 40, 4, detail);    // 天线
-            set_part(7, 60, 10, 8, 8, color);     // 天线头
             break;
         case APP_ID_XIAOZHI:
             // 机器人头(吉祥物同族):头 + 大眼 + 天线 + 围巾
@@ -288,7 +276,7 @@ void update_card_content() {
     uint32_t color = kPhos;
     if (ui_theme_is_multicolor()) {
         switch (app->id) {
-            case APP_ID_RADIO: case APP_ID_POMODORO: color = UI_TERTIARY; break;
+            case APP_ID_POMODORO: color = UI_TERTIARY; break;
             case APP_ID_XIAOZHI: case APP_ID_STOPWATCH: color = UI_SUCCESS; break;
             default: break;
         }
@@ -414,7 +402,7 @@ void launcher_ui_show(void) {
 }
 
 void launcher_ui_hide(void) {
-    // Launcher 不与重型 App 同时常驻。Radio 的音频驱动和复杂 UI 会把单核
+    // Launcher 不与重型 App 同时常驻。语音类 App 的音频驱动和复杂 UI 会把单核
     // C3 的内部堆推到极限，进入 App 前释放主页可避免 LVGL 分配失败崩溃。
     bsp_lvgl_lock(-1);
     if (s_screen) lv_obj_delete(s_screen);

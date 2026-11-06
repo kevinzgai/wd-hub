@@ -18,6 +18,7 @@ idf_component_register(
         "launcher/app_registry.cc"
         "launcher/wifi_setup.cc"
         "launcher/wifi_picker.cc"
+        "launcher/wifi_picker_ui.cc"
         "launcher/network_diagnostics.cc"
         "launcher/timer_resume.cc"
         "launcher/settings.cc"
@@ -32,13 +33,6 @@ idf_component_register(
         "fonts/home_font_12.c"
         "fonts/wb_font_12.c"
         "fonts/wb_font_28.c"
-        "apps/radio/app_radio.cc"
-        "apps/radio/radio_catalog.cc"
-        "apps/radio/radio_display_settings.cc"
-        "apps/radio/radio_player.cc"
-        "apps/radio/radio_source.cc"
-        "apps/radio/radio_sleep_timer.cc"
-        "apps/radio/radio_ui.cc"
         "apps/voice/time_sync.c"
         "apps/voice/nvs_settings.c"
         "ui/ui_pixel.c"
@@ -82,7 +76,6 @@ idf_component_register(
         "apps"
         "apps/wb"
         "wb"
-        "apps/radio"
         "apps/voice"
         "apps/xiaozhi"
         "apps/home"
@@ -114,7 +107,3 @@ idf_component_register(
 target_link_options(${COMPONENT_LIB} INTERFACE
     "-Wl,--undefined=__wrap_opus_encoder_create,--undefined=__wrap_opus_encoder_destroy"
     "-Wl,--wrap=opus_encoder_create,--wrap=opus_encoder_destroy")
-
-if(PASSPORT_RADIO_HLS_TEST)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE PASSPORT_RADIO_HLS_TEST=1)
-endif()

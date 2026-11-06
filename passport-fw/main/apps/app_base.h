@@ -11,7 +11,9 @@ extern "C" {
 
 typedef enum {
     APP_ID_LAUNCHER = 0,
-    APP_ID_RADIO,
+    // 占位:旧设备曾占用的 1 号 id 已下架。编号不能重排,否则 NVS 与
+    // clean-launch 里按数值保存的目标会把开机路由到错误应用。
+    APP_ID_RESERVED_1,
     APP_ID_XIAOZHI,
     APP_ID_WIFI,
     APP_ID_SETTINGS,

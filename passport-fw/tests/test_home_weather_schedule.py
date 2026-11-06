@@ -65,6 +65,6 @@ with tempfile.TemporaryDirectory(prefix='passport-weather-schedule-') as tempora
     path.write_text(code)
     executable = path.with_suffix('')
     subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
-                    '-fsanitize=address,undefined', '-Itests/home_mocks', '-Itests/radio_mocks', '-Imain',
+                    '-fsanitize=address,undefined', '-Itests/home_mocks', '-Itests/http_mocks', '-Imain',
                     str(path), '-o', str(executable)], cwd=root, check=True)
     subprocess.run([str(executable)], check=True)

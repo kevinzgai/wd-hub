@@ -8,7 +8,7 @@ Embedded ESP32-C3 firmware with LVGL on a 240×320 screen. This is not a web, iO
 
 ## Users and purpose
 
-The owner and people using the same AI Passport hardware use its physical buttons, display, microphone and speaker for portable voice input, assistants, radio and small utilities/games. The owner requested detailed setup documentation for other users.
+The owner and people using the same AI Passport hardware use its physical buttons, display, microphone and speaker for portable voice input, assistants, the BLE companion screen and small utilities/games. The owner requested detailed setup documentation for other users.
 
 ## Operating context
 

@@ -33,8 +33,9 @@ typedef struct {
     char address[HOME_ADDRESS_MAX];
     char lat[HOME_COORD_MAX];
     char lon[HOME_COORD_MAX];
-    char region[HOME_REGION_MAX]; /* shared weather/radio province */
-    char radio_city[HOME_CITY_MAX]; /* parent city when a county is selected */
+    char region[HOME_REGION_MAX]; /* province for weather display */
+    char radio_city[HOME_CITY_MAX]; /* parent city when a county is selected;
+                                     * field/NVS key kept for profile compatibility */
     char country_code[4];
 } home_profile_t;
 

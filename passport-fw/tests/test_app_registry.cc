@@ -9,10 +9,10 @@ static bool prepare(){return mock_ready;}
 static bool key_opens_launcher=false;
 static void key(uint8_t,app_btn_event_t,uint16_t){++keys;if(key_opens_launcher)app_registry_switch_to(APP_ID_LAUNCHER);}
 static passport_app_t app(passport_app_id_t id){passport_app_t a{};a.id=id;a.name="test";a.start=start;a.stop=stop;a.on_key=key;a.prepare_stop=prepare;return a;}
-const passport_app_t g_radio_app=app(APP_ID_RADIO),g_xiaozhi_app=app(APP_ID_XIAOZHI),
+const passport_app_t g_xiaozhi_app=app(APP_ID_XIAOZHI),
  g_wifi_app=app(APP_ID_WIFI),g_settings_app=app(APP_ID_SETTINGS),g_home_app=app(APP_ID_HOME),
  g_stopwatch_app=app(APP_ID_STOPWATCH),g_muse_app=app(APP_ID_MUSE),g_pomodoro_app=app(APP_ID_POMODORO),g_morse_app=app(APP_ID_MORSE),
- g_vocab_app=app(APP_ID_VOCAB);
+ g_vocab_app=app(APP_ID_VOCAB),g_wb_app=app(APP_ID_WB);
 void launcher_ui_show(){start();} void launcher_ui_hide(){stop();}
 void launcher_ui_on_key(uint8_t,app_btn_event_t){++keys;}
 bool wifi_setup_can_leave(){return mock_setup;}
@@ -31,7 +31,7 @@ int main(){
  app_registry_init();app_registry_switch_to(APP_ID_HOME);assert(starts==1);
  assert(mock_socket_cleanups==2);
  auto *old=mock_active;const int before_stops=stops;
- mock_ready=false;app_registry_switch_to(APP_ID_RADIO);
+ mock_ready=false;app_registry_switch_to(APP_ID_MUSE);
  for(int i=0;i<50;++i)app_registry_process_pending_switch();
  assert(starts==1&&stops==before_stops&&mock_active==old);
  app_registry_dispatch_key(BSP_BTN_UP,BTN_EVT_CLICK,0);assert(keys==0);
@@ -101,10 +101,10 @@ int main(){
  assert(feedback_count==1);
  // Clean-launch policy is covered at the end; these flows start from a fresh heap.
  
- feedback_ready=false;app_registry_switch_to(APP_ID_RADIO);
- assert(app_registry_get_active()==APP_ID_HOME&&s_pending_target==APP_ID_RADIO);
+ feedback_ready=false;app_registry_switch_to(APP_ID_MUSE);
+ assert(app_registry_get_active()==APP_ID_HOME&&s_pending_target==APP_ID_MUSE);
  app_registry_dispatch_key(BSP_BTN_OK,BTN_EVT_CLICK,0);assert(feedback_count==1);
- feedback_ready=true;app_registry_process_pending_switch();assert(app_registry_get_active()==APP_ID_RADIO);
+ feedback_ready=true;app_registry_process_pending_switch();assert(app_registry_get_active()==APP_ID_MUSE);
  app_registry_dispatch_key(BSP_BTN_UP,BTN_EVT_CLICK,0);assert(feedback_count==1);
  app_registry_switch_to(APP_ID_HOME);
  app_registry_set_screen_timeout(1);mock_now+=2000000;app_registry_tick();
@@ -128,14 +128,14 @@ int main(){
  assert(app_registry_sound_notice()&&alarm_attempts==1);
  mock_mutex_available=false;assert(!app_registry_sound_notice());mock_mutex_available=true;
  mock_chime=true;assert(!app_registry_sound_notice());mock_chime=false;
- app_registry_switch_to(APP_ID_RADIO);assert(!app_registry_sound_notice()&&alarm_attempts==1);
+ app_registry_switch_to(APP_ID_MUSE);assert(!app_registry_sound_notice()&&alarm_attempts==1);
  // Clean launch: heavy apps start in place while the heap fits them, however
  // often they are re-entered; light apps never restart.
  app_registry_switch_to(APP_ID_HOME);assert(mock_restarts==0);
  app_registry_switch_to(APP_ID_MUSE);assert(app_registry_get_active()==APP_ID_MUSE&&mock_restarts==0);
  app_registry_switch_to(APP_ID_HOME);app_registry_switch_to(APP_ID_XIAOZHI);
- app_registry_switch_to(APP_ID_HOME);app_registry_switch_to(APP_ID_RADIO);
- assert(app_registry_get_active()==APP_ID_RADIO&&mock_restarts==0);
+ app_registry_switch_to(APP_ID_HOME);app_registry_switch_to(APP_ID_MUSE);
+ assert(app_registry_get_active()==APP_ID_MUSE&&mock_restarts==0);
  // An allocation failure during a heavy session marks the heap as strained:
  // leaving is fine, the next heavy entry restarts into itself once.
  ++mock_alloc_failures;app_registry_switch_to(APP_ID_HOME);app_registry_switch_to(APP_ID_STOPWATCH);
@@ -148,19 +148,19 @@ int main(){
  // Only a software reset with an intact record is honoured, and only once.
  mock_reset_reason=ESP_RST_SW;assert(app_registry_take_clean_launch()==APP_ID_XIAOZHI);
  assert(app_registry_take_clean_launch()==APP_ID_COUNT);
- s_clean_launch[0]=kCleanLaunchMagic;s_clean_launch[1]=APP_ID_RADIO^kCleanLaunchMagic;
+ s_clean_launch[0]=kCleanLaunchMagic;s_clean_launch[1]=APP_ID_MUSE^kCleanLaunchMagic;
  mock_reset_reason=ESP_RST_PANIC;assert(app_registry_take_clean_launch()==APP_ID_COUNT);
  s_clean_launch[0]=kCleanLaunchMagic;s_clean_launch[1]=APP_ID_STOPWATCH^kCleanLaunchMagic;
  mock_reset_reason=ESP_RST_SW;assert(app_registry_take_clean_launch()==APP_ID_COUNT);
- s_clean_launch[0]=0x12345678;s_clean_launch[1]=APP_ID_RADIO;assert(app_registry_take_clean_launch()==APP_ID_COUNT);
+ s_clean_launch[0]=0x12345678;s_clean_launch[1]=APP_ID_MUSE;assert(app_registry_take_clean_launch()==APP_ID_COUNT);
  // Real RAM is fresh after the restart; the mock keeps state, so model that.
  s_heap_strained=false;s_fresh_heap=false;
- // Per-app needs: Xiaozhi fits in 20 KiB contiguous, the MP3 decoder does not.
+ // Per-app needs: Xiaozhi fits in 20 KiB contiguous, Muse needs 20 KiB+.
  mock_largest=20*1024;
  app_registry_switch_to(APP_ID_HOME);app_registry_switch_to(APP_ID_XIAOZHI);
  assert(app_registry_get_active()==APP_ID_XIAOZHI&&mock_restarts==1);
- app_registry_switch_to(APP_ID_HOME);
- try{app_registry_switch_to(APP_ID_RADIO);assert(false);}catch(const MockRestart&){}
+ app_registry_switch_to(APP_ID_HOME);mock_largest=18*1024;
+ try{app_registry_switch_to(APP_ID_MUSE);assert(false);}catch(const MockRestart&){}
  assert(mock_restarts==2);
  // Total free is checked as well as the largest block.
  mock_largest=40000;mock_free=40*1024;

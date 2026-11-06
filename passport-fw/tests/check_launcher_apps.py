@@ -2,7 +2,6 @@ import os
 import re
 
 app_files = [
-    'main/apps/radio/app_radio.cc',
     'main/apps/xiaozhi/app_xiaozhi.cc',
     'main/apps/muse/app_muse.cc',
     'main/apps/stopwatch/app_stopwatch.cc',

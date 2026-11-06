@@ -47,11 +47,11 @@ int main(void){
  before_logs=logs;before_walks=walks;
  bsp_memory_dump_recent_failures();assert(logs-before_logs==4 && walks==before_walks && s_reported==9);
  assert(strstr(last,"recent_alloc_failed seq=9"));
- bsp_memory_phase("radio");assert(s_min_free==28000&&s_min_largest==16000);
+ bsp_memory_phase("muse");assert(s_min_free==28000&&s_min_largest==16000);
  hook(4096,4,"heap_caps_malloc");assert(s_failures[1].phase==s_phase);
  before_logs=logs;before_walks=walks;
  bsp_memory_dump_recent_failures();assert(logs-before_logs==4 && walks==before_walks && s_reported==9);
- assert(strstr(last,"seq=10") && strstr(last,"phase=radio"));
+ assert(strstr(last,"seq=10") && strstr(last,"phase=muse"));
  before_logs=logs;bsp_memory_dump();assert(logs-before_logs==2 && s_reported==10);
  before_logs=logs;bsp_memory_dump_recent_failures();assert(logs-before_logs==4 && s_reported==10);
  puts("Memory telemetry: bounded ring, no hook logging/heap walks, phase minima/reset: PASS");

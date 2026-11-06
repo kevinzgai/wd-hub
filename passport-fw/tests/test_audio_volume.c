@@ -79,7 +79,7 @@ int main(void) {
             if (master > 0) assert(v >= bsp_audio_volume_effective(app, master - 1));
         }
     }
-    // Radio -> muted recording -> TTS, including format reopen and master mute.
+    // Streaming -> muted recording -> TTS, including format reopen and master mute.
     apply(55, 80, 44, false, "VU");
     apply(100, 100, 100, false, "VU");
     apply(0, 100, 0, true, "MV");

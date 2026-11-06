@@ -6,11 +6,14 @@
 // Foreground audio apps share this storage. Release it only after their worker
 // has stopped using its stack or buffers.
 namespace audio_workspace {
+// Radio is a legacy slot name: after the streaming-radio app was removed it is
+// still used as the generic "another foreground audio app" owner in exclusivity
+// tests. Keep the name so the shared layout and test fixtures stay compatible.
 enum class Owner { None, Radio, Xiaozhi, Muse, MusePairing };
 constexpr std::size_t kRealtimeBytes = 22 * 1024;
 // Same exclusive owner as the realtime stack/frame area. Xiaozhi's Opus
-// half-duplex encoder/decoder, Muse reassembly and Radio compressed FIFO never
-// coexist. Codec handoffs require the audio worker to be completely idle.
+// half-duplex encoder/decoder and Muse reassembly never coexist.
+// Codec handoffs require the audio worker to be completely idle.
 constexpr std::size_t kAuxBytes = 26 * 1024;
 constexpr std::size_t kBytes = kRealtimeBytes + kAuxBytes;
 alignas(16) inline std::uint8_t storage[kBytes];
@@ -29,11 +32,6 @@ inline std::uint8_t *queue_slot(unsigned i) {
 }
 static_assert(kReceiveBytes + kTransmitBytes <= kRealtimeBytes);
 static_assert(kReceiveBytes + 2 * kSendScratchBytes + kQueueSlots * kQueueSlotBytes <= kAuxBytes);
-}
-namespace radio {
-constexpr std::size_t kCompressedBytes = 16 * 1024;
-inline std::uint8_t *stations() { return aux() + kCompressedBytes; }
-constexpr std::size_t kStationBytes = kAuxBytes - kCompressedBytes;
 }
 inline std::atomic<Owner> owner{Owner::None};
 inline bool acquire(Owner requested) {

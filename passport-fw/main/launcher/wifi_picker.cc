@@ -1,5 +1,5 @@
 #include "launcher/wifi_picker.h"
-#include "apps/radio/radio_ui.h"
+#include "launcher/wifi_picker_ui.h"
 #include "wifi_manager.h"
 #include "ssid_manager.h"
 #include "bsp_display.h"
@@ -33,21 +33,21 @@ void draw() {
     auto &p = *s_picker;
     switch (p.page) {
         case Page::List:
-            radio_ui_show_wifi_list(p.networks.data(), p.networks.size(), p.selected, p.networks.size() == 2, nullptr, true); break;
+            wifi_picker_ui_show_wifi_list(p.networks.data(), p.networks.size(), p.selected, p.networks.size() == 2, nullptr, true); break;
         case Page::Keyboard:
-            radio_ui_show_wifi_keyboard(p.ssid.c_str(), p.password.size(), p.keyboard, p.selected, p.error); break;
+            wifi_picker_ui_show_wifi_keyboard(p.ssid.c_str(), p.password.size(), p.keyboard, p.selected, p.error); break;
         case Page::Connecting:
-            radio_ui_show_wifi_connecting(p.ssid.c_str(), "正在连接，请稍等"); break;
+            wifi_picker_ui_show_wifi_connecting(p.ssid.c_str(), "正在连接，请稍等"); break;
         case Page::Success:
-            radio_ui_show_wifi_success(p.ssid.c_str()); break;
+            wifi_picker_ui_show_wifi_success(p.ssid.c_str()); break;
         case Page::Saved: {
             const auto &saved = SsidManager::GetInstance().GetSsidList();
             const char *names[10];
             const size_t count = std::min<size_t>(saved.size(), 10);
             for (size_t i = 0; i < count; ++i) names[i] = saved[i].ssid.c_str();
-            radio_ui_show_saved_wifi(names, count, p.selected); break;
+            wifi_picker_ui_show_saved_wifi(names, count, p.selected); break;
         }
-        case Page::Delete: radio_ui_show_wifi_delete_confirm(p.ssid.c_str(), p.selected); break;
+        case Page::Delete: wifi_picker_ui_show_wifi_delete_confirm(p.ssid.c_str(), p.selected); break;
     }
 }
 
@@ -93,7 +93,7 @@ bool wifi_picker_open() {
     s_picker = new (std::nothrow) Picker;
     if (!s_picker) return false;
     WifiManager::GetInstance().StartConfigAp(true, true);
-    if (!radio_ui_init()) { wifi_picker_close(); return false; }
+    if (!wifi_picker_ui_init()) { wifi_picker_close(); return false; }
     bsp_lvgl_lock(-1);
     refresh_scan();
     s_picker->timer = lv_timer_create([](lv_timer_t *) {
@@ -120,7 +120,7 @@ void wifi_picker_close() {
     if (!s_picker || wifi_picker_busy()) return;
     bsp_lvgl_lock(-1);
     if (s_picker->timer) lv_timer_delete(s_picker->timer);
-    radio_ui_deinit();
+    wifi_picker_ui_deinit();
     std::fill(s_picker->password.begin(), s_picker->password.end(), '\0');
     delete s_picker; s_picker = nullptr;
     bsp_lvgl_unlock();
@@ -137,7 +137,7 @@ void wifi_picker_key(uint8_t btn, app_btn_event_t event) {
     } else if (event == BTN_EVT_CLICK) {
         size_t count = 1;
         if (p.page == Page::List) count = p.networks.size();
-        if (p.page == Page::Keyboard) count = radio_ui_wifi_key_count(p.keyboard);
+        if (p.page == Page::Keyboard) count = wifi_picker_ui_wifi_key_count(p.keyboard);
         if (p.page == Page::Saved) count = SsidManager::GetInstance().GetSsidList().size() + 1;
         if (p.page == Page::Delete) count = 2;
         if (btn == BSP_BTN_UP || btn == BSP_BTN_DOWN) p.selected = (p.selected + count + (btn == BSP_BTN_UP ? -1 : 1)) % count;
@@ -152,7 +152,7 @@ void wifi_picker_key(uint8_t btn, app_btn_event_t event) {
                     p.page = Page::Keyboard; if (!p.secure) connect();
                 }
             } else if (p.page == Page::Keyboard) {
-                const char *key = radio_ui_wifi_key(p.keyboard, p.selected);
+                const char *key = wifi_picker_ui_wifi_key(p.keyboard, p.selected);
                 if (std::strlen(key) == 1) { if (p.password.size() < 63) p.password += key; p.error = nullptr; }
                 else if (!std::strcmp(key, "DEL")) { if (!p.password.empty()) p.password.pop_back(); }
                 else if (!std::strcmp(key, "GO")) connect();

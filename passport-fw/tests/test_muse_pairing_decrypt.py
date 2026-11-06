@@ -1,5 +1,6 @@
 """Check production decrypt buffer ownership, bounds and failure cleanup."""
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 
@@ -88,7 +89,7 @@ int main(void) {
 with tempfile.TemporaryDirectory() as tmp:
     file = Path(tmp) / 'decrypt.c'
     file.write_text(prelude + decrypt + cases)
-    cjson = Path('/opt/esp-idf/components/json/cJSON')
+    cjson = Path(os.environ.get('IDF_PATH', '/opt/esp-idf')) / 'components/json/cJSON'
     binary = file.with_suffix('')
     subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
                     '-fsanitize=address,undefined', '-I' + str(cjson), str(file),

@@ -6,10 +6,13 @@
 extern "C" {
 #endif
 
+// 名称里的 radio_ 是历史遗留:这两份字体早已是全机共享的正文/标题小子集,
+// APP_FONT_BODY / APP_FONT_TITLE 及 Launcher、设置、配网页都依赖它们,
+// 不随电台应用移除。重命名会牵动字库生成脚本与全部引用,保持原名。
 LV_FONT_DECLARE(radio_font);
 LV_FONT_DECLARE(radio_font_title);
 // 4360 字中文字库(SourceHanSansSC 16px 子集)。首页的姓名/签名/天气/提示、
-// 收音机的中文回退都依赖它 —— radio_font 只是小子集,覆盖不了。原属 codex
+// 各应用的中文回退都依赖它 —— radio_font 只是小子集,覆盖不了。原属 codex
 // 应用目录,2026-09-12 随 AI设备 模块移除迁到 fonts/,避免被一起删掉。
 // 也用于小智/摩斯电键的**动态文本**(字符不可预知)。
 LV_FONT_DECLARE(buddy_font_16);
