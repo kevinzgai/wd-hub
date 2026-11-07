@@ -9,6 +9,7 @@
     y               长按 UP
     o               短按 OK
     k               长按 DOWN
+    l / b           长按 OK（main.cc 串口命令，用于验证全局返回 / 回首页）
 示例：
     python3 tools/capture_screen.py /dev/cu.usbmodem21201 out.png "d,d,d,d"
 
@@ -59,7 +60,8 @@ def write_png(path, rows, w, h):
         f.write(png)
 
 
-KEY_CODES = {"u": b"u", "d": b"d", "o": b"o", "k": b"k", "y": b"y"}
+KEY_CODES = {"u": b"u", "d": b"d", "o": b"o", "k": b"k", "y": b"y",
+             "l": b"l", "b": b"b"}
 
 
 def main():

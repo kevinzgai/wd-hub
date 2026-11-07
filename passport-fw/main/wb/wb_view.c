@@ -463,7 +463,7 @@ static void build_status(void)
     s_ui.st_clock = mk_text(act, "主机时间 未校时", WD_TEXT, 9, 4, 212);
     s_ui.st_event = mk_roll_text(act, "最近事件 无", WD_TEXT_DIM, 9, 24, 212);
 
-    mk_footer(WB_VIEW_STATUS, "OK", " 总览 · ", "上下", " 翻页");
+    mk_footer(WB_VIEW_STATUS, "长按OK", " 首页 · ", "上下", " 翻页");
 }
 
 static void build_rack(void)
@@ -489,7 +489,7 @@ static void build_rack(void)
         s_ui.rk_msg[i] = mk_roll_text(card, "", WD_TEXT_DIM, 11, 45, 206);
     }
 
-    mk_footer(WB_VIEW_RACK, "OK", " 总览 · ", "上下", " 翻页");
+    mk_footer(WB_VIEW_RACK, "长按OK", " 首页 · ", "上下", " 翻页");
 }
 
 static void build_usage(void)
@@ -532,7 +532,7 @@ static void build_usage(void)
     s_ui.us_empty2 = mk_text_at(models, "", WD_TEXT_DIM, 0, 82, 232,
                                 LV_TEXT_ALIGN_CENTER);
 
-    mk_footer(WB_VIEW_USAGE, "OK", " 总览 · ", "上下", " 翻页");
+    mk_footer(WB_VIEW_USAGE, "长按OK", " 首页 · ", "上下", " 翻页");
 }
 
 static void build_about(void)
@@ -579,7 +579,7 @@ static void build_about(void)
     lv_label_set_text(fv[1], "审批 / 提问");
     s_ui.ab_frames = fv[2];
 
-    mk_footer(WB_VIEW_ABOUT, "OK", " 总览 · ", "上下", " 翻页");
+    mk_footer(WB_VIEW_ABOUT, "长按OK", " 首页 · ", "上下", " 翻页");
 }
 
 // 05 主机资源：电脑侧 CPU / 内存 / 磁盘。
@@ -627,7 +627,7 @@ static void build_hostres(void)
     s_ui.hr_age = mk_text_at(scr, "", WD_TEXT_DIM, 0, 272, WD_SCR_W,
                              LV_TEXT_ALIGN_CENTER);
 
-    mk_footer(WB_VIEW_HOSTRES, "OK", " 总览 · ", "上下", " 翻页");
+    mk_footer(WB_VIEW_HOSTRES, "长按OK", " 首页 · ", "上下", " 翻页");
 }
 
 static void build_approval(void)

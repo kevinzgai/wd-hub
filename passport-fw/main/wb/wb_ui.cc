@@ -209,7 +209,9 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
     // 一层包装；游标仍由业务层 wb_biz_move 钳制，UI 只镜像到视觉层。
     if (page == WB_VIEW_ASK) {
         if (long_press) {
-            if (key == WB_UI_KEY_OK) return false;   // 长 OK 留给底座关机
+            // 事件页不抢长 OK：留给底座 2s 提示 / 5s 关机。
+            // 「长按 OK 回首页」只在导航页生效，避免作答中被误带出页面。
+            if (key == WB_UI_KEY_OK) return false;
             // 长 DOWN = 跳过（业务层既定语义）；已提交后不再重复上报。
             if (key == WB_UI_KEY_DOWN && s_ask.commit_id <= 0) wb_biz_back();
             return true;
@@ -259,9 +261,19 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
         return true;
     }
 
-    // 导航页（STATUS / RACK / USAGE / ABOUT / HOSTRES）：↑↓ 轮转，OK 回总览。
-    // 长按不翻页。页数由 wb_view 统一提供，这里不再写死常量。
-    if (long_press) return false;
+    // 导航页（STATUS / RACK / USAGE / ABOUT / HOSTRES）：↑↓ 轮转，长按 OK 回首页。
+    // 长按 UP/DOWN 仍不翻页（长 DOWN 由业务层当 back 处理）。
+    // 页数由 wb_view 统一提供，这里不再写死常量。
+    if (long_press) {
+        if (key == WB_UI_KEY_OK) {
+            // 800ms 的 LONG 事件与底座 2s 提示 / 5s 关机是两条独立链路：
+            // main.cc 的注释明确写了「0.8s 长按已返回一层，之后继续按住才
+            // 弹关机提示」，两者不冲突。hold_ok=true 也保证 registry 不会抢。
+            wb_view_set_manual_page(WB_VIEW_STATUS);
+            return true;
+        }
+        return false;
+    }
 
     const int n = wb_view_nav_page_count();
     const int cur = (int)wb_view_manual_page();
@@ -274,7 +286,9 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
         return true;
     }
     if (key == WB_UI_KEY_OK) {
-        wb_view_set_manual_page(WB_VIEW_STATUS);
+        // 短 OK 从「回首页」腾出来后是保留空位（后续给「进入子页」用）。
+        // 必须在这里吞掉：返回 false 会落到 app_wb.cc 的 wb_biz_confirm()，
+        // 有待办时按一下短 OK 就会误提交审批 / 提问，是严重回归。
         return true;
     }
     return false;

@@ -267,8 +267,9 @@ void wb_on_key(uint8_t btn, app_btn_event_t event, uint16_t mv)
             wb_biz_back();
             if (had_page) beep_key();   // 审批返回 / 提问 skip 的反馈
         } else if (btn == BSP_BTN_OK) {
-            // 长按 OK 保留底座“2s 提示 / 5s 关机”语义；
-            // 这里只吃掉 800ms 的 LONG，避免 registry 把长 OK 当“返回首页”。
+            // 导航页的长 OK 已被 wb_ui_key 消费（回看板首页）并提前 return。
+            // 走到这里的只有审批 / 提问事件页：不抢手势，保留底座“2s 提示 /
+            // 5s 关机”语义，同时避免 registry 把长 OK 当“整机返回”。
         }
     }
 }

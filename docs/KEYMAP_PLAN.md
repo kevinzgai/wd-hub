@@ -61,7 +61,7 @@
 | DOWN | 短按 | 下移 / 下一条 / 焦点下移 | 纯方向，不产生业务提交 |
 | OK | 短按 | 确认 / 进入当前项 | 具体「进入什么」由当前页决定，但**不会是死键** |
 | DOWN | 长按 | **返回上一层** | 根层（总览）= 打开菜单；菜单内 = 关闭菜单；额度/声音 = 回菜单 |
-| OK | 长按 | **不归页面所有** | 底座：2s 提示、5s 关机；页面不得承诺任何长按 OK 功能 |
+| OK | 长按 | **不归页面所有**（WB 看板例外，见 B.9.2） | 底座：2s 提示、5s 关机；一般页面不得承诺任何长按 OK 功能。WB App 以 `hold_ok=true` 声明自管 800ms LONG，导航页用它回首页 |
 | UP | 长按 | **不承载功能**（本期撤掉额度入口） | 避免「按久一点换功能」；保留给未来调试，不进底栏 |
 
 > 设计原则：**短按只做「移动 / 进入」，长按只做「退一层」**。高风险动作（拒绝 / 跳过）才允许使用长按，并且必须在底栏明写。
@@ -796,3 +796,49 @@ CMake 源文件/包含目录、HLS 测试开关、内存与省电档位策略中
 
 **截图**：`docs/hub_05_hostres.png`（240×320 原始抓屏）。
 抓屏工具新增 `passport-fw/tools/capture_screen.py`（纯标准库收 hex 码流还原 PNG）。
+
+### B.9.2 「回到首页」从短 OK 移到长按 OK（2026-11-07 12:25）
+
+用户要求把看板导航页的「回首页」手势改成长按 OK。原实现是**短 OK 回总览**，
+5 个导航页页脚统一写 `OK 总览 · 上下 翻页`；长按一律 `if (long_press) return false`
+不消费，其中长 OK 在 `app_wb.cc` 里被显式吃掉以给底座让路。
+
+**为什么这个改动不冲突**（动手前先验证过的三条链路）：
+
+| 环节 | 事实 |
+|---|---|
+| `main.cc` 底座电源轮询 | 800ms 发 `BTN_EVT_LONG`，2s 弹「继续按住关机 / 松开取消」、5s `power_off`。源码注释明确写着「The 0.8 s long press has already gone back one level by then, which is harmless」——**两段时间点是独立链路，800ms 做返回是被设计允许的** |
+| `app_registry.cc` 全局拦截 | 长按 OK 默认 = 整机「返回上一层」，但 WB App 注册了 `.hold_ok = true`，registry 直接放行给 `on_key(BTN_EVT_LONG)`，不会把设备切走 |
+| `app_wb.cc` 分发 | LONG 事件先问 `wb_ui_key(ui_key, true)`，返回 true 即消费并 return；只有事件页会落到原来那个空的「长 OK 吃掉」分支 |
+
+**改动**
+
+| 文件 | 内容 |
+|---|---|
+| `main/wb/wb_ui.cc` | 导航页 `long_press` 分支改为：OK → `wb_view_set_manual_page(WB_VIEW_STATUS)` 并消费；UP/DOWN 仍放行给业务层。短 OK 从「回总览」改为**吞掉**（`return true`） |
+| `main/wb/wb_view.c` | 5 个导航页页脚 `OK 总览` → `长按OK 首页`，字库已覆盖；页脚是自适应 flex row，232px 有余量 |
+| `main/apps/wb/app_wb.cc` / `main/wb/wb_ui.h` | 注释同步长 OK 的新归属与「返回 false 会落到 `wb_biz_confirm`」的陷阱 |
+
+**一个必须吞掉短 OK 的坑**：`wb_ui_key` 返回 false 时，`app_wb.cc` 的 CLICK
+分支会落到 `wb_biz_confirm()`。如果短 OK 只是「不再回首页」而返回 false，
+有待办时按一下短 OK 就会**误提交审批 / 提问**。所以短 OK 必须 `return true`
+消费掉、不产生业务动作——它现在是留给后续「OK 进入子页」的空位。
+
+**边界**：审批 / 提问事件页的长 OK 仍不消费，保留底座 2s/5s 关机，避免
+作答途中被手势带出页面；待机页任意键仍只唤醒。整机「回 Home App」仍由
+registry 负责，WB App 的长 OK 只回到**看板内的总览页**，两者不是一回事。
+
+**实机验证**（fw 1.3.0-passport，2026-11-07 12:30 烧录，编译 17s / 0 warning）：
+抓屏串口命令 `l` = LONG OK、`o` = 短 OK、`d` = 短 DOWN。每轮打开串口会
+复位设备，脚本先等 12s 并空发一次 `o` 消耗掉「唤醒键护栏」。
+
+| 轮 | 按键序列 | 期望 | 实测 |
+|---|---|---|---|
+| A | `d,d,d,d` | 到第 5 页 | 「主机资源」，页脚 **「长按OK 首页 · 上下 翻页」** |
+| B | `d,d,d,d,l` | 长按 OK 回首页 | **「状态总览」** ✓ |
+| C | `d,d,d,d,o` | 短 OK 不回首页 | 仍是 **「主机资源」**，且没误提交待办 ✓ |
+
+A 轮刚复位、30s host 帧未到，显示「主机未下发资源信息」空态；C 轮数据
+已到（CPU 55% / 内存 81% / 磁盘 26%），顺带确认短 OK 没有打断数据链路。
+截图：`docs/keymap_02_long_ok_home.png`、`docs/keymap_03_short_ok_stays.png`。
+抓屏脚本 `tools/capture_screen.py` 的按键表补了 `l`/`b`（LONG OK）。
