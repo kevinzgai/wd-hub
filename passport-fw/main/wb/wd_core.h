@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "wb_proto.h"
+#include "wb_link_stats.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -100,10 +101,24 @@ typedef struct {
 
     wb_usage_t usage;
 
-    // 第 5 页「主机资源」：电脑侧 CPU / 内存 / 磁盘占用。
+    // 主机资源页（第 5 页）：电脑侧 CPU / 内存 / 磁盘占用。
     // has_res=false（主机还没推 hostres 键）时整页显示说明文案，不画空条。
     bool has_res;
     wb_hostres_t res;
+
+    // 网关 / 主机大盘（host 帧）：关于页「网关」卡的数据源。
+    // has_host=false 表示主机从没发过 host 帧（老主机 / 还没连过），
+    // 界面写「未下发」，不把 0 当成「网关没起来」。
+    bool has_host;
+    int gw_ports;        // 候选端口数（本地 worker 监听数）
+    int gw_sessions;     // 网关侧活会话数
+    int uptime_s;        // 主机端连接时长（秒）
+    bool gw_secret;      // 网关密钥可读 = 本地网关在线
+    bool gw_cli;         // CLI 可用
+
+    // 链路诊断（设备侧自采，与主机版本无关）：收帧 / 发帧 / 断连次数与
+    // 原因 / 连接间隔 / MTU / 省电档。
+    wb_link_stats_t link;
 
     int beep_vol;
     uint8_t skin;

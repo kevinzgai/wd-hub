@@ -86,6 +86,11 @@ python3 tests/test_avatar_upload.py
     tests/test_wb_hostres_frame.cc "$test_dir/wb-proto.o" "$test_dir/wb-cjson.o" \
     -o "$test_dir/wb-hostres"
 "$test_dir/wb-hostres"
+# 关于页链路统计：连接时长分段、断开原因翻译、1.25ms 单位折算。
+# 纯 inline 头文件，不链接 wb_proto，所以单独编、单独跑。
+"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+    -Imain/wb tests/test_wb_link_stats.cc -o "$test_dir/wb-link-stats"
+"$test_dir/wb-link-stats"
 python3 tests/test_city_catalog.py
 python3 tests/test_home_weather.py
 python3 tests/test_home_weather_schedule.py

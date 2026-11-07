@@ -23,6 +23,7 @@
 #include "esp_timer.h"
 
 #include "wb_view.h"
+#include "wb_link.h"
 #include "wd_core.h"
 
 namespace {
@@ -129,6 +130,22 @@ void adapt(const wb_view_t *v, bool standby)
     // 第 5 页「主机资源」：has_res 与 res 一起搬，缺数据时视觉层自己写空态。
     s_st.has_res = v->has_res;
     s_st.res = v->res;
+
+    // 关于页「网关」卡：host 帧的五个字段以前在业务层就断了（adapt 一个都
+    // 没搬），屏上因此只能写死。这里全部搬过来，has_host 决定空态文案。
+    s_st.has_host = v->have_host;
+    s_st.gw_ports = v->gw_ports;
+    s_st.gw_sessions = v->gw_sessions;
+    s_st.uptime_s = v->uptime_s;
+    s_st.gw_secret = v->gw_secret;
+    s_st.gw_cli = v->gw_cli;
+
+    // 链路诊断：设备侧自采计数。以前 wb_view_set_activity() 只在 init 里
+    // 写死调一次 (0,"—",false)，s_frames 无人累加、s_low_power 无人设置，
+    // 于是「0 帧 / 正常档」永远不变。现在每帧 sync 都从 wb_link 取真值，
+    // 顺便让 s_st.link.connected 覆盖 adapt 上面按 v->connected 推出来的值
+    // ——B 端与业务层同一份真相，避免两处各自判断。
+    wb_link_get_stats(&s_st.link);
 }
 
 // 「已提交」态渲染完这一帧之后才上行：业务层 confirm 会立刻把页切回总览，
@@ -167,8 +184,9 @@ void wb_ui_init(void)
     s_soc = -1;
     wb_view_build();
     wb_view_set_manual_page(WB_VIEW_STATUS);
-    // 关于/链路页的活动统计当前没有数据来源，先给占位，后续接协议。
-    wb_view_set_activity(0, "—", false);
+    // 关于/链路页的链路统计与网关字段现在都有真实来源（wb_link_get_stats
+    // 在每帧 adapt 里搬运，host 帧字段也从业务层搬过来了）。这里不再写死
+    // 占位值 —— 「0 帧 / 正常档」以前就是这么进屏的。
     s_inited = true;
 }
 

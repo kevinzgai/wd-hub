@@ -63,8 +63,9 @@ void wb_view_set_ask_cursor(int cursor);
 void wb_view_set_ask_committed(int id, int idx);
 void wb_view_set_ask_edge(int dir, int64_t until_ms);
 
-// 给“关于/链路”页补充服务层统计(下行帧数、最近事件、BLE 省电档)。
-void wb_view_set_activity(int frames, const char *last_event, bool low_power);
+// 注：原 wb_view_set_activity(frames, last_event, low_power) 已移除。
+// 它唯一的调用点写死在 init 里，屏上「0 帧 / 正常档」恒不变。现在链路统计
+// 走 wb_link_stats_t（wd_core.h 的 wb_state_t::link），由 wb_ui.cc 每帧搬运。
 
 #ifdef __cplusplus
 }

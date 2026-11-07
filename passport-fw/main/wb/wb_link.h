@@ -7,6 +7,8 @@
 
 #include "esp_err.h"
 
+#include "wb_link_stats.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -30,6 +32,10 @@ bool wb_link_take_hello(void);
 
 // 连接状态发生变化时返回 true，并给出当前状态。
 bool wb_link_take_conn_change(bool *connected);
+
+// 链路统计快照（收帧 / 发帧 / 断连次数与原因 / 连接间隔 / MTU / 省电档）。
+// 纯设备侧计数，不依赖主机协议版本。线程安全（无锁，逐字段读）。
+void wb_link_get_stats(wb_link_stats_t *out);
 
 #ifdef __cplusplus
 }

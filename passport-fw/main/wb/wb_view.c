@@ -70,11 +70,21 @@ typedef struct {
     lv_obj_t *us_empty;              // 空态主提示（居中，替代 5 行空条）
     lv_obj_t *us_empty2;             // 空态副说明
 
-    // 04 关于 / 链路
-    wd_badge_t ab_badge;
-    lv_obj_t *ab_state;
-    lv_obj_t *ab_power;
-    lv_obj_t *ab_frames;
+    // 04 关于 / 链路 —— 版式 v2「链路卡（设备侧自采）+ 固件/网关卡」
+    // 链路数据全部来自 wb_link_stats（GAP 回调 + 收发计数），不依赖主机版本，
+    // 老主机也能看到收帧 / 断连 / 连接间隔；网关数据来自 host 帧。
+    wd_badge_t ab_badge;             // 链路卡头右侧：已连接 / 广播中 / 离线
+    lv_obj_t *ab_rail;               // 链路卡 3px 竖条：连接=鼠尾草绿 / 广播=灰
+    lv_obj_t *ab_state;              // 状态行：设备名 + 省电档
+    lv_obj_t *ab_dur;                // 本段连接时长（全页唯一 32px 锚点）
+    lv_obj_t *ab_dur_note;           // 大数字右上一行：解释单位（分:秒 / 时:分）
+    lv_obj_t *ab_itvl;               // 大数字右下一行：连接间隔 · MTU
+    lv_obj_t *ab_frames;             // 收发行：收 N 帧 / 发 M 帧
+    lv_obj_t *ab_disconn;            // 断连行：次数 · 最近原因
+    lv_obj_t *ab_ver;                // 固件卡头右侧：版本号
+    lv_obj_t *ab_proto;              // 协议行：版本 + 已声明能力
+    lv_obj_t *ab_gw;                 // 网关行：在线状态 + 密钥 + CLI
+    lv_obj_t *ab_ports;              // 端口行：候选端口 · 活会话 · 主机时长
 
     // 05 主机资源（电脑 CPU / 内存 / 磁盘）—— 版式 v2「一个锚点 + 两条从属」
     // CPU 是唯一 32px 大数字（全页第一视觉），内存/磁盘降为 16px 从属行；
@@ -128,10 +138,6 @@ static int s_ask_commit_id;         // 已确认的题号，0 = 没有
 static int s_ask_commit_idx = -1;   // 已确认的选项下标
 static int s_ask_edge_dir;          // 0 无 / -1 撞首项 / +1 撞末项
 static int64_t s_ask_edge_until_ms; // 边界提示的到期时刻
-
-static int s_frames;
-static char s_last_event[20] = "无";
-static bool s_low_power;
 
 // ---------------------------------------------------------------------------
 // 基础控件
@@ -538,49 +544,88 @@ static void build_usage(void)
     mk_footer(WB_VIEW_USAGE, "长按OK", " 首页 · ", "上下", " 翻页");
 }
 
+// 04 关于 / 链路 —— 版式 v2。
+//
+// v1 的问题：整页是块装饰板。服务 / 特征写死 16 位 UUID 前缀（4fafc201 /
+// beb5483e），能力写死「审批 / 提问」，下行恒「0 帧」，「省电」恒「正常」——
+// 因为 wb_view_set_activity() 只在 init 里被写死调用一次，s_frames 无人累加、
+// s_low_power 无人设置；host 帧的 gw_ports/gw_sessions/uptime/secret/cli
+// 在 adapt() 那一层也一个都没搬过来。数据早就到设备了，只是断在最后一米。
+//
+// v2 版面预算（内容区 38..288，页脚 294）：
+//   链路卡 4,38,232,146      38..184   ← 设备侧自采，不依赖主机版本
+//   固件/固件与网关卡 4,190,232,96  190..286
+//
+// 链路卡内部（对齐 6.1 额度卡的字号关系，32px + 16px 已实机验证）：
+//   y=6   卡头「WD HUB · 链路」+ 右上徽标（已连接 / 广播中）
+//   y=26  1px 分隔线
+//   y=30  状态行（设备名 + 省电档，一行）         → 30..50
+//   y=56  32px 大数字：本段连接时长（全页唯一锚点）
+//   y=60  右侧 x=136：两行说明（「分:秒」/「连接间隔 xx ms」）
+//   y=100 收帧 / 发帧一行                          → 100..120
+//   y=120 断连次数 · 最近原因一行                  → 120..140
+//   y=140 连接间隔 · MTU 一行                     → 140..160（卡高 146 到 184
+//         实际内容到 160，留 24 给大数字的 descender 与卡底内边距）
+//
+// 为什么时长做锚点、不做「收帧数」锚点：收帧数是单调累加的裸计数，读起来
+// 没有「稳定/不稳」的判断价值；连接时长才是用户真正关心的「稳不稳」，
+// 断连时它会归零重算，比任何告警文案都直观。
 static void build_about(void)
 {
     lv_obj_t *scr = s_ui.scr[WB_VIEW_ABOUT];
     mk_header(WB_VIEW_ABOUT, "关于 / 链路");
 
-    // 链路卡 4,38,232,132(正常=鼠尾草绿竖条;品牌唯一落点)
-    lv_obj_t *link = mk_card(scr, 4, 38, 232, 132);
-    mk_rect(link, 0, 0, 3, 132, WD_SUCCESS);
-    mk_text(link, "WD HUB · 链路", WD_PRIMARY, 11, 4, 120);
-    s_ui.ab_badge = mk_badge(link, 158, 4, 66, WD_SUCCESS, true);
+    // ---- 链路卡（设备侧自采）----
+    lv_obj_t *link = mk_card(scr, 4, 38, 232, 146);
+    s_ui.ab_rail = mk_rect(link, 0, 0, 3, 146, WD_SUCCESS);
+    mk_text(link, "WD HUB · 链路", WD_PRIMARY, 11, 6, 120);
+    s_ui.ab_badge = mk_badge(link, 152, 6, 76, WD_SUCCESS, true);
     mk_rect(link, 9, 26, 216, 1, WD_BORDER);
 
-    static const char *const k_link[5] = {"状态", "设备", "服务", "特征", "省电"};
-    lv_obj_t *val[5];
-    for (int i = 0; i < 5; i++) {
-        const int y = 30 + i * 20;                       // 68 / 88 / 108 / 128 / 148
-        mk_text(link, k_link[i], WD_TEXT_DIM, 9, y, 54);
-        val[i] = mk_text(link, "", WD_TEXT, 63, y, 158);
-    }
-    lv_label_set_text(val[1], "Workbuddy BOX");          // BLE 广播名暂不随品牌改名
-    lv_label_set_text(val[2], "4fafc201");
-    lv_label_set_text(val[3], "beb5483e");
-    s_ui.ab_state = val[0];
-    s_ui.ab_power = val[4];
+    // 状态行：设备名占满整行（"Workbuddy BOX" 约 104px，要给足宽度，
+    // 截成 "Workbuddy ..." 会让人看不出是哪个设备）。
+    mk_text(link, "设备", WD_TEXT_DIM, 9, 30, 40);
+    s_ui.ab_state = mk_text(link, "Workbuddy BOX", WD_TEXT, 49, 30, 174);
 
-    // 固件卡 4,176,232,110
-    lv_obj_t *fw = mk_card(scr, 4, 176, 232, 110);
-    mk_text(fw, "固件", WD_TEXT, 9, 4, 100);
-    // "1.3.0-passport" 约 112px，原 w=40 会截成 "1.3..."；左侧「固件」
-    // 占到 x=109，从 110 起给 114px，右边界 224 < 卡宽 232。
-    mk_text_at(fw, WB_FW_VERSION, WD_PRIMARY, 110, 4, 114, LV_TEXT_ALIGN_RIGHT);
+    // 32px 连接时长（全页唯一锚点）。右侧两行说明：上行解释单位，
+    // 下行给断连次数 —— 一行塞不下两者，两行各 20px 正好与大数字等高。
+    s_ui.ab_dur = mk_big(link, "--:--", WD_SUCCESS, 11, 52, 124);
+    s_ui.ab_dur_note = mk_text_at(link, "", WD_TEXT_DIM, 136, 56, 94,
+                                  LV_TEXT_ALIGN_RIGHT);
+    s_ui.ab_disconn = mk_text_at(link, "", WD_TEXT_DIM, 136, 76, 94,
+                                 LV_TEXT_ALIGN_RIGHT);
+
+    // 收发行 + 右侧省电档（省电档从状态行挪到这里，状态行才能给设备名让位）。
+    mk_text(link, "收发", WD_TEXT_DIM, 9, 98, 40);
+    s_ui.ab_frames = mk_text(link, "", WD_TEXT, 49, 98, 118);
+    s_ui.ab_itvl = mk_text_at(link, "", WD_TEXT_DIM, 170, 98, 56,
+                              LV_TEXT_ALIGN_RIGHT);
+
+    // 链路行：连接间隔 · MTU。y=120..140，卡高 146 → 留 6px 不裁字。
+    // （v1 这里写 y=132，132+20=152 > 146，被卡内裁剪切掉了半行，
+    //   实机抓屏时「间隔 50ms · MTU 256」只露出上半截。）
+    mk_text(link, "链路", WD_TEXT_DIM, 9, 120, 40);
+    s_ui.ab_gw = mk_text(link, "", WD_TEXT, 49, 120, 176);
+
+    // 固件/网关卡：4,190,232,96 → 190..286（页脚 294，留 8px 不撞）。
+    // 卡内三行：标题行 y=6、分隔线 y=26、两行数据 y=30 / y=52。
+    // 96 高、两行数据到 72，卡底留 24 —— 比塞三行数据更稳（三行会顶到 92）。
+    lv_obj_t *fw = mk_card(scr, 4, 190, 232, 96);
+    mk_text(fw, "固件", WD_TEXT, 9, 6, 60);
+    // 版本 "1.3.0-passport" 约 112px；左侧「固件」占到 x=69，从 70 起给
+    // 154px，右边界 224 < 卡宽 232。
+    s_ui.ab_ver = mk_text_at(fw, WB_FW_VERSION, WD_PRIMARY, 70, 6, 154,
+                             LV_TEXT_ALIGN_RIGHT);
     mk_rect(fw, 9, 26, 216, 1, WD_BORDER);
 
-    static const char *const k_fw[3] = {"协议", "能力", "下行"};
-    lv_obj_t *fv[3];
-    for (int i = 0; i < 3; i++) {
-        const int y = 30 + i * 24;                       // 206 / 230 / 254
-        mk_text(fw, k_fw[i], WD_TEXT_DIM, 9, y, 54);
-        fv[i] = mk_text(fw, "", WD_TEXT_DIM, 63, y, 158);
-    }
-    lv_label_set_text(fv[0], "2");
-    lv_label_set_text(fv[1], "审批 / 提问");
-    s_ui.ab_frames = fv[2];
+    mk_text(fw, "协议", WD_TEXT_DIM, 9, 32, 40);
+    s_ui.ab_proto = mk_text(fw, "", WD_TEXT_DIM, 49, 32, 172);
+
+    // 网关行可用宽度 172px ≈ 11 个汉字：v1 的「端口 9 · 会话 1 · 密钥…」会截断。
+    // 拆成「端口/会话」与「密钥」两段，用 · 分隔后仍超宽，所以只保留
+    // 决策相关的一句（密钥就绪 / 无密钥 + 端口数），活会话挪到协议行尾部。
+    mk_text(fw, "网关", WD_TEXT_DIM, 9, 54, 40);
+    s_ui.ab_ports = mk_text(fw, "", WD_TEXT_DIM, 49, 54, 172);
 
     mk_footer(WB_VIEW_ABOUT, "长按OK", " 首页 · ", "上下", " 翻页");
 }
@@ -860,14 +905,10 @@ void wb_view_set_ask_edge(int dir, int64_t until_ms)
     s_ask_edge_until_ms = s_ask_edge_dir ? until_ms : 0;
 }
 
-void wb_view_set_activity(int frames, const char *last_event, bool low_power)
-{
-    s_frames = frames;
-    s_low_power = low_power;
-    if (last_event) {
-        snprintf(s_last_event, sizeof(s_last_event), "%s", last_event);
-    }
-}
+// 注：原 wb_view_set_activity(frames, last_event, low_power) 已删除。
+// 它唯一的调用点是 wb_ui_init() 里写死的一次 (0,"—",false)，于是屏幕上
+// 「0 帧 / 正常档 / 最近事件 无」永远不变 —— 三个装饰位。现在收帧数、省电档
+// 从 wb_link_stats 每帧取真值，「最近事件」由 refresh_status 按真实状态推导。
 
 wb_view_page_t wb_view_current_page(const wb_state_t *st)
 {
@@ -963,7 +1004,20 @@ static void refresh_status(const wb_state_t *st, int64_t now_ms)
     }
     set_text(s_ui.st_clock, buf);
 
-    snprintf(buf, sizeof(buf), "最近事件 %s", s_last_event);
+    // 「最近事件」原先取 s_last_event，而它只被 init 里写死成 "—"，
+    // 屏上于是恒为「最近事件 无」——又一个装饰位。主机目前没有事件流帧，
+    // 所以这里不再假装有事件，改为按真实状态推导当前处于什么事：
+    //   待审批 > 提问 > 链路断开 > 链路正常（附收帧数）。
+    // 顺序与 wb_view_current_page() 的强制页优先级一致，读起来对得上。
+    if (st->appr.active) {
+        snprintf(buf, sizeof(buf), "待审批 #%d", st->appr.id);
+    } else if (st->ask.active) {
+        snprintf(buf, sizeof(buf), "提问 %d 选项 · 待作答", st->ask.n_opts);
+    } else if (!(st->linked && !st->offline)) {
+        snprintf(buf, sizeof(buf), "链路断开 · 等待主机");
+    } else {
+        snprintf(buf, sizeof(buf), "链路正常 · 已收 %u 帧", (unsigned)st->link.rx_frames);
+    }
     set_roll(s_ui.st_event, buf);
 }
 
@@ -1121,23 +1175,116 @@ static void refresh_usage(const wb_state_t *st)
     }
 }
 
-static void refresh_about(const wb_state_t *st)
+// 04 关于 / 链路 —— 全部真实数据，无一处写死。
+//
+// 数据分两层，绝不允许混：
+//   链路卡  ← st->link（wb_link_stats_t，设备侧 GAP 回调 + 收发计数自采）
+//   固件卡  ← WB_FW_VERSION / WB_PROTO_VERSION / WB_CAPS（编译期常量）
+//              + st->has_host 等 host 帧字段（主机下发，可能整组缺失）
+// 以前两层都是写死的：服务/特征拿 16 位 UUID 前缀冒充，"0 帧" 恒不变，
+// 「能力 审批 / 提问」也不反映真实 caps。现在一个都不写死。
+static void refresh_about(const wb_state_t *st, int64_t now_ms)
 {
-    char buf[64];
-    const bool linked = st->linked && !st->offline;
-    const char *txt = linked ? "已连接" : (st->linked ? "离线" : "广播中");
-    const uint32_t col = linked ? WD_SUCCESS : (st->linked ? WD_DANGER : WD_TEXT_DIM);
+    char buf[96];
+    const wb_link_stats_t *lk = &st->link;
+
+    // ---- 链路卡：连接态取设备侧真值 ----
+    // 业务层那份 connected 要经过收帧队列 + 1s tick，断连瞬间必然滞后；
+    // BLE 回调直接写的 lk->connected 才是物理真相。
+    const bool conn = lk->connected;
+    const char *txt = conn ? "已连接" : "广播中";
+    const uint32_t col = conn ? WD_SUCCESS : WD_TEXT_DIM;
 
     badge_set(&s_ui.ab_badge, txt, col);
-    set_text(s_ui.ab_state, txt);
-    lv_obj_set_style_text_color(s_ui.ab_state, lv_color_hex(col), 0);
+    lv_obj_set_style_bg_color(s_ui.ab_rail, lv_color_hex(col), 0);
 
-    set_text(s_ui.ab_power, s_low_power ? "低功耗档" : "正常");
-    lv_obj_set_style_text_color(s_ui.ab_power,
-                                lv_color_hex(s_low_power ? WD_PRIMARY : WD_TEXT), 0);
+    // 状态行右侧空出来了：设备名占满整行（"Workbuddy BOX" 不截断）。
 
-    snprintf(buf, sizeof(buf), "%d 帧", s_frames);
+    // ---- 32px 锚点：本段连接时长 ----
+    // 断连时直接 "--:--"，显示的是「这一段连接」而不是累计在线：
+    // 累计值在断开重连后仍会增长，会让人误以为链路一直很稳。
+    long long sec = -1;
+    if (conn && lk->conn_since_ms > 0) {
+        const int64_t elapsed = now_ms - lk->conn_since_ms;
+        sec = elapsed > 0 ? (long long)(elapsed / 1000) : 0;
+    }
+    const int shape = wb_link_fmt_clock(buf, sizeof(buf), sec);
+    set_text(s_ui.ab_dur, buf);
+    lv_obj_set_style_text_color(s_ui.ab_dur, lv_color_hex(col), 0);
+    // 单位说明：大数字本身只有 "42:17"，不说清是分:秒还是时:分就会歧义。
+    // shape<0 时写「未连接」，此时大数字是 "--:--"。
+    set_text(s_ui.ab_dur_note, shape < 0 ? "未连接"
+                             : shape == 0 ? "分:秒"
+                                          : "时:分");
+
+    // ---- 大数字右下一行：断连次数 · 最近原因 ----
+    // 断连 0 次写「无断连」而不是「0 次 无」——后者读起来像"0 次也是问题"。
+    {
+        char why[16];
+        wb_link_fmt_reason(why, sizeof(why), lk->last_reason);
+        if (lk->disconnects == 0) snprintf(buf, sizeof(buf), "无断连");
+        else snprintf(buf, sizeof(buf), "断 %u 次 · %s", (unsigned)lk->disconnects, why);
+        set_text(s_ui.ab_disconn, buf);
+        lv_obj_set_style_text_color(
+            s_ui.ab_disconn,
+            lv_color_hex(lk->disconnects > 0 ? WD_PRIMARY : WD_TEXT_DIM), 0);
+    }
+
+    // ---- 收发行 + 右侧省电档 ----
+    // "收 128 帧 · 发 12 帧" 比 "128 帧" 信息量大得多：能立刻看出是「主机不发」
+    // 还是「设备不收」，这是排查重连问题的第一个分叉点。
+    // 可用宽度只有 118px（右侧 56px 给省电档），所以用「收9/发7」这种紧凑写法：
+    // 帧数上到三位数也只要 11 个字符 ≈ 88px。
+    snprintf(buf, sizeof(buf), "收%u / 发%u", (unsigned)lk->rx_frames,
+             (unsigned)lk->tx_frames);
     set_text(s_ui.ab_frames, buf);
+
+    // 省电档真值（wb_power → wb_link_set_power_mode 写入）。放在右侧，
+    // 与「链路参数」同一列，读起来是一组「运行参数」。
+    set_text(s_ui.ab_itvl, lk->low_power ? "省电档" : "正常档");
+    lv_obj_set_style_text_color(s_ui.ab_itvl,
+                                lv_color_hex(lk->low_power ? WD_PRIMARY : WD_TEXT_DIM), 0);
+
+    // ---- 链路行：连接间隔 · MTU ----
+    // 间隔折算成毫秒（BLE 原始单位 1.25ms 对用户没有意义）。
+    // 未连接时不显示上一次的参数，避免把「断连前」的参数读成「现在」。
+    if (conn && lk->conn_itvl > 0) {
+        snprintf(buf, sizeof(buf), "%d ms · MTU %u", wb_link_itvl_ms(lk->conn_itvl),
+                 (unsigned)lk->mtu);
+    } else {
+        snprintf(buf, sizeof(buf), "%s", "未连接 · 等待主机");
+    }
+    set_text(s_ui.ab_gw, buf);
+
+    // ---- 固件卡 ----
+    // 协议行：版本 + 活会话数（网关侧真实在线会话，host 帧）。用紧凑写法
+    // 「v2 · 会话1」≈ 9 字符，232px 卡内 172px 宽绰绰有余。
+    // 以前这行写死「能力 审批 / 提问」，既不反映真实 caps 也不显示会话。
+    if (st->has_host) {
+        snprintf(buf, sizeof(buf), "v%d · 会话%d", WB_PROTO_VERSION, st->gw_sessions);
+    } else {
+        snprintf(buf, sizeof(buf), "v%d · 未接入", WB_PROTO_VERSION);
+    }
+    set_text(s_ui.ab_proto, buf);
+    lv_obj_set_style_text_color(
+        s_ui.ab_proto,
+        lv_color_hex(st->has_host ? WD_TEXT : WD_TEXT_DIM), 0);
+
+    // 网关行：密钥状态 + 端口数。has_host=false 说明主机从没发过 host 帧
+    // （老版本或还没连过），写「主机未下发」而不是把 0 当成「网关没起来」。
+    // 172px ≈ 11 个汉字：v1 的「端口 9 · 会话 1 · 密钥就绪」会截成「密...」，
+    // 所以只保留真正的判断依据（密钥是否就绪）＋端口数作佐证。
+    if (!st->has_host) {
+        set_text(s_ui.ab_ports, "主机未下发");
+        lv_obj_set_style_text_color(s_ui.ab_ports, lv_color_hex(WD_TEXT_DIM), 0);
+    } else {
+        snprintf(buf, sizeof(buf), "%s · 端口%d",
+                 st->gw_secret ? "密钥就绪" : "无密钥", st->gw_ports);
+        set_text(s_ui.ab_ports, buf);
+        // 密钥可读 = 本地网关在线（wb_gateway_state 的 online 口径）。
+        lv_obj_set_style_text_color(
+            s_ui.ab_ports, lv_color_hex(st->gw_secret ? WD_SUCCESS : WD_DANGER), 0);
+    }
 }
 
 // 05 主机资源：CPU 主卡（32px 锚点）+ 内存 / 磁盘从属卡。
@@ -1392,7 +1539,7 @@ static void refresh_standby(const wb_state_t *st, int64_t now_ms)
     badge_set(&s_ui.sb_online, linked ? "在线" : "离线",
               linked ? WD_SUCCESS : WD_DANGER);
 
-    set_text(s_ui.sb_power, s_low_power ? "省电模式 · 亮度已降" : "低功耗待机");
+    set_text(s_ui.sb_power, st->link.low_power ? "省电模式 · 亮度已降" : "低功耗待机");
 }
 
 void wb_view_refresh(const wb_state_t *st, int64_t now_ms)
@@ -1407,7 +1554,7 @@ void wb_view_refresh(const wb_state_t *st, int64_t now_ms)
     case WB_VIEW_STATUS:   refresh_status(st, now_ms); break;
     case WB_VIEW_RACK:     refresh_rack(st); break;
     case WB_VIEW_USAGE:    refresh_usage(st); break;
-    case WB_VIEW_ABOUT:    refresh_about(st); break;
+    case WB_VIEW_ABOUT:    refresh_about(st, now_ms); break;
     case WB_VIEW_HOSTRES:  refresh_hostres(st); break;
     case WB_VIEW_APPROVAL: refresh_approval(st); break;
     case WB_VIEW_ASK:      refresh_ask(st, now_ms); break;

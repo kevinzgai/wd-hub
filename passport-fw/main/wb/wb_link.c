@@ -11,6 +11,8 @@
 
 #include <string.h>
 
+#include "wb_link_stats.h"
+
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -53,6 +55,18 @@ static bool s_low_power;
 static int s_active_retry_left;
 static int64_t s_active_retry_at_us;
 static SemaphoreHandle_t s_tx_lock;
+
+// ---- 链路统计：只增计数器，不改任何既有行为 ----
+// 全部是「显示用」计数，读写跨任务（BLE 任务写、LVGL 任务读），
+// 用 volatile 保证每次都真读内存，不因优化把值缓存在寄存器里。
+// 计数器的自增不需要原子性：少加一次只是屏上少 1 帧，不影响判定。
+static volatile uint32_t s_rx_frames;     // 完整帧（不是 MTU 切片）
+static volatile uint32_t s_tx_frames;     // 整帧成功送出
+static volatile uint32_t s_disconnects;
+static volatile int s_last_reason = -1;   // -1 = 本次上电还没断过
+static int64_t s_conn_since_ms;           // 连接起点，0 = 未连接
+static uint16_t s_conn_itvl;              // 1.25ms 单位，CONN_UPDATE 时刷新
+static uint16_t s_mtu = 23;               // 默认 ATT MTU
 
 // 连接参数单位：interval 1.25ms，supervision timeout 10ms。
 // 正常档 30–50ms；待机档 200–250ms（latency 固定 0，不拖慢主机 2s 状态帧）。
@@ -153,7 +167,10 @@ static void rx_consume(void)
             }
             return;
         }
-        if (frame_len > 0 && s_on_frame) s_on_frame(s_rx, frame_len);
+        if (frame_len > 0 && s_on_frame) {
+            s_rx_frames++;
+            s_on_frame(s_rx, frame_len);
+        }
         size_t consumed = frame_len;
         // 帧尾的 '\n' 只在确实位于缓冲区内时才算，避免越界读到脏字节。
         if (consumed < s_rx_len && s_rx[consumed] == '\n') consumed++;
@@ -221,9 +238,12 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0) {
             s_conn = event->connect.conn_handle;
             s_rx_len = 0;
+            s_conn_since_ms = esp_timer_get_time() / 1000LL;
+            s_conn_itvl = 0;
             ESP_LOGI(TAG, "主机已连接 conn=%u", (unsigned)s_conn);
             struct ble_gap_conn_desc desc;
             if (ble_gap_conn_find(s_conn, &desc) == 0) {
+                s_conn_itvl = desc.conn_itvl;
                 ESP_LOGI(TAG, "初始连接参数: itvl=%u latency=%u timeout=%u",
                          (unsigned)desc.conn_itvl, (unsigned)desc.conn_latency,
                          (unsigned)desc.supervision_timeout);
@@ -232,6 +252,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         } else {
             ESP_LOGW(TAG, "连接失败 status=%d，重新广播", event->connect.status);
             s_conn = WB_NO_CONN;
+            s_conn_since_ms = 0;
             advertise();
         }
         return 0;
@@ -240,6 +261,11 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         ESP_LOGW(TAG, "断开 reason=%d(0x%x)，立即重启广播", event->disconnect.reason,
                  event->disconnect.reason);
         s_conn = WB_NO_CONN;
+        s_conn_since_ms = 0;
+        // 统计口径：只数「真的建立过又断了」的连接，连接失败（status!=0）
+        // 不算一次断开 —— 那会让「断连次数」在扫不到主机时无限上涨。
+        s_disconnects++;
+        s_last_reason = (int)event->disconnect.reason;
         s_conn_changed = true;
         s_rx_len = 0;
         advertise();
@@ -252,11 +278,13 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
     case BLE_GAP_EVENT_MTU:
         ESP_LOGI(TAG, "MTU 协商为 %u", event->mtu.value);
+        s_mtu = event->mtu.value;
         return 0;
 
     case BLE_GAP_EVENT_CONN_UPDATE: {
         struct ble_gap_conn_desc desc;
         if (ble_gap_conn_find(event->conn_update.conn_handle, &desc) == 0) {
+            s_conn_itvl = desc.conn_itvl;
             ESP_LOGI(TAG, "连接参数生效: itvl=%u(约%ums) latency=%u timeout=%u",
                      (unsigned)desc.conn_itvl, (unsigned)(desc.conn_itvl * 5 / 4),
                      (unsigned)desc.conn_latency, (unsigned)desc.supervision_timeout);
@@ -429,5 +457,25 @@ bool wb_link_send(const char *data, size_t len)
     }
 
     if (s_tx_lock) xSemaphoreGive(s_tx_lock);
+    // 统计口径：按整帧计，不按 MTU 切片计 —— 屏上写「已发 N 帧」时，
+    // 用户理解的是「发了多少条消息」，不是「多少块 20B」。
+    if (ok) s_tx_frames++;
     return ok;
+}
+
+// 一次性取走整组链路统计。读侧是 LVGL 任务，写侧是 BLE 任务；
+// 这里不取锁（s_tx_lock 会等 200ms，UI 每秒都可能读）——各字段都是
+// 独立的标量计数，读到「前一瞬的旧值」完全可接受，不会出现撕裂的组合。
+void wb_link_get_stats(wb_link_stats_t *out)
+{
+    if (!out) return;
+    out->connected = (s_conn != WB_NO_CONN);
+    out->conn_since_ms = s_conn_since_ms;
+    out->rx_frames = s_rx_frames;
+    out->tx_frames = s_tx_frames;
+    out->disconnects = s_disconnects;
+    out->last_reason = s_last_reason;
+    out->conn_itvl = s_conn_itvl;
+    out->mtu = s_mtu;
+    out->low_power = s_low_power;
 }
