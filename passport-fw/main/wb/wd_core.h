@@ -122,7 +122,9 @@ typedef struct {
 
     int beep_vol;
     uint8_t skin;
-    int soc;
+    int soc;              // 电量百分比，<0 = 读表失败（不猜）
+    int soc_mv;           // 电池电压 mV，<0 = 读表失败。低电页用它解释
+                          // 「为什么 3% 却还能开」这类电量计滞后问题。
 
     int64_t boot_ms;
     int64_t last_beep_ms[WB_BEEP_KIND_COUNT];

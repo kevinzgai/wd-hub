@@ -19,6 +19,7 @@
 #include "bsp_i2c.h"
 #include "ui/ui_capture.h"
 #include "apps/pomodoro/app_pomodoro.h"
+#include "wb/wb_ui.h"
 #include "esp_log.h"
 #include "passport_muse.h"
 #include "esp_timer.h"
@@ -308,6 +309,19 @@ static void handle_serial_command(int c) {
         if (app_registry_get_active() == APP_ID_MUSE) passport_muse_diagnostic_ble_cycle();
     } else if (c == '?') {
         passport_muse_log_diagnostics();
+    } else if (c == 'w') {
+        // 调试用:向看板注入一个假电量（10%），用来在实机上验证低电覆盖页的
+        // 版式与键位。真机电量充足时无法自然触发这条分支，而覆盖页是
+        // 「会盖住任何页面」的代码，不实机看一眼不能算验证过。
+        // 注入只作用于 UI 状态，不改电量计读数、不影响底座关机保护
+        // （power_battery_tick 仍读 bsp_battery_soc()）。
+        //
+        // 只置状态、不派发按键：v1 版这里顺手 dispatch 了一次 BTN_EVT_CLICK，
+        // 而低电页的短 OK = 关闭提醒 —— 于是注入的同时就把刚弹出来的页面
+        // 关掉了，抓屏只能抓到关掉之后的总览页（实测踩到）。
+        wb_ui_force_battery_debug(10);
+        wb_ui_set_battery_mv(3600);
+        ESP_LOGI(TAG, "[SerialCmd] inject battery 10%% / 3600mV for lowbatt page");
     } else if (c >= '1' && c <= '9') {
         int target_id = c - '0';
         ESP_LOGI(TAG, "[SerialCmd] Direct switch to App ID %d", target_id);

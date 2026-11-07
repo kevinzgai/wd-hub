@@ -65,6 +65,7 @@ static volatile uint32_t s_tx_frames;     // 整帧成功送出
 static volatile uint32_t s_disconnects;
 static volatile int s_last_reason = -1;   // -1 = 本次上电还没断过
 static int64_t s_conn_since_ms;           // 连接起点，0 = 未连接
+static volatile int64_t s_last_rx_ms;     // 最后一帧到手时刻，0 = 还没收到过
 static uint16_t s_conn_itvl;              // 1.25ms 单位，CONN_UPDATE 时刷新
 static uint16_t s_mtu = 23;               // 默认 ATT MTU
 
@@ -169,6 +170,10 @@ static void rx_consume(void)
         }
         if (frame_len > 0 && s_on_frame) {
             s_rx_frames++;
+            // 离线页要靠这个时间说「你现在看到的是 N 秒前的数据」。
+            // 记接收时刻而不是业务层解析完成时刻：这一帧到手就说明链路是通的，
+            // 解析耗时与「链路新鲜度」无关。
+            s_last_rx_ms = esp_timer_get_time() / 1000LL;
             s_on_frame(s_rx, frame_len);
         }
         size_t consumed = frame_len;
@@ -471,6 +476,7 @@ void wb_link_get_stats(wb_link_stats_t *out)
     if (!out) return;
     out->connected = (s_conn != WB_NO_CONN);
     out->conn_since_ms = s_conn_since_ms;
+    out->last_rx_ms = s_last_rx_ms;
     out->rx_frames = s_rx_frames;
     out->tx_frames = s_tx_frames;
     out->disconnects = s_disconnects;

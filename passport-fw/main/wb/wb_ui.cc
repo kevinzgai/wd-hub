@@ -24,6 +24,7 @@
 
 #include "wb_view.h"
 #include "wb_link.h"
+#include "wb_page_priority.h"
 #include "wd_core.h"
 
 namespace {
@@ -31,6 +32,11 @@ namespace {
 bool s_inited;
 wb_state_t s_st;
 int s_soc = -1;
+int s_soc_mv = -1;
+// 串口 'w' 注入的假电量与其冻结标志（见 wb_ui_set_battery 的注释）。
+// 仅供实机验证低电覆盖页版式，不参与任何量产逻辑。
+bool s_soc_locked;
+int s_soc_forced = -1;
 int64_t s_boot_ms;
 
 // 提问页交互软状态。
@@ -125,6 +131,7 @@ void adapt(const wb_view_t *v, bool standby)
     s_st.beep_vol = v->beep_vol;
     s_st.skin = 1;
     s_st.soc = s_soc;
+    s_st.soc_mv = s_soc_mv;
     s_st.boot_ms = s_boot_ms;
 
     // 第 5 页「主机资源」：has_res 与 res 一起搬，缺数据时视觉层自己写空态。
@@ -146,6 +153,11 @@ void adapt(const wb_view_t *v, bool standby)
     // 顺便让 s_st.link.connected 覆盖 adapt 上面按 v->connected 推出来的值
     // ——B 端与业务层同一份真相，避免两处各自判断。
     wb_link_get_stats(&s_st.link);
+
+    // last_rx_ms 这个字段在 wd_core.h 里挂了很多轮，但全库只有声明、没有
+    // 赋值 —— 离线覆盖页要说「你看到的是几秒前的数据」，缺它就只能编一个数。
+    // 现在取链路层记录的最后一帧到手时刻（与 rx_frames 同一处累加）。
+    s_st.last_rx_ms = s_st.link.last_rx_ms;
 }
 
 // 「已提交」态渲染完这一帧之后才上行：业务层 confirm 会立刻把页切回总览，
@@ -199,7 +211,46 @@ void wb_ui_deinit(void)
 
 void wb_ui_set_battery(int soc)
 {
+    // 调试注入保护：serial 'w' 注入的假电量，目的是实机看一眼低电覆盖页的
+    // 版式。但 app_wb.cc 的 battery_maybe_report 每 30s 会用真实电量覆盖它，
+    // 抓屏往往正好跨过这个周期，于是页面在抓屏前就消失了（实测两次踩到）。
+    // 这里在注入后冻结覆盖，直到收到 soc > 18% 的真实读数（充电/拔掉注入）
+    // 或重新烧录。只在调试路径上生效，量产逻辑不受影响。
+    if (s_soc_locked && soc != s_soc_forced) {
+        if (soc > WB_LOWBATT_OFF) {
+            s_soc_locked = false;   // 真实电量回升，解除冻结
+        } else {
+            return;                 // 仍处于注入观察窗，忽略外部覆盖
+        }
+    }
     s_soc = soc;
+    // 低电覆盖页的复位逻辑：充到 >18% 才允许下次再弹。
+    // 放在这里而不是 refresh 里，是因为这个函数本来就只在电量读表时被调，
+    // 天然是「电量变化」这个事件的入口，不会因为重绘而反复执行。
+    if (soc < 0) return;
+    if (soc > WB_LOWBATT_OFF) {
+        wb_view_set_lowbatt_dismissed(false);
+    } else if (soc > WB_LOWBATT_ON) {
+        // 15..18 的回差带：什么也不做，保持当前 dismiss 状态，
+        // 避免在阈值附近反复弹/收。
+    }
+}
+
+void wb_ui_set_battery_mv(int mv)
+{
+    s_soc_mv = mv;
+}
+
+// 调试专用：注入一个假电量并冻结，供串口 'w' 实机验证低电覆盖页。
+// 冻结后 app_wb 的周期读表不会再覆盖它（否则页面会在抓屏前消失）。
+// 收到 soc > 18% 的真实读数、或重新烧录即自动解除。
+void wb_ui_force_battery_debug(int soc)
+{
+    s_soc_forced = soc;
+    s_soc_locked = true;
+    s_soc = soc;
+    // 未实现 closure 的复位逻辑由 wb_view 自身维护；这里显式打开覆盖页。
+    wb_view_set_lowbatt_dismissed(false);
 }
 
 void wb_ui_sync(const wb_view_t *view, bool standby)
@@ -218,6 +269,36 @@ bool wb_ui_key(wb_ui_key_t key, bool long_press)
 
     // 待机页：任意键只唤醒（PRESS 阶段 app_wb.cc 已续期），不产生业务动作。
     if (page == WB_VIEW_STANDBY) return true;
+
+    // 断连覆盖页：没有任何键能关掉它 —— 这一页的全部意义就是拦住「把缓存
+    // 当实时看」的误读，允许关掉等于把这个保证拿掉。唯一出口是主机自己回来
+    // （wb_link 一直在广播，重连由主机发起）。
+    //   * 短 OK / 短 UP / 短 DOWN 一律吞掉：否则短 OK 会落到 wb_biz_confirm，
+    //     有待办时会**发帧审批**，而此刻链路是断的，那一帧必然失败 ——
+    //     用户以为批准了，实际什么都没发生。这是本页最需要防的误操作。
+    //   * 长 OK 放行 return false：留给底座「2s 提示 / 5s 关机」，这是设备级
+    //     安全手势，覆盖页不该拦。
+    if (page == WB_VIEW_OFFLINE) {
+        if (long_press && key == WB_UI_KEY_OK) return false;
+        if (long_press && key == WB_UI_KEY_DOWN) return true;  // 不当作「返回」
+        return true;
+    }
+
+    // 低电覆盖页：低电只是提醒、不阻断上行，所以**可以**关闭。
+    //   * 短 OK = 关闭提醒（写 dismissed，充到 >18% 自动复位）。
+    //   * 其它键一律吞掉：文档 §C4 明确「覆盖页是通知，不该在下面偷偷翻页」，
+    //     否则用户以为在翻看状态页，实际只是把通知关了一半。
+    //   * 长 OK 放行给底座（关机手势）。
+    if (page == WB_VIEW_LOWBATT) {
+        if (long_press && key == WB_UI_KEY_OK) return false;
+        if (!long_press && key == WB_UI_KEY_OK) {
+            // dismissed 状态存在视觉层（wb_view.c），因为它参与选页；
+            // 这里只做一次写入，真正的复位在 wb_ui_set_battery（充到 >18%）。
+            wb_view_set_lowbatt_dismissed(true);
+            return true;
+        }
+        return true;
+    }
 
     // 审批页：OK 允许 / 长 DOWN 拒绝，交给业务层原有的 confirm / back。
     if (page == WB_VIEW_APPROVAL) return false;
@@ -318,7 +399,13 @@ bool wb_ui_tick(void)
 
     // 待机页的时钟靠 now_ms 推进，需要每秒触发一次 sync；其余页由业务层
     // 的 dirty 标志驱动，不额外重绘。
-    bool need = wb_view_current_page(&s_st) == WB_VIEW_STANDBY;
+    const wb_view_page_t page = wb_view_current_page(&s_st);
+    bool need = (page == WB_VIEW_STANDBY);
+
+    // 断连覆盖页的 32px 锚点是「已经断了多久」，同样必须每秒推进 ——
+    // 只在状态变化时重绘会让它停在某一秒不动，那个数字就变成装饰了。
+    // 低电页没有走时数字（只有 soc 与电压），不跟着每秒重绘。
+    if (page == WB_VIEW_OFFLINE) need = true;
 
     // 「已提交」待上行：连续两帧，保证这一态至少被渲染一次（见 ask_after_sync）。
     if (s_ask.commit_id > 0) need = true;

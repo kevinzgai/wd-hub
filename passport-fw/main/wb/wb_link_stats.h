@@ -23,6 +23,7 @@ extern "C" {
 typedef struct {
     bool connected;        // 当前是否已连接
     int64_t conn_since_ms; // 本段连接起点（毫秒，esp_timer 单调钟），0 = 未连接
+    int64_t last_rx_ms;    // 最后一次收到完整帧的时刻，0 = 本次上电还没收到过
     uint32_t rx_frames;    // 累计收到的完整帧数（本次上电以来）
     uint32_t tx_frames;    // 累计成功送出的帧数（按整帧计，不按 MTU 切片计）
     uint32_t disconnects;  // 累计断开次数（只数「连上后断掉」，连接失败不计）
@@ -61,10 +62,20 @@ static inline int wb_link_fmt_clock(char *out, size_t cap, long long sec)
     return 1;
 }
 
-// 断开原因 → 中文短语。只翻最常踩的四个，其余保留十六进制：
-// 屏上一行只有约 11 个汉字宽，穷举规范里 30 多个 reason 没有意义，
-// 未知码照样打出来（配串口日志能查到），不编造。
-// reason < 0 表示本次上电还没断过。
+// 断开原因 → 中文短语。
+//
+// 关键事实（实机抓屏才发现，文档里查不到）：`BLE_GAP_EVENT_DISCONNECT` 的
+// `reason` 字段在 NimBLE 里**不是** BLE 规范那套 0x08/0x13/0x16，而是
+// NimBLE 的错误码空间：
+//     0x200 起 = HCI 错误（BLE_HS_ERR_HCI_BASE），真实码 = 值 - 0x200
+//     0x100 起 = ATT 错误（BLE_HS_ERR_ATT_BASE），真实码 = 值 - 0x100
+// 实测主机端主动 disconnect 时设备收到是 **0x213**，即
+// `BLE_HS_HCI_ERR(0x13)` = 「远端用户主动断开」。上一版只翻 0x08/0x13/0x16
+// 四个裸码，在真机上一条都命中不了 —— 屏上于是打印出「原因 0x213」这种
+// 谁都看不懂的十六进制。
+//
+// 所以这里先剥壳再翻：0x2xx 去掉 0x200 后走 HCI 码表，0x1xx 去掉 0x100 后
+// 走 ATT 码表（只翻最常见的两个），其余原样保留十六进制（不编造）。
 static inline void wb_link_fmt_reason(char *out, size_t cap, int reason)
 {
     if (!out || cap == 0) return;
@@ -72,16 +83,43 @@ static inline void wb_link_fmt_reason(char *out, size_t cap, int reason)
         snprintf(out, cap, "无");
         return;
     }
-    const char *why = NULL;
-    switch (reason) {
-    case 0x08: why = "连接超时"; break;
-    case 0x13: why = "对端断开"; break;
-    case 0x16: why = "本机断开"; break;
-    case 0x3e: why = "建立失败"; break;
-    default: break;
+
+    // 剥 NimBLE 的错误域前缀，拿到「BLE 规范码」。
+    int code = reason;
+    int domain = 0;          // 0 = 裸码 / 未知域，1 = HCI，2 = ATT
+    if (reason >= 0x200 && reason < 0x300) {
+        code = reason - 0x200;
+        domain = 1;
+    } else if (reason >= 0x100 && reason < 0x200) {
+        code = reason - 0x100;
+        domain = 2;
     }
+
+    const char *why = NULL;
+    if (domain == 1 || domain == 0) {
+        // HCI 断开原因（蓝牙核心规范 Vol 4 Part E 7.1.5）。只翻设备调试最常
+        // 撞到的几个：屏上一行只有约 11 个汉字宽，穷举 40+ 个没有意义。
+        // 一律压到 4 字以内：断连页的右列只有 96px（6 个汉字），
+        // 带「主机主动断开」这种 6 字短语再加任何前缀都会截断。
+        switch (code) {
+        case 0x08: why = "连接超时"; break;
+        case 0x13: why = "主机断开"; break;
+        case 0x16: why = "本机断开"; break;
+        case 0x3e: why = "建立失败"; break;
+        case 0x22: why = "链路差"; break;
+        default: break;
+        }
+    }
+    if (domain == 2) {
+        switch (code) {
+        case 0x08: why = "数据超时"; break;
+        case 0x05: why = "认证不足"; break;
+        default: break;
+        }
+    }
+
     if (why) snprintf(out, cap, "%s", why);
-    else snprintf(out, cap, "0x%02X", (unsigned)reason);
+    else snprintf(out, cap, "0x%03X", (unsigned)reason);   // 三位，0x213 才不被截断
 }
 
 #ifdef __cplusplus

@@ -86,6 +86,7 @@ void battery_maybe_report(bool connected)
     if (soc < 0) return;
     // 低电覆盖页、低电提示音与协议上报共用同一次读表；未连接时也喂给 UI。
     wb_ui_set_battery(soc);
+    wb_ui_set_battery_mv(bsp_battery_mv());   // 低电页要用电压解释读数滞后
     wb_audio_low_battery(soc);
     request_redraw();
     if (connected && wb_biz_send_battery(soc)) ESP_LOGI(TAG, "上报电量 %d%%", soc);
@@ -152,6 +153,7 @@ void wb_start()
     const int soc = bsp_battery_soc();
     if (soc >= 0) {
         wb_ui_set_battery(soc);
+        wb_ui_set_battery_mv(bsp_battery_mv());
         wb_audio_low_battery(soc);
     }
     wb_view_t view;

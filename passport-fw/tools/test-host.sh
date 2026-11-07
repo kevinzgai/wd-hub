@@ -91,6 +91,11 @@ python3 tests/test_avatar_upload.py
 "${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
     -Imain/wb tests/test_wb_link_stats.cc -o "$test_dir/wb-link-stats"
 "$test_dir/wb-link-stats"
+# 覆盖页优先级链：待机 > 离线 > 审批/提问 > 低电 > 手动页。
+# 这是唯一会「盖住任何页面」的逻辑，纯 inline 头文件，穷举组合断言。
+"${CXX:-c++}" -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -g \
+    -Imain/wb tests/test_wb_page_priority.cc -o "$test_dir/wb-page-priority"
+"$test_dir/wb-page-priority"
 python3 tests/test_city_catalog.py
 python3 tests/test_home_weather.py
 python3 tests/test_home_weather_schedule.py

@@ -65,7 +65,10 @@ def write_png(path, rows, w, h):
 
 
 KEY_CODES = {"u": b"u", "d": b"d", "o": b"o", "k": b"k", "y": b"y",
-             "l": b"l", "b": b"b"}
+             "l": b"l", "b": b"b",
+             # 调试注入键（见 main.cc 的 handle_serial_command）：
+             #   w = 注入假电量 10%，用于在实机上验证低电覆盖页
+             "w": b"w"}
 
 
 def main():

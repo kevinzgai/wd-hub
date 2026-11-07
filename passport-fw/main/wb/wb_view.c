@@ -19,6 +19,7 @@
 #include "lvgl.h"
 #include "ui_pixel.h"
 #include "wd_core.h"
+#include "wb_page_priority.h"
 #include "wb_proto.h"
 #include "wb_theme.h"
 
@@ -123,6 +124,26 @@ typedef struct {
     lv_obj_t *sb_date;
     lv_obj_t *sb_power;
     wd_badge_t sb_online;
+
+    // 08 断连覆盖页 —— 3 秒判定用两张卡：上卡讲「现在为什么看到的是旧数据」，
+    // 下卡给可操作的量化信息（最后收帧时间 / 断连次数 / 原因 / 待办条数）。
+    // 故意不给 dismiss 状态：这张卡的全部意义就是拦住「把缓存当实时」的误读。
+    lv_obj_t *of_rail;        // 3px 竖条：珊瑚红（异常，不是灰色「离线」）
+    lv_obj_t *of_dur;         // 32px 锚点：已经断了多久（MM:SS）
+    lv_obj_t *of_dur_note;    // 锚点右上：单位说明
+    lv_obj_t *of_reason;      // 锚点右下：最近断开原因
+    lv_obj_t *of_cache;       // 「以下数字是断连前的缓存」（主说明，会变色）
+    lv_obj_t *of_cache2;      // 副说明：按「有/无缓存」换文案
+    lv_obj_t *of_lastrx;      // 最后一次收到帧：N 秒前 / 从没收到
+    lv_obj_t *of_todo;        // 待办：N 条 · 连上后可处理
+    lv_obj_t *of_hint;        // 恢复方式一行
+
+    // 09 低电覆盖页
+    lv_obj_t *lb_rail;        // 3px 竖条：琥珀（提醒，非高危）
+    lv_obj_t *lb_soc;         // 32px 锚点：当前电量百分比
+    lv_obj_t *lb_mv;          // 锚点右下：电压
+    lv_obj_t *lb_line1;       // 「已调暗屏幕并降低刷新率」
+    lv_obj_t *lb_fk;          // 下卡：阈值行
 } wb_view_t;
 
 static wb_view_t s_ui;
@@ -138,6 +159,11 @@ static int s_ask_commit_id;         // 已确认的题号，0 = 没有
 static int s_ask_commit_idx = -1;   // 已确认的选项下标
 static int s_ask_edge_dir;          // 0 无 / -1 撞首项 / +1 撞末项
 static int64_t s_ask_edge_until_ms; // 边界提示的到期时刻
+
+// 低电覆盖页是否被用户关掉。只有低电页有这个状态：断连覆盖页没有
+// dismiss（断连时旧数据满屏，关掉通知就等于让人把缓存当实时看）。
+// 充到 >WB_LOWBATT_OFF 时自动复位，下次再掉到阈值会重新弹。
+static bool s_lowbatt_dismissed;
 
 // ---------------------------------------------------------------------------
 // 基础控件
@@ -798,6 +824,107 @@ static void build_standby(void)
 }
 
 // ---------------------------------------------------------------------------
+// 08 断连覆盖页 / 09 低电覆盖页
+// ---------------------------------------------------------------------------
+// 两张覆盖页版面结构刻意相同（上卡讲「发生了什么」+ 32px 锚点，下卡给可操作
+// 的量化信息，一条页脚），只有语义色与文案不同。用户在两页间切换时不用重新
+// 学习版面，注意力只落在数值上。
+//
+// 版式预算（内容区 38..288，页脚 294）：
+//   上卡 4,38,232,150  → 38..188
+//   下卡 4,194,232,94  → 194..288（与页脚留 6px）
+// 卡内三行用 buddy_font_16 行高 20，卡内默认裁剪子对象，坐标必须算准。
+//
+// 宽度预算（这一页最容易踩的坑）：16px 汉字 16px/字，卡内可用 216px 只放得下
+// 13 个字；下卡值列 150px 只放得下 9 个字。所以文案一律按「能整除」写短句，
+// 不写「尽快接上充电线，避免关机」这种 12 字的句子 —— 会直接变省略号。
+//
+// 为什么断连页没有「关闭」：断连时任何页显示的都是旧帧，关掉通知等于让人
+// 把缓存当实时数据看，这正是本工程要消除的误读。低电页可以关闭（它只是
+// 提醒、不阻断上行），两页的差别由页脚文案承担 —— 断连页页脚里没有「关闭」。
+
+// 断连时长与连接时长共用「分:秒 / 时:分」两段式（wb_link_stats.h）：
+// 宽度约束一模一样（32px 字在 124px 里只放得下 5 个字符）。
+static void build_offline(void)
+{
+    lv_obj_t *scr = s_ui.scr[WB_VIEW_OFFLINE];
+    mk_header(WB_VIEW_OFFLINE, "主机已断开");
+    // 页头徽标由 refresh_offline 写（refresh_chrome 只刷 p < STANDBY 的页，
+    // 覆盖页不在它的范围内，避免被统一改成「离线」两个字）。
+
+    // ---- 上卡：32px 断开时长（全页唯一锚点）----
+    lv_obj_t *c1 = mk_card(scr, WD_CARD_X, WD_CONTENT_Y, WD_CARD_W, 150);
+    s_ui.of_rail = mk_rect(c1, 0, 0, 3, 150, WD_DANGER);
+    mk_text(c1, "蓝牙链路", WD_TEXT_DIM, 11, 6, 100);
+    mk_rect(c1, 9, 28, 216, 1, WD_BORDER);
+
+    s_ui.of_dur = mk_big(c1, "--:--", WD_DANGER, 11, 40, 124);
+    // 右侧两列从 x=132 起、宽 96 → 右边界 228。实测 v1 用 138/92 时
+    // 「原因 0x213」画到 x=229，压在了卡片右边框上（卡内右限约 224）。
+    // 「分:秒」是 3 个半角，96px 足够；长度不确定的是原因那行。
+    s_ui.of_dur_note = mk_text_at(c1, "已断开", WD_TEXT_DIM, 132, 42, 96,
+                                  LV_TEXT_ALIGN_RIGHT);
+    s_ui.of_reason = mk_text_at(c1, "", WD_TEXT_DIM, 132, 62, 96,
+                                LV_TEXT_ALIGN_RIGHT);
+
+    s_ui.of_cache = mk_text(c1, "", WD_TEXT, 11, 100, 216);
+    s_ui.of_cache2 = mk_text(c1, "", WD_TEXT_DIM, 11, 122, 216);
+
+    // ---- 下卡：可操作的量化信息 ----
+    // 标签必须短：16px 字体下 4 个汉字的标签会正好占满 64px，与值列
+    // （x=73 起）挤成「最后收帧本次上电还没收到」这种粘连（实测）。
+    // 所以标签统一压到 2 个字（32px），值列从 x=51 起、宽 172 → 右边界 223。
+    // 语义不丢： 「收帧 / 待办 / 恢复」在断连这一屏的上下文里没有歧义。
+    lv_obj_t *c2 = mk_card(scr, WD_CARD_X, 194, WD_CARD_W, 94);
+    mk_text(c2, "收帧", WD_TEXT_DIM, 11, 6, 44);
+    s_ui.of_lastrx = mk_text(c2, "", WD_TEXT, 51, 6, 172);
+
+    mk_text(c2, "待办", WD_TEXT_DIM, 11, 30, 44);
+    s_ui.of_todo = mk_text(c2, "", WD_TEXT, 51, 30, 172);
+
+    mk_text(c2, "恢复", WD_TEXT_DIM, 11, 54, 44);
+    s_ui.of_hint = mk_text(c2, "", WD_TEXT_DIM, 51, 54, 172);
+
+    // 页脚不写「关闭」：这张页没有关闭手势，写了就是骗人。
+    // 只说明怎么才能离开 —— 等主机自己回来。
+    mk_footer(WB_VIEW_OFFLINE, "重连", " 自动恢复 · ", "长按OK", " 回首页");
+}
+
+static void build_lowbatt(void)
+{
+    lv_obj_t *scr = s_ui.scr[WB_VIEW_LOWBATT];
+    mk_header(WB_VIEW_LOWBATT, "电量偏低");
+
+    lv_obj_t *c1 = mk_card(scr, WD_CARD_X, WD_CONTENT_Y, WD_CARD_W, 150);
+    s_ui.lb_rail = mk_rect(c1, 0, 0, 3, 150, WD_PRIMARY);
+    mk_text(c1, "电池", WD_TEXT_DIM, 11, 6, 100);
+    mk_rect(c1, 9, 28, 216, 1, WD_BORDER);
+
+    s_ui.lb_soc = mk_big(c1, "--%", WD_PRIMARY, 11, 40, 124);
+    mk_text_at(c1, "剩余电量", WD_TEXT_DIM, 132, 42, 96, LV_TEXT_ALIGN_RIGHT);
+    s_ui.lb_mv = mk_text_at(c1, "", WD_TEXT_DIM, 132, 62, 96,
+                            LV_TEXT_ALIGN_RIGHT);
+
+    // 这两行是静态说明（亮度与恢复方式由 wb_power 的既有行为决定），不需要句柄。
+    mk_text(c1, "已调暗屏幕并降低刷新率", WD_TEXT, 11, 100, 216);
+    mk_text(c1, "插上充电后自动恢复亮度", WD_TEXT_DIM, 11, 122, 216);
+
+    lv_obj_t *c2 = mk_card(scr, WD_CARD_X, 194, WD_CARD_W, 94);
+    mk_text(c2, "建议", WD_TEXT_DIM, 11, 6, 44);
+    mk_text(c2, "尽快插上充电线", WD_TEXT, 51, 6, 172);
+
+    mk_text(c2, "阈值", WD_TEXT_DIM, 11, 30, 44);
+    s_ui.lb_fk = mk_text(c2, "", WD_TEXT_DIM, 51, 30, 172);
+
+    mk_text(c2, "关机", WD_TEXT_DIM, 11, 54, 44);
+    mk_text(c2, "低于 3% 自动关机", WD_TEXT_DIM, 51, 54, 172);
+
+    // 低电页**可以**关闭（只是提醒，不阻断上行），页脚必须写清手势。
+    // 与断连页的差别由这一行承担：那张页的页脚里没有「关闭」二字。
+    mk_footer(WB_VIEW_LOWBATT, "OK", " 关闭提醒 · ", "长按OK", " 回首页");
+}
+
+// ---------------------------------------------------------------------------
 // 建 / 拆
 // ---------------------------------------------------------------------------
 // 本工程是 ESP32-C3 无 PSRAM：一次建齐 7 屏（约 490 个 LVGL 对象）会把
@@ -826,6 +953,8 @@ static void ensure_page(wb_view_page_t page)
     case WB_VIEW_APPROVAL: build_approval(); break;
     case WB_VIEW_ASK:      build_ask();      break;
     case WB_VIEW_STANDBY:  build_standby();  break;
+    case WB_VIEW_OFFLINE:  build_offline();  break;
+    case WB_VIEW_LOWBATT:  build_lowbatt();  break;
     default: break;
     }
 
@@ -870,7 +999,14 @@ wb_view_page_t wb_view_manual_page(void) { return s_manual; }
 
 // 导航页是 STATUS..HOSTRES 这一段连续的枚举值（5 页）。用枚举本身算上界，
 // 以后再加页只需在枚举里插一项，调用方的轮转范围自动跟上。
-int wb_view_nav_page_count(void) { return (int)WB_VIEW_HOSTRES + 1; }
+int wb_view_nav_page_count(void) { return WB_NAV_PAGE_COUNT; }
+
+void wb_view_set_lowbatt_dismissed(bool dismissed)
+{
+    s_lowbatt_dismissed = dismissed;
+}
+
+bool wb_view_lowbatt_dismissed(void) { return s_lowbatt_dismissed; }
 
 void wb_view_ask_move(int delta, int n_opts)
 {
@@ -912,10 +1048,9 @@ void wb_view_set_ask_edge(int dir, int64_t until_ms)
 
 wb_view_page_t wb_view_current_page(const wb_state_t *st)
 {
-    if (st->appr.active) return WB_VIEW_APPROVAL;
-    if (st->ask.active) return WB_VIEW_ASK;
-    if (st->standby_page) return WB_VIEW_STANDBY;
-    return s_manual;
+    // 判定逻辑抽到 wb_page_priority.h（纯函数、host 可单测）。这里只把
+    // 三个输入喂进去：状态快照、用户手动页、低电页是否被关掉。
+    return wb_page_pick(st, s_manual, s_lowbatt_dismissed);
 }
 
 // ---------------------------------------------------------------------------
@@ -927,7 +1062,10 @@ static void refresh_chrome(const wb_state_t *st)
     const char *txt = linked ? "已连接" : (st->linked ? "离线" : "广播中");
     const uint32_t col = linked ? WD_SUCCESS : (st->linked ? WD_DANGER : WD_TEXT_DIM);
 
-    for (int p = 0; p < (int)WB_VIEW_STANDBY; p++) {
+    // 只刷导航页的页头徽标。事件页（审批/提问）、待机页、两张覆盖页各自
+    // 管理自己的页头 —— 尤其覆盖页：断连页的页头徽标已经写着「断连」，
+    // 再被这里统一改成「离线」就把「为什么盖住你」抹掉了。
+    for (int p = 0; p < WB_NAV_PAGE_COUNT; p++) {
         if (!s_ui.hd[p].label) continue;
         badge_set(&s_ui.hd[p], txt, col);
     }
@@ -1542,6 +1680,140 @@ static void refresh_standby(const wb_state_t *st, int64_t now_ms)
     set_text(s_ui.sb_power, st->link.low_power ? "省电模式 · 亮度已降" : "低功耗待机");
 }
 
+// 08 断连覆盖页。
+//
+// 这张页存在的唯一理由是：断连时下面那些页面显示的**全是旧帧**，而旧帧
+// 看起来和实时数据一模一样（状态总览的额度条、主机资源的三条占用，都是
+// 上一次收到的值）。只把页头徽标染红不足以阻止误读 —— 用户看的是数字。
+//
+// 三处刻意设计：
+//   1. 32px 锚点是「已经断了多久」而不是「最后在线于几点」：后者需要墙钟，
+//      而校时本身来自主机，断连后反而不准；单调钟的时长永远可信。
+//   2. 断连时长与连接时长共用 wb_link_fmt_clock()，两者的 124px 宽度约束
+//      完全一样，不重复写第二套格式化逻辑。
+//   3. 页脚不出现「关闭」二字：这张页没有关闭手势（见 wb_page_priority.h）。
+static void refresh_offline(const wb_state_t *st, int64_t now_ms)
+{
+    char buf[96];
+    // 断开时长 = 本帧时刻 - 最后一次收到帧的时刻。
+    // 用 last_rx_ms 而不是 conn_since_ms：断连后 conn_since_ms 已被清零，
+    // 而 last_rx_ms 是「链路最后一次真的活着」的证据，语义更准。
+    // 本次上电从没收到过帧（last_rx_ms == 0）时不编数字，直接给 "--:--"。
+    long long sec = -1;
+    if (st->last_rx_ms > 0 && now_ms > st->last_rx_ms) {
+        sec = (now_ms - st->last_rx_ms) / 1000;
+    }
+    char clock[16];
+    const int kind = wb_link_fmt_clock(clock, sizeof(clock), sec);
+    set_text(s_ui.of_dur, clock);
+    // 右上那行只放单位（96px = 6 字），不放「已断开 · 分:秒」——
+    // 断开的语义由页头「主机已断开」+ 页脚「重连 自动恢复」共同承担，
+    // 大数字旁只需要解释「这两个数字是分还是时」。
+    // 区分两种「没有时长」：本次上电连过又断了（有 last_rx）vs 从没连上过
+    // （刚烧录/主机没开）。后者写「未连接过」比「未收到」准确 —— 它不涉及
+    // 「收到了但过期」，而是压根没有过链路。
+    if (kind < 0) {
+        set_text(s_ui.of_dur_note,
+                 st->link.disconnects > 0 ? "未收到" : "未连接过");
+    } else {
+        set_text(s_ui.of_dur_note, kind == 1 ? "时:分" : "分:秒");
+    }
+
+    // 最近断开原因：与关于页共用同一套「先剥 NimBLE 错误域前缀」的规则。
+    // 右列只有 96px = 6 个汉字，所以不能带「原因」前缀 —— 码表已压到
+    // 4 字以内，直接给短语，语义靠上一行的「已断开」承接。
+    char why[24];
+    wb_link_fmt_reason(why, sizeof(why), st->link.last_reason);
+    set_text(s_ui.of_reason, why);
+
+    // 缓存的措辞随「断了多久」升级。主机是 30s 一跳（host/wb_app.py 的
+    // STATUS_INTERVAL），所以 30s 内数字基本还有效，超过就明确说过期。
+    // 三种情形要分开：从没连上过（无数据可谈）、刚断（数据尚新）、久断（过期）。
+    // 宽度硬约束 216px = 13 个汉字。
+    if (sec < 0) {
+        // 本次上电从未收到帧：没有「缓存」这回事，别硬套过期文案。
+        // 副行也不能写「不会随主机实时刷新」—— 从来没有数据可谈刷新，
+        // 那句话只在「有旧数据」的前提下才成立。
+        set_text(s_ui.of_cache, "还没有收到过主机数据");
+        lv_obj_set_style_text_color(s_ui.of_cache, lv_color_hex(WD_TEXT_DIM), 0);
+        set_text(s_ui.of_cache2, "各页显示的都是空态占位");
+    } else if (sec <= 30) {
+        set_text(s_ui.of_cache, "以下数字是断连前的缓存");
+        lv_obj_set_style_text_color(s_ui.of_cache, lv_color_hex(WD_TEXT), 0);
+        set_text(s_ui.of_cache2, "不会随主机实时刷新");
+    } else {
+        set_text(s_ui.of_cache, "数字已过期 · 请勿采信");
+        lv_obj_set_style_text_color(s_ui.of_cache, lv_color_hex(WD_DANGER), 0);
+        set_text(s_ui.of_cache2, "不会随主机实时刷新");
+    }
+
+    // 最后收帧：给「是设备收不到还是主机没发」这个分叉点一个直接读数。
+    if (st->last_rx_ms > 0) {
+        const long long age = (now_ms > st->last_rx_ms)
+                                  ? (now_ms - st->last_rx_ms) / 1000 : 0;
+        if (age < 60) snprintf(buf, sizeof(buf), "%lld 秒前", age);
+        else if (age < 3600) snprintf(buf, sizeof(buf), "%lld 分钟前", age / 60);
+        else snprintf(buf, sizeof(buf), "%lld 小时前", age / 3600);
+    } else {
+        snprintf(buf, sizeof(buf), "从没收到过");
+    }
+    set_text(s_ui.of_lastrx, buf);
+
+    // 待办条数：断连时审批/提问的 key 帧发不出去（wb_link_send 会失败），
+    // 让用户「答了但没生效」比不让答更糟 —— 所以离线页要说清有几条压着。
+    const int todo = (st->appr.active ? 1 : 0) + (st->ask.active ? 1 : 0);
+    if (todo > 0) {
+        snprintf(buf, sizeof(buf), "%d 条 · 连上后可处理", todo);
+        set_text(s_ui.of_todo, buf);
+        lv_obj_set_style_text_color(s_ui.of_todo, lv_color_hex(WD_PRIMARY), 0);
+    } else {
+        set_text(s_ui.of_todo, "无");
+        lv_obj_set_style_text_color(s_ui.of_todo, lv_color_hex(WD_TEXT_DIM), 0);
+    }
+
+    // 「恢复」这一行必须诚实：设备侧只会重新广播，是否重连由主机决定。
+    // 写「正在重试」是假的 —— 没有任何重试逻辑在跑。
+    // 宽度硬约束：值列 152px = 9 个汉字，所以只写 6 字；「无自动重试」
+    // 这层否定语义由页脚「重连 自动恢复」的另一面对照表达，不硬塞进这行。
+    set_text(s_ui.of_hint, "等主机重连");
+
+    // 竖条颜色：断连是异常态，用珊瑚红而不是灰色「离线」。
+    // 灰色在规范里表示「次要信息」，而这里要的是「注意，这不是实时数据」。
+    lv_obj_set_style_bg_color(s_ui.of_rail, lv_color_hex(WD_DANGER), 0);
+
+    // 页头右侧徽标：mk_header 建了空徽标，但 refresh_chrome 只刷导航页，
+    // 所以这里必须自己写，否则屏右上角是一个孤零零的灰点（实测截图如此）。
+    // 文案与整页一致：断连本身，不是「离线」。
+    badge_set(&s_ui.hd[WB_VIEW_OFFLINE], "断连", WD_DANGER);
+}
+
+// 09 低电覆盖页。
+//
+// 与断连页的关键差别：低电只是提醒，不阻断任何上行，所以它**可以**关闭。
+// 关闭后停在本页下面的状态（通常是状态总览），充到 >18% 自动复位。
+static void refresh_lowbatt(const wb_state_t *st)
+{
+    char buf[96];
+
+    if (st->soc >= 0) snprintf(buf, sizeof(buf), "%d%%", st->soc);
+    else snprintf(buf, sizeof(buf), "--%%");
+    set_text(s_ui.lb_soc, buf);
+
+    // 电压：有就读出来（电量计在充电时读数滞后，电压能解释这个现象）。
+    if (st->soc_mv > 0) snprintf(buf, sizeof(buf), "%d mV", st->soc_mv);
+    else snprintf(buf, sizeof(buf), "电压未知");
+    set_text(s_ui.lb_mv, buf);
+
+    // 阈值行：把「什么时候弹、什么时候复位」写清楚，避免用户以为它坏了。
+    // 152px = 约 9 个汉字或 18 个半角。「<=15% 弹 · >18% 复位」是 16 个
+    // 半角字符，理论上够，但带小数点与空格的排布实测会顶边，改成无空格。
+    snprintf(buf, sizeof(buf), "<=%d%%弹 >%d%%复位", WB_LOWBATT_ON, WB_LOWBATT_OFF);
+    set_text(s_ui.lb_fk, buf);
+
+    // 页头徽标同样要自己写（refresh_chrome 不覆盖这两页）。
+    badge_set(&s_ui.hd[WB_VIEW_LOWBATT], "低电", WD_PRIMARY);
+}
+
 void wb_view_refresh(const wb_state_t *st, int64_t now_ms)
 {
     if (!s_built || !st) return;
@@ -1559,6 +1831,8 @@ void wb_view_refresh(const wb_state_t *st, int64_t now_ms)
     case WB_VIEW_APPROVAL: refresh_approval(st); break;
     case WB_VIEW_ASK:      refresh_ask(st, now_ms); break;
     case WB_VIEW_STANDBY:  refresh_standby(st, now_ms); break;
+    case WB_VIEW_OFFLINE:  refresh_offline(st, now_ms); break;
+    case WB_VIEW_LOWBATT:  refresh_lowbatt(st); break;
     default: break;
     }
 }

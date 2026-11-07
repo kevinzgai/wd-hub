@@ -21,28 +21,37 @@ extern "C" {
 #endif
 
 typedef enum {
+    // ---- 导航页（↑↓ 轮转，0..WB_VIEW_HOSTRES 连续）----
     WB_VIEW_STATUS = 0,
     WB_VIEW_RACK,
     WB_VIEW_USAGE,
     WB_VIEW_ABOUT,
     WB_VIEW_HOSTRES,   // 主机资源：电脑 CPU / 内存 / 磁盘（导航页第 5 页）
-    WB_VIEW_APPROVAL,
-    WB_VIEW_ASK,
-    WB_VIEW_STANDBY,
+    // ---- 非导航页 ----
+    WB_VIEW_APPROVAL,  // 事件页：已连接且有待审批
+    WB_VIEW_ASK,       // 事件页：已连接且有待作答
+    WB_VIEW_STANDBY,   // 空闲 180s 覆盖页
+    WB_VIEW_OFFLINE,   // 断连覆盖页（不可 dismiss，重连自动消失）
+    WB_VIEW_LOWBATT,   // 低电覆盖页（SOC <= 15%，可关闭，充电后复位）
     WB_VIEW_COUNT,
 } wb_view_page_t;
 
-// 建/删 7 个 screen 与全部控件。调用方持有 LVGL 锁。
+// 导航页数量（STATUS..HOSTRES 连续）。覆盖页/事件页插在 HOSTRES 之后，
+// 因此「导航页上界」这个常量必须显式写出来，不能再用 WB_VIEW_APPROVAL 推导。
+#define WB_NAV_PAGE_COUNT ((int)WB_VIEW_HOSTRES + 1)
+
+// 建/删全部 screen 与控件（按需只保留当前一屏）。调用方持有 LVGL 锁。
 void wb_view_build(void);
 void wb_view_teardown(void);
 
 // 按状态机快照选页、切页并刷新控件。调用方持有 LVGL 锁。
 void wb_view_refresh(const wb_state_t *st, int64_t now_ms);
 
-// 当前应显示的页(不含强制页)。
+// 当前应显示的页（含覆盖页与事件页的强制优先级）。
+// 判定逻辑在 wb_page_priority.h 的 wb_page_pick()，纯函数、可单测。
 wb_view_page_t wb_view_current_page(const wb_state_t *st);
 
-// 手动导航页(STATUS/RACK/USAGE/ABOUT/HOSTRES)。事件页/待机页优先级更高。
+// 手动导航页(STATUS/RACK/USAGE/ABOUT/HOSTRES)。覆盖页/事件页优先级更高。
 void wb_view_set_manual_page(wb_view_page_t page);
 wb_view_page_t wb_view_manual_page(void);
 
@@ -62,6 +71,13 @@ void wb_view_set_ask_cursor(int cursor);
 //                页脚文案。游标本身由业务层钳制，这里只负责提示。
 void wb_view_set_ask_committed(int id, int idx);
 void wb_view_set_ask_edge(int dir, int64_t until_ms);
+
+// 低电覆盖页的「关闭」状态。低电只是提醒，用户可以关掉继续用；
+// 充到 >18% 会自动复位，下次再掉到 <=15% 会重新弹出。
+// 与离线页不同：离线页没有 dismiss —— 断连时任何页显示的都是旧帧，
+// 「关掉通知」等于让人把缓存当成实时数据看。
+void wb_view_set_lowbatt_dismissed(bool dismissed);
+bool wb_view_lowbatt_dismissed(void);
 
 // 注：原 wb_view_set_activity(frames, last_event, low_power) 已移除。
 // 它唯一的调用点写死在 init 里，屏上「0 帧 / 正常档」恒不变。现在链路统计

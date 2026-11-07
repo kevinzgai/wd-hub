@@ -23,8 +23,15 @@ void wb_ui_deinit(void);
 void wb_ui_sync(const wb_view_t *view, bool standby);
 
 // 电量由应用层周期性读表后喂给 UI；<0 表示无效。
-// 低电覆盖页只在 <=15% 出现，充电恢复后自动复位。
+// 低电覆盖页只在 <=15% 出现，充电恢复（>18%）后自动复位 dismissed 状态。
 void wb_ui_set_battery(int soc);
+// 电池电压（mV），<0 表示读表失败。低电页用它说明电量计滞后的情况，
+// 与 soc 分开传：soc 决定「弹不弹页」，电压只解释「为什么读数这么低」。
+void wb_ui_set_battery_mv(int mv);
+
+// 调试专用（串口 'w'）：注入假电量并冻结，用于实机验证低电覆盖页。
+// 冻结后周期读表不再覆盖它；收到 >18% 的真实读数或重新烧录即解除。
+void wb_ui_force_battery_debug(int soc);
 
 // 三键分发闸门。返回 true 表示本层已消费，业务层不再处理（返回 false 时
 // 短 OK 会落到 wb_biz_confirm，务必谨慎）。仅处理 CLICK / LONG；

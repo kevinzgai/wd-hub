@@ -109,20 +109,47 @@ static void test_reason()
     wb_link_fmt_reason(buf, sizeof(buf), -1);
     chk_str(buf, "无", "从未断开");
 
-    // 已知码翻中文
-    wb_link_fmt_reason(buf, sizeof(buf), 0x13);
-    chk_str(buf, "对端断开", "0x13");
-    wb_link_fmt_reason(buf, sizeof(buf), 0x08);
-    chk_str(buf, "连接超时", "0x08");
-    wb_link_fmt_reason(buf, sizeof(buf), 0x16);
-    chk_str(buf, "本机断开", "0x16");
-    wb_link_fmt_reason(buf, sizeof(buf), 0x3E);
-    chk_str(buf, "建立失败", "0x3e");
+    // ---- NimBLE 错误域（实机唯一真实形态）----
+    // BLE_GAP_EVENT_DISCONNECT 给的 reason 是 NimBLE 错误码，不是 BLE 规范裸码：
+    //   0x200 起 = HCI（BLE_HS_ERR_HCI_BASE），真值 = 值 - 0x200
+    //   0x100 起 = ATT（BLE_HS_ERR_ATT_BASE），真值 = 值 - 0x100
+    // 实机主机 /api/stop 断开时设备收到 0x213 = HCI 0x13 = 远端主动断开。
+    // 这条断言是本测试存在的最重要理由：上一版只翻裸码 0x13，
+    // 在真机上一条都命中不了，屏上打出「原因 0x213」谁都看不懂。
+    wb_link_fmt_reason(buf, sizeof(buf), 0x213);
+    chk_str(buf, "主机断开", "0x213 → HCI 0x13");
 
-    // 未知码：保留十六进制，绝不编造中文
-    wb_link_fmt_reason(buf, sizeof(buf), 0x22);
-    chk_str(buf, "0x22", "未知码保留十六进制");
-    // 宽度：未知码最长 4 字符，已知码最长 4 个汉字 → 都能塞进 94px 右列
+    wb_link_fmt_reason(buf, sizeof(buf), 0x208);
+    chk_str(buf, "连接超时", "0x208 → HCI 0x08");
+
+    wb_link_fmt_reason(buf, sizeof(buf), 0x216);
+    chk_str(buf, "本机断开", "0x216 → HCI 0x16");
+
+    wb_link_fmt_reason(buf, sizeof(buf), 0x23E);
+    chk_str(buf, "建立失败", "0x23e → HCI 0x3e");
+
+    wb_link_fmt_reason(buf, sizeof(buf), 0x222);
+    chk_str(buf, "链路差", "0x222 → HCI 0x22");
+
+    // ATT 域：0x108 = ATT 0x08 = 数据超时
+    wb_link_fmt_reason(buf, sizeof(buf), 0x108);
+    chk_str(buf, "数据超时", "0x108 → ATT 0x08");
+
+    // ---- 裸码仍要认（其它路径/其它固件线可能给裸值）----
+    wb_link_fmt_reason(buf, sizeof(buf), 0x13);
+    chk_str(buf, "主机断开", "裸 0x13");
+    wb_link_fmt_reason(buf, sizeof(buf), 0x08);
+    chk_str(buf, "连接超时", "裸 0x08");
+
+    // 未知码：保留十六进制，绝不编造中文。
+    // 位宽必须是 %03X：0x213 用 %02X 会打成「0x213」以外的形态（实测出错），
+    // 三位才能完整表达 NimBLE 码。
+    wb_link_fmt_reason(buf, sizeof(buf), 0x2AB);
+    chk_str(buf, "0x2AB", "未知 NimBLE 码保留三位十六进制");
+    wb_link_fmt_reason(buf, sizeof(buf), 0x45);
+    chk_str(buf, "0x045", "未知裸码也补齐三位");
+
+    // 宽度：全部输出都在 6 个字符以内，能塞进 96px 右列
     chk_width(buf, 6, "未知码宽度");
 }
 
