@@ -49,7 +49,11 @@ def write_png(path, rows, w, h):
             raw += bytes((r8, g8, b8))
 
     def chunk(tag, data):
-        return (tag + struct.pack(">I", len(data)) + data
+        # PNG 规范：每个 chunk 是 length(4) + type(4) + data + crc(4)。
+        # 早先这里把 tag 写在 length 前面，产出的文件连 PIL / 浏览器都打不开
+        # （IHDR 的 width/height 恰好还能按裸字节读出来，所以「能读尺寸」
+        # 反而掩盖了问题，一直没人发现）。
+        return (struct.pack(">I", len(data)) + tag + data
                 + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
 
     png = b"\x89PNG\r\n\x1a\n"

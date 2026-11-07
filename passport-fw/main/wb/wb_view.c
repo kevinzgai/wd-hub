@@ -76,14 +76,17 @@ typedef struct {
     lv_obj_t *ab_power;
     lv_obj_t *ab_frames;
 
-    // 05 主机资源（电脑 CPU / 内存 / 磁盘）
-    // 每张卡：标题行右侧是百分比（不设状态胶囊，一行放不下三样东西），
-    // 状态靠条的颜色 + 百分比数值本身表达，符合「不能只靠颜色」的另一半
-    // ——数值永远在，颜色只是辅助。
-    lv_obj_t *hr_pct[3];
-    lv_obj_t *hr_bar[3];
-    lv_obj_t *hr_detail[3];   // 「12.3 / 16 GB」这类绝对值
+    // 05 主机资源（电脑 CPU / 内存 / 磁盘）—— 版式 v2「一个锚点 + 两条从属」
+    // CPU 是唯一 32px 大数字（全页第一视觉），内存/磁盘降为 16px 从属行；
+    // 状态一律「数值为主、颜色为辅」：竖条 + 条 + 百分比三处同源判定，
+    // 但颜色只在 ≥90% 才切珊瑚红，避免正常态满屏语义色。
     lv_obj_t *hr_card[3];     // 空态时要整卡隐藏
+    lv_obj_t *hr_rail[3];     // 3px 语义竖条（绿=正常 / 琥珀=偏高 / 红=告警 / 灰=无数据）
+    lv_obj_t *hr_anchor;      // CPU 大数字（montserrat_32，全页唯一锚点）
+    wd_badge_t hr_state;      // CPU 卡右上的档位徽标（正常 / 偏高 / 告警 / 无数据）
+    lv_obj_t *hr_pct[2];      // 内存 / 磁盘 的 16px 百分比（从属）
+    lv_obj_t *hr_bar[3];
+    lv_obj_t *hr_detail[2];   // 内存 / 磁盘 的绝对值；CPU 只报占用率，无此值
     lv_obj_t *hr_age;         // 底部一行：数据时效
     lv_obj_t *hr_empty;       // 空态主提示（未下发时替代三张卡）
     lv_obj_t *hr_empty2;      // 空态副说明
@@ -582,38 +585,62 @@ static void build_about(void)
     mk_footer(WB_VIEW_ABOUT, "长按OK", " 首页 · ", "上下", " 翻页");
 }
 
-// 05 主机资源：电脑侧 CPU / 内存 / 磁盘。
+// 05 主机资源：电脑侧 CPU / 内存 / 磁盘 —— 版式 v2「1 主 2 从」。
 //
-// 版面预算：内容区 38..288（250px），但底部还要留一行「更新于…」。
-//   三张卡各 74 高、卡间距 6 → 38 / 118 / 198，最后一张到 272；
-//   272..292 放时效行（20px 行高），页脚从 294 开始，正好不撞。
+// v1 的问题（不是配色，是层级）：三张卡等宽等高、三个百分比同字号，
+// 整页没有第一视觉落点；规范 §4.2 要求每屏恰好一个 32px 锚点，这页一个都没有。
 //
-// 每张卡内部三行（buddy_font_16 行高 20，卡内默认裁剪子对象，必须算准）：
-//   ① y=6   标题 + 右侧百分比（同一行，省掉一个大数字的高度）
-//   ② y=32  占用条 h=8（到 40）
-//   ③ y=46  「12.3 / 16 GB」明细，20 高到 66 < 卡高 74 ✓
+// v2 版面预算（内容区 38..288）：
+//   CPU 主卡 92 高       38..130   ← 与 6.1「额度卡」同几何，复用已验证的字号关系
+//   内存从属卡 64 高     136..200
+//   磁盘从属卡 64 高     206..270
+//   时效行 20 高         272..292  （页脚 294，留 2px 不撞）
 //
-// 为什么不用 montserrat_32 大数字：既有 4 页每页只允许一个 32px 锚点
-// （规范 §5.3），而这里三张卡并排，各放一个就是 3 个锚点，直接违反规范；
-// 而且 32px 字形会把卡内三行挤成两行，明细只能丢掉。
+// CPU 主卡内部（对齐 6.1 额度卡，那里 32px 大数字 + 进度条的像素关系已实机验证）：
+//   y=6   标题 + 右上档位徽标
+//   y=24  32px 大数字（11..135），右侧 x=140 放一行「整机平均占用」说明
+//   y=72  占用条 214×8（到 80，卡高 92）
+// 内存/磁盘从属卡（64 高，一行标题 + 条 + 明细，全部 16px）：
+//   y=3   标题 + 右对齐百分比
+//   y=26  占用条 214×8（到 34）
+//   y=36  绝对值明细（20 行高到 56 < 64）
+//
+// 颜色分工（避免 v1 的语义打架）：
+//   * 3px 竖条 + 百分比文字 = 健康档（绿=正常 / 红≥90% / 灰=无数据）；
+//   * 数据条一律琥珀（规范 §5.5「填充琥珀」，条表达「占比」不表达「告警」）；
+//   * 琥珀大面积只出现在 CPU 大数字这一处，符合 §3.3「一页只允许一处品牌琥珀」；
+//   * 大数字在 ≥90% 转珊瑚红，让「告警」在锚点上也能看见，而不是只靠一条窄竖条。
 static void build_hostres(void)
 {
     lv_obj_t *scr = s_ui.scr[WB_VIEW_HOSTRES];
     mk_header(WB_VIEW_HOSTRES, "主机资源");
 
-    static const char *const k_titles[3] = {"CPU 占用", "内存占用", "磁盘占用"};
-    static const uint32_t k_rail[3] = {WD_PRIMARY, WD_SUCCESS, WD_TEXT_DIM};
+    // ---- CPU 主卡（全页唯一 32px 锚点）----
+    lv_obj_t *cpu = mk_card(scr, 4, 38, 232, 92);
+    s_ui.hr_card[0] = cpu;
+    s_ui.hr_rail[0] = mk_rect(cpu, 0, 0, 3, 92, WD_SUCCESS);
+    mk_text(cpu, "CPU 占用", WD_TEXT_DIM, 11, 6, 80);
+    s_ui.hr_state = mk_badge(cpu, 150, 6, 74, WD_SUCCESS, true);
+    s_ui.hr_anchor = mk_big(cpu, "--", WD_PRIMARY, 11, 24, 124);
+    // 说明行与大数字同一水平带（y=26），右对齐贴到卡内右边距。
+    // 「整机平均」是为了防止把它读成「单核占用」—— 主机下发的是 0..100 的
+    // 整机百分比（见 wb_hostres_t 注释），不是每个核的占用。
+    mk_text_at(cpu, "整机平均", WD_TEXT_DIM, 150, 26, 74, LV_TEXT_ALIGN_RIGHT);
+    s_ui.hr_bar[0] = mk_bar(cpu, 11, 72, 214, 8);
 
-    for (int i = 0; i < 3; i++) {
-        const int y = 38 + i * 80;                       // 38 / 118 / 198
-        lv_obj_t *card = mk_card(scr, 4, y, 232, 74);
-        s_ui.hr_card[i] = card;
-        mk_rect(card, 0, 0, 3, 74, k_rail[i]);
-        mk_text(card, k_titles[i], WD_TEXT_DIM, 11, 6, 90);
-        s_ui.hr_pct[i] = mk_text_at(card, "--", WD_PRIMARY, 106, 6, 117,
+    // ---- 内存 / 磁盘 从属卡 ----
+    static const char *const k_titles[2] = {"内存", "磁盘"};
+    for (int i = 0; i < 2; i++) {
+        const int idx = i + 1;                           // 卡片下标 1 / 2
+        const int y = 136 + i * 70;                      // 136 / 206
+        lv_obj_t *card = mk_card(scr, 4, y, 232, 64);
+        s_ui.hr_card[idx] = card;
+        s_ui.hr_rail[idx] = mk_rect(card, 0, 0, 3, 64, WD_SUCCESS);
+        mk_text(card, k_titles[i], WD_TEXT_DIM, 11, 3, 60);
+        s_ui.hr_pct[i] = mk_text_at(card, "--", WD_PRIMARY, 116, 3, 105,
                                     LV_TEXT_ALIGN_RIGHT);
-        s_ui.hr_bar[i] = mk_bar(card, 11, 32, 214, 8);
-        s_ui.hr_detail[i] = mk_text(card, "", WD_TEXT_DIM, 11, 46, 214);
+        s_ui.hr_bar[idx] = mk_bar(card, 11, 26, 214, 8);
+        s_ui.hr_detail[i] = mk_text(card, "", WD_TEXT_DIM, 11, 36, 214);
     }
 
     // 空态：主机版本还不采集资源时，把三张卡隐掉换成两行说明，
@@ -623,9 +650,10 @@ static void build_hostres(void)
     s_ui.hr_empty2 = mk_text_at(scr, "", WD_TEXT_DIM, 0, 156, WD_SCR_W,
                                 LV_TEXT_ALIGN_CENTER);
 
-    // 底部一行「数据时效」：272..292，与第三张卡（到 272）严丝合缝。
+    // 底部时效行 272..292。
     s_ui.hr_age = mk_text_at(scr, "", WD_TEXT_DIM, 0, 272, WD_SCR_W,
                              LV_TEXT_ALIGN_CENTER);
+
 
     mk_footer(WB_VIEW_HOSTRES, "长按OK", " 首页 · ", "上下", " 翻页");
 }
@@ -1112,14 +1140,44 @@ static void refresh_about(const wb_state_t *st)
     set_text(s_ui.ab_frames, buf);
 }
 
-// 05 主机资源：三张卡按「占用率」画条 + 右侧百分比 + 明细绝对值。
+// 05 主机资源：CPU 主卡（32px 锚点）+ 内存 / 磁盘从属卡。
 //
 // 三档降级顺序（以前几页踩过的同类问题，这里一次说清）：
 //   1) 主机从没下发 res（老主机版本）→ 隐藏三张卡，写「主机未下发资源」
 //      和「升级主机端后可见」；
 //   2) 已连接但这一帧还没到 → 「等待主机数据 / 每 30 秒刷新」；
-//   3) 有数据 → 正常画卡，底部补一行「更新于 xx 秒前」。
+//   3) 有数据 → 正常画卡，底部补一行刷新节奏。
 // 任何一档都不伪造数值：缺项只是那一行写「--」，条保持 0。
+//
+// 健康档单点判定：竖条 / 百分比 / 大数字三处共用 hostres_level()，
+// 不允许各算一套阈值 —— v1 就是「竖条按类别上色、条按占用上色」，
+// 同一页出现两套语义，看的人没法建立「什么颜色 = 什么状态」的条件反射。
+static uint8_t hostres_level(int pct)
+{
+    if (pct < 0) return 0;        // 无数据（灰）
+    if (pct >= 90) return 2;      // 告警（珊瑚红）
+    if (pct >= 75) return 1;      // 偏高（琥珀）
+    return 0;                     // 正常（鼠尾草绿）
+}
+
+static uint32_t hostres_color(int pct)
+{
+    switch (hostres_level(pct)) {
+    case 2:  return WD_DANGER;
+    case 1:  return WD_PRIMARY;
+    default: return pct < 0 ? WD_TEXT_DIM : WD_SUCCESS;
+    }
+}
+
+static const char *hostres_word(int pct)
+{
+    switch (hostres_level(pct)) {
+    case 2:  return "告警";
+    case 1:  return "偏高";
+    default: return pct < 0 ? "无数据" : "正常";
+    }
+}
+
 static void refresh_hostres(const wb_state_t *st)
 {
     char buf[80];
@@ -1158,70 +1216,48 @@ static void refresh_hostres(const wb_state_t *st)
 
     const wb_hostres_t *r = &st->res;
 
-    // ---- CPU ----
-    if (r->cpu_pct >= 0) {
-        snprintf(buf, sizeof(buf), "%d%%", r->cpu_pct);
-        set_text(s_ui.hr_pct[0], buf);
-        lv_bar_set_value(s_ui.hr_bar[0], r->cpu_pct * 10, LV_ANIM_OFF);
-        // 单核 C3 上不按颜色告警：主机 CPU 高不代表设备异常，只做数值呈现。
-        lv_obj_set_style_bg_color(s_ui.hr_bar[0], lv_color_hex(WD_PRIMARY),
-                                  LV_PART_INDICATOR);
-        set_text(s_ui.hr_detail[0], "整机平均占用");
-    } else {
-        set_text(s_ui.hr_pct[0], "--");
-        lv_bar_set_value(s_ui.hr_bar[0], 0, LV_ANIM_OFF);
-        set_text(s_ui.hr_detail[0], "主机未上报");
+    // ---- CPU 主卡：大数字 + 档位徽标 + 竖条同源上色 ----
+    {
+        const int pct = r->cpu_pct;
+        const uint32_t col = hostres_color(pct);
+        if (pct >= 0) snprintf(buf, sizeof(buf), "%d%%", pct);
+        else snprintf(buf, sizeof(buf), "--");
+        set_text(s_ui.hr_anchor, buf);
+        lv_obj_set_style_text_color(s_ui.hr_anchor, lv_color_hex(col), 0);
+        badge_set(&s_ui.hr_state, hostres_word(pct), col);
+        lv_obj_set_style_bg_color(s_ui.hr_rail[0], lv_color_hex(col), 0);
+
+        // 条永远琥珀：它表达「占了多少」，不表达「是否告警」（规范 §5.5）。
+        lv_bar_set_value(s_ui.hr_bar[0], pct < 0 ? 0 : pct * 10, LV_ANIM_OFF);
     }
 
-    // ---- 内存 ----
-    if (r->mem_pct >= 0) {
-        snprintf(buf, sizeof(buf), "%d%%", r->mem_pct);
-        set_text(s_ui.hr_pct[1], buf);
-        lv_bar_set_value(s_ui.hr_bar[1], r->mem_pct * 10, LV_ANIM_OFF);
-        const uint32_t col = r->mem_pct >= 90 ? WD_DANGER
-                           : r->mem_pct >= 75 ? WD_PRIMARY : WD_SUCCESS;
-        lv_obj_set_style_bg_color(s_ui.hr_bar[1], lv_color_hex(col),
-                                  LV_PART_INDICATOR);
-    } else {
-        set_text(s_ui.hr_pct[1], "--");
-        lv_bar_set_value(s_ui.hr_bar[1], 0, LV_ANIM_OFF);
-    }
-    // 绝对值：总量缺失就只写已用量，两个都缺再退成「主机未上报」。
-    if (r->mem_used_mb >= 0 && r->mem_total_mb > 0) {
-        snprintf(buf, sizeof(buf), "已用 %.1f / %.1f GB",
-                 r->mem_used_mb / 1024.0, r->mem_total_mb / 1024.0);
-    } else if (r->mem_used_mb >= 0) {
-        snprintf(buf, sizeof(buf), "已用 %d MB", r->mem_used_mb);
-    } else {
-        snprintf(buf, sizeof(buf), "%s",
-                 r->mem_pct >= 0 ? "总量未知" : "主机未上报");
-    }
-    set_text(s_ui.hr_detail[1], buf);
+    // ---- 内存 / 磁盘从属卡 ----
+    for (int i = 0; i < 2; i++) {
+        const int idx = i + 1;
+        const int pct = i == 0 ? r->mem_pct : r->disk_pct;
+        const uint32_t col = hostres_color(pct);
 
-    // ---- 磁盘 ----
-    // 容量统一按 MB 下发（见 wb_hostres_t 注释），这里除 1024 显示成 GB。
-    if (r->disk_pct >= 0) {
-        snprintf(buf, sizeof(buf), "%d%%", r->disk_pct);
-        set_text(s_ui.hr_pct[2], buf);
-        lv_bar_set_value(s_ui.hr_bar[2], r->disk_pct * 10, LV_ANIM_OFF);
-        const uint32_t col = r->disk_pct >= 90 ? WD_DANGER
-                           : r->disk_pct >= 75 ? WD_PRIMARY : WD_SUCCESS;
-        lv_obj_set_style_bg_color(s_ui.hr_bar[2], lv_color_hex(col),
-                                  LV_PART_INDICATOR);
-    } else {
-        set_text(s_ui.hr_pct[2], "--");
-        lv_bar_set_value(s_ui.hr_bar[2], 0, LV_ANIM_OFF);
+        if (pct >= 0) snprintf(buf, sizeof(buf), "%d%%", pct);
+        else snprintf(buf, sizeof(buf), "--");
+        set_text(s_ui.hr_pct[i], buf);
+        lv_obj_set_style_text_color(s_ui.hr_pct[i], lv_color_hex(col), 0);
+        lv_obj_set_style_bg_color(s_ui.hr_rail[idx], lv_color_hex(col), 0);
+        lv_bar_set_value(s_ui.hr_bar[idx], pct < 0 ? 0 : pct * 10, LV_ANIM_OFF);
+
+        // 绝对值：总量缺失就只写已用量，两个都缺再退成「主机未上报」。
+        const int used = i == 0 ? r->mem_used_mb : r->disk_used_mb;
+        const int total = i == 0 ? r->mem_total_mb : r->disk_total_mb;
+        const char *unit_unknown = i == 0 ? "总量未知" : "容量未知";
+        if (used >= 0 && total > 0) {
+            snprintf(buf, sizeof(buf), "已用 %.1f / %.1f GB",
+                     used / 1024.0, total / 1024.0);
+        } else if (used >= 0) {
+            snprintf(buf, sizeof(buf), "已用 %.1f GB", used / 1024.0);
+        } else {
+            snprintf(buf, sizeof(buf), "%s", pct >= 0 ? unit_unknown : "主机未上报");
+        }
+        set_text(s_ui.hr_detail[i], buf);
     }
-    if (r->disk_used_mb >= 0 && r->disk_total_mb > 0) {
-        snprintf(buf, sizeof(buf), "已用 %.1f / %.1f GB",
-                 r->disk_used_mb / 1024.0, r->disk_total_mb / 1024.0);
-    } else if (r->disk_used_mb >= 0) {
-        snprintf(buf, sizeof(buf), "已用 %.1f GB", r->disk_used_mb / 1024.0);
-    } else {
-        snprintf(buf, sizeof(buf), "%s",
-                 r->disk_pct >= 0 ? "容量未知" : "主机未上报");
-    }
-    set_text(s_ui.hr_detail[2], buf);
 
     // 数据时效。
     // 这里不做「更新于 X 秒前」：本工程按需重绘，资源页只在收到新 host 帧
