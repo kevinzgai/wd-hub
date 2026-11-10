@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 
 #include "wb_link.h"
+#include "wb_voice.h"
 
 static const char *TAG = "wb_biz";
 
@@ -199,6 +200,10 @@ static void handle_frame(const wb_frame_msg_t *msg)
         break;
     case WB_EV_MSG:
         changed = true;   // 仅 ACK，不改界面
+        break;
+    case WB_EV_VOICE_POLL:
+        // 主机语音轮询：转给 wb_voice 回一行语音数据（空闲时是空操作）。
+        wb_voice_on_poll();
         break;
     case WB_EV_USAGE:
         // 今日用量：主机大盘屏的数据源。以前直接丢弃，Web 有设备没有。
@@ -478,6 +483,16 @@ bool wb_biz_send_hello(void)
     char out[96];
     size_t n = wb_proto_enc_hello(out, sizeof(out), WB_CAPS);
     return n > 0 && wb_link_send(out, n);
+}
+
+bool wb_biz_send_voice_target(void)
+{
+    // 语音投递目标：直打微信（不弹中转窗、不投 WorkBuddy 会话）。
+    // 主机端 wb_app.py 认 "wechat" 目标后把听写字直接留在焦点窗口。
+    char out[64];
+    const int n = snprintf(out, sizeof(out),
+                           "{\"type\":\"msg_target\",\"target\":\"wechat\"}\n");
+    return n > 0 && wb_link_send(out, (size_t)n);
 }
 
 bool wb_biz_send_battery(int soc)

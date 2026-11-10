@@ -68,6 +68,13 @@ idf_component_register(
         "wb/wb_biz.c"
         "wb/wb_power.c"
         "wb/wb_audio.c"
+        "wb/wb_adpcm.c"
+        "wb/wb_voice.c"
+        "wb/vokie_svc.c"
+        "wb/wb_vokie_mode.c"
+        "wb/ble_tx_retry.c"
+        "wb/ble_capture_end.c"
+        "wb/ble_audio_mbuf.c"
         "wb/wb_ui.cc"
         "wb/wb_view.c"
     INCLUDE_DIRS

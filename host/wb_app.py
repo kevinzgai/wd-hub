@@ -2562,7 +2562,15 @@ def find_cable_device(hint: str = "") -> tuple[int, str]:
     """
     if _winmm is None:
         return -1, ""
-    primary = (hint or CABLE_HINT).lower()
+    # 控制台配置 cable_hint 可整体换虚拟声卡（如 Voicemeeter：写 "Voicemeeter
+    # Input"，输入法麦克风选对应的 "Voicemeeter Out B1"，并在调音台里把
+    # VAIO 条的 B1 打开）。配置优先于 hint/默认值，保证各调用点选中同一设备。
+    cfg_hint = ""
+    try:
+        cfg_hint = str((console_cfg_load() or {}).get("cable_hint") or "").strip()
+    except Exception:
+        pass
+    primary = (cfg_hint or hint or CABLE_HINT).lower()
     caps = _WAVEOUTCAPSW()
     fallback: tuple[int, str] = (-1, "")
     for dev in range(_winmm.waveOutGetNumDevs()):
@@ -3967,7 +3975,7 @@ class UnifiedDaemon:
             return
         if t == "msg_target":
             tgt = obj.get("target")
-            if tgt in ("reply", "job", "manual"):
+            if tgt in ("reply", "job", "manual", "wechat"):
                 self._voice_target = tgt
                 self._log(f"[voice] 设备选定目标 {tgt}")
             return
@@ -4194,6 +4202,8 @@ class UnifiedDaemon:
 
         顺序不能反：字是打到**焦点控件**里的，先敲热键而窗口还没在前台，
         这一轮的字就丢了。
+        wechat 目标例外：不弹中转窗、不抢焦点 —— 字由输入法直接打进
+        当前的焦点窗口（微信聊天框），只把生效输入法确认为微信输入法。
         """
         if not self._asr_link_ready():
             self._log("[voice] 文字链路未就绪（缺虚拟声卡），本轮只存 WAV")
@@ -4204,15 +4214,16 @@ class UnifiedDaemon:
         if not self._cable.open():
             self._log("[voice] 虚拟声卡打不开，本轮取不到字")
             return
-        if not self._relay.start():
-            self._log("[voice] 中转窗口不可用，本轮取不到字")
-            return
-        self._relay.clear()
-        if not self._relay.focus():
-            # 抢不到焦点就**不注入**：字会打进用户当前那个窗口，比取不到字更糟。
-            self._log("[voice] 中转窗口抢焦点失败，本轮不启动听写（免得把字打到别的窗口）")
-            self._relay.hide()   # focus 里已经 ShowWindow 过了，抢不到焦点也要收掉
-            return
+        if self._voice_target != "wechat":
+            if not self._relay.start():
+                self._log("[voice] 中转窗口不可用，本轮取不到字")
+                return
+            self._relay.clear()
+            if not self._relay.focus():
+                # 抢不到焦点就**不注入**：字会打进用户当前那个窗口，比取不到字更糟。
+                self._log("[voice] 中转窗口抢焦点失败，本轮不启动听写（免得把字打到别的窗口）")
+                self._relay.hide()   # focus 里已经 ShowWindow 过了，抢不到焦点也要收掉
+                return
         # 微信语音的结果只在"微信输入法是当前生效输入法"时进输入框，否则进剪贴板。
         # 这一步失败不致命（可能本来就是它），失败时日志里能看出取不到字的原因。
         if not ime_ensure("wechat"):
@@ -4296,9 +4307,9 @@ class UnifiedDaemon:
         try:
             return self._asr_deliver_impl(sess, path)
         finally:
-            # 中转窗口在开录时就亮出来了（抢焦点接字），除 manual 档外用完即收 ——
-            # 它抢过焦点、又占着屏幕底部，不该一直挂在桌面上。
-            if sess.target != "manual":
+            # 中转窗口在开录时就亮出来了（抢焦点接字），除 manual/wechat 档外
+            # 用完即收 —— 它抢过焦点、又占着屏幕底部，不该一直挂在桌面上。
+            if sess.target not in ("manual", "wechat"):
                 self._relay.hide()
 
     def _asr_deliver_impl(self, sess: VoiceSession, path: str) -> tuple[str, bool]:
@@ -4306,6 +4317,14 @@ class UnifiedDaemon:
         if not self._asr_link_ready():
             self._log("[voice] 文字链路未就绪（缺虚拟声卡或总开关关了），本轮只存 WAV")
             return (f"已存录音 {sess.seconds:.0f}s", True)
+        if sess.target == "wechat":
+            # 直打模式：听写的字由输入法直接打进当时的焦点窗口（微信聊天框），
+            # 没有中转窗、没有取字投递这两步。
+            stats = self._cable.stats()
+            self._log(f"[voice] 直打微信完成｜声卡 open={stats['open']} "
+                      f"写入={stats['bytes_written']}B 增益={stats['gain']} "
+                      f"丢块={stats['blocks_dropped']}")
+            return ("已直打微信", True)
         text = self._asr_collect()
         stats = self._cable.stats()
         self._log(f"[voice] 取字 {len(text)} 个：{text[:60] or '（空）'}"

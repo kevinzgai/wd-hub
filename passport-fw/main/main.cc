@@ -15,6 +15,7 @@
 #include "bsp_button.h"
 #include "bsp_display.h"
 #include "bsp_pins.h"
+#include "wb/wb_voice.h"
 #include "driver/gpio.h"
 #include "bsp_i2c.h"
 #include "ui/ui_capture.h"
@@ -108,6 +109,7 @@ static void button_task(void *arg) {
     TickType_t pressed_at = 0;
     bool long_sent = false;
     uint8_t power_stage = 0;
+    bool voice_hold = false;   // 本次 OK 按住期间进过录音：抑制关机手势
     uint16_t last_mv = 0;
 
     // A key still held from the power-on gesture is not input.
@@ -171,7 +173,15 @@ static void button_task(void *arg) {
 
         // Hold OK: 2 s shows "keep holding", 5 s powers off. The 0.8 s long
         // press has already gone back one level by then, which is harmless.
-        if (stable == BSP_BTN_OK && power_stage < 2) {
+        // 按住说话例外：本次按住期间只要进过录音（长按 OK 触发），关机手势
+        // 整段抑制到松手 —— 否则说话超 2s 弹关机提示、超 5s 直接关机；
+        // 且 120s 到限自动停录后用户仍按着时，也不能瞬间落入关机分支。
+        if (stable == BSP_BTN_OK) {
+            if (wb_voice_is_active()) voice_hold = true;
+        } else {
+            voice_hold = false;
+        }
+        if (stable == BSP_BTN_OK && power_stage < 2 && !voice_hold) {
             const TickType_t held = xTaskGetTickCount() - pressed_at;
             const uint8_t stage = held >= pdMS_TO_TICKS(5000) ? 2 : held >= pdMS_TO_TICKS(2000) ? 1 : 0;
             if (stage > power_stage) {

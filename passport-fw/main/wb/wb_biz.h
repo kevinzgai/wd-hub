@@ -97,6 +97,8 @@ bool wb_biz_take_test_beep(void);
 // 上行帧。
 bool wb_biz_send_hello(void);
 bool wb_biz_send_battery(int soc);
+// 语音投递目标（直打微信）。连接后与 hello 一起补发。
+bool wb_biz_send_voice_target(void);
 
 #ifdef __cplusplus
 }

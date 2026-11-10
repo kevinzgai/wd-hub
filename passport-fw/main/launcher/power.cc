@@ -14,6 +14,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "wb/wb_vokie_mode.h"
 
 #include <algorithm>
 
@@ -121,14 +122,22 @@ bool power_battery_tick(void) {
 }
 
 void power_hold(uint8_t stage) {
+    // 长按 OK 语义（2026-11-10 起）：2s 弹提示，松手在两个模式间切换，
+    // 按满 5s 关机 —— 关机入口与模式切换共用同一个手势。
     switch (stage) {
         case 0:
-            if (s_hold_hint) system_overlay_hide();
+            if (s_hold_hint) {
+                if (wb_vokie_mode_active()) wb_vokie_mode_exit();
+                else wb_vokie_mode_enter();   // Vokie 未就绪时内部弹提示并留在看板
+            }
             s_hold_hint = false;
             break;
         case 1:
             s_hold_hint = true;
-            show_notice("继续按住关机\n松开取消", 0);
+            if (wb_vokie_mode_active())
+                show_notice("松手回看板\n按住关机", 0);
+            else
+                show_notice("松手进 Vokie 语音\n按住关机", 0);
             break;
         case 2:
             power_off("已关机\n按住上键 1 秒开机");

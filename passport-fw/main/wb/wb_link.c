@@ -24,6 +24,7 @@
 #include "nimble/nimble_port.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "wb/vokie_svc.h"
 
 static const char *TAG = "wb_link";
 
@@ -51,6 +52,11 @@ static bool s_inited;
 static volatile bool s_hello_pending;
 static volatile bool s_conn_changed;
 static bool s_low_power;
+
+// 双连接：wb_app（看板）与 Vokie 桌面端同时在线。s_conn 只认领「订阅了
+// 本服务特征」的连接；Vokie 的连接经 s_aux_gap_cb 转发给 vokie_svc。
+static wb_link_gap_cb_t s_aux_gap_cb;
+static int s_conn_count;
 
 static int s_active_retry_left;
 static int64_t s_active_retry_at_us;
@@ -102,15 +108,28 @@ static void apply_conn_params(const char *why)
 
 static void advertise(void)
 {
+    // 双身份广播：adv 包 = flags + Vokie 语音服务 128 位 UUID（Vokie 主机
+    // 按服务 UUID 扫描，实测过滤 adv 段）；扫描响应 = 完整名字（wb_app 按
+    // 名字扫描）。两段加起来超 31 字节上限，必须拆两包。
     struct ble_hs_adv_fields fields = {0};
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name = (const uint8_t *)WB_DEVICE_NAME;
-    fields.name_len = (uint8_t)strlen(WB_DEVICE_NAME);
-    fields.name_is_complete = 1;
+    fields.uuids128 = (ble_uuid128_t *)vokie_svc_service_uuid();
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
 
     int rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
         ESP_LOGE(TAG, "广播字段设置失败: %d", rc);
+        return;
+    }
+
+    struct ble_hs_adv_fields response = {0};
+    response.name = (const uint8_t *)WB_DEVICE_NAME;
+    response.name_len = (uint8_t)strlen(WB_DEVICE_NAME);
+    response.name_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&response);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "扫描响应设置失败: %d", rc);
         return;
     }
 
@@ -119,7 +138,7 @@ static void advertise(void)
     params.disc_mode = BLE_GAP_DISC_MODE_GEN;
     rc = ble_gap_adv_start(s_addr_type, NULL, BLE_HS_FOREVER, &params, gap_event, NULL);
     if (rc == 0) {
-        ESP_LOGI(TAG, "广播已启动: %s", WB_DEVICE_NAME);
+        ESP_LOGI(TAG, "广播已启动: UUID+名字双身份");
     } else if (rc != BLE_HS_EALREADY) {
         ESP_LOGE(TAG, "广播启动失败: %d", rc);
     }
@@ -239,40 +258,46 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     (void)arg;
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
-        s_conn_changed = true;
         if (event->connect.status == 0) {
-            s_conn = event->connect.conn_handle;
-            s_rx_len = 0;
+            ++s_conn_count;
             s_conn_since_ms = esp_timer_get_time() / 1000LL;
             s_conn_itvl = 0;
-            ESP_LOGI(TAG, "主机已连接 conn=%u", (unsigned)s_conn);
+            ESP_LOGI(TAG, "连接建立 conn=%u（在线 %d）",
+                     event->connect.conn_handle, s_conn_count);
             struct ble_gap_conn_desc desc;
-            if (ble_gap_conn_find(s_conn, &desc) == 0) {
+            if (ble_gap_conn_find(event->connect.conn_handle, &desc) == 0) {
                 s_conn_itvl = desc.conn_itvl;
                 ESP_LOGI(TAG, "初始连接参数: itvl=%u latency=%u timeout=%u",
                          (unsigned)desc.conn_itvl, (unsigned)desc.conn_latency,
                          (unsigned)desc.supervision_timeout);
             }
-            apply_conn_params(s_low_power ? "重连-待机" : "连接-正常");
+            // 不在此认领：等 SUBSCRIBE 到本服务特征时才归属 wb。
+            if (s_aux_gap_cb) s_aux_gap_cb(event);
+            // 还有空位就继续广播，让第二台主机（wb_app 或 Vokie）也能连上。
+            if (s_conn_count < 2) advertise();
         } else {
             ESP_LOGW(TAG, "连接失败 status=%d，重新广播", event->connect.status);
-            s_conn = WB_NO_CONN;
-            s_conn_since_ms = 0;
             advertise();
         }
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGW(TAG, "断开 reason=%d(0x%x)，立即重启广播", event->disconnect.reason,
-                 event->disconnect.reason);
-        s_conn = WB_NO_CONN;
-        s_conn_since_ms = 0;
-        // 统计口径：只数「真的建立过又断了」的连接，连接失败（status!=0）
-        // 不算一次断开 —— 那会让「断连次数」在扫不到主机时无限上涨。
-        s_disconnects++;
-        s_last_reason = (int)event->disconnect.reason;
-        s_conn_changed = true;
-        s_rx_len = 0;
+        --s_conn_count;
+        if (s_conn_count < 0) s_conn_count = 0;
+        ESP_LOGW(TAG, "断开 conn=%u reason=%d(0x%x)，在线 %d",
+                 event->disconnect.conn.conn_handle, event->disconnect.reason,
+                 event->disconnect.reason, s_conn_count);
+        // 统计口径：只数 wb 主机的断开且「真的建立过又断了」——连接失败
+        // （status!=0）不算断开，Vokie 连接的建立/断开也不算。
+        if (event->disconnect.conn.conn_handle == s_conn) {
+            s_conn = WB_NO_CONN;
+            s_conn_since_ms = 0;
+            s_disconnects++;
+            s_last_reason = (int)event->disconnect.reason;
+            s_conn_changed = true;
+            s_rx_len = 0;
+        }
+        if (s_aux_gap_cb) s_aux_gap_cb(event);
         advertise();
         return 0;
 
@@ -282,26 +307,37 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_MTU:
-        ESP_LOGI(TAG, "MTU 协商为 %u", event->mtu.value);
-        s_mtu = event->mtu.value;
+        ESP_LOGI(TAG, "MTU conn=%u 协商为 %u", event->mtu.conn_handle, event->mtu.value);
+        if (event->mtu.conn_handle == s_conn) s_mtu = event->mtu.value;
+        if (s_aux_gap_cb) s_aux_gap_cb(event);
         return 0;
 
     case BLE_GAP_EVENT_CONN_UPDATE: {
         struct ble_gap_conn_desc desc;
-        if (ble_gap_conn_find(event->conn_update.conn_handle, &desc) == 0) {
+        if (event->conn_update.conn_handle == s_conn &&
+            ble_gap_conn_find(event->conn_update.conn_handle, &desc) == 0) {
             s_conn_itvl = desc.conn_itvl;
             ESP_LOGI(TAG, "连接参数生效: itvl=%u(约%ums) latency=%u timeout=%u",
                      (unsigned)desc.conn_itvl, (unsigned)(desc.conn_itvl * 5 / 4),
                      (unsigned)desc.conn_latency, (unsigned)desc.supervision_timeout);
         }
+        if (s_aux_gap_cb) s_aux_gap_cb(event);
         return 0;
     }
 
     case BLE_GAP_EVENT_SUBSCRIBE:
+        // 认领规则：订阅了本服务 TX 特征的连接 = wb_app。Vokie 的 Control/
+        // Audio 特征订阅经 aux 回调由 vokie_svc 自己认领。
         if (event->subscribe.attr_handle == s_tx_handle && event->subscribe.cur_notify) {
-            s_hello_pending = true;
-            ESP_LOGI(TAG, "主机已订阅 notify，等待发 hello");
+            if (s_conn == WB_NO_CONN) {
+                s_conn = event->subscribe.conn_handle;
+                s_conn_changed = true;
+                apply_conn_params(s_low_power ? "重连-待机" : "连接-正常");
+                ESP_LOGI(TAG, "wb 主机认领 conn=%u", s_conn);
+            }
+            if (event->subscribe.conn_handle == s_conn) s_hello_pending = true;
         }
+        if (s_aux_gap_cb) s_aux_gap_cb(event);
         return 0;
 
     default:
@@ -313,6 +349,7 @@ static void on_reset(int reason)
 {
     ESP_LOGE(TAG, "NimBLE 复位 reason=%d", reason);
     s_conn = WB_NO_CONN;
+    s_conn_count = 0;
     s_conn_changed = true;
 }
 
@@ -364,6 +401,9 @@ esp_err_t wb_link_start(wb_link_frame_cb_t on_frame)
         ESP_LOGE(TAG, "GATT 服务注册失败: %d", rc);
         return ESP_FAIL;
     }
+    // Vokie 语音服务与 wb 服务共存于同一个 GATT 表（双主机双连接）。
+    vokie_svc_register_gatt();
+    vokie_svc_start();
     rc = ble_svc_gap_device_name_set(WB_DEVICE_NAME);
     if (rc != 0) {
         ESP_LOGE(TAG, "设备名设置失败: %d", rc);
@@ -380,6 +420,8 @@ esp_err_t wb_link_start(wb_link_frame_cb_t on_frame)
 }
 
 bool wb_link_connected(void) { return s_conn != WB_NO_CONN; }
+
+void wb_link_set_gap_cb(wb_link_gap_cb_t cb) { s_aux_gap_cb = cb; }
 
 void wb_link_set_power_mode(bool low_power)
 {

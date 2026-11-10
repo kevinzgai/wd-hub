@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "host/ble_gap.h"
 
 #include "wb_link_stats.h"
 
@@ -14,6 +15,12 @@ extern "C" {
 #endif
 
 typedef void (*wb_link_frame_cb_t)(const char *frame, size_t len);
+
+// GAP 事件转发回调：双连接下，wb_link 把 CONNECT / DISCONNECT / SUBSCRIBE /
+// MTU / CONN_UPDATE 原样转发给第二套服务（vokie_svc），由对方按自己的
+// 连接与特征过滤。必须在 wb_link_start 之前注册。
+typedef void (*wb_link_gap_cb_t)(struct ble_gap_event *event);
+void wb_link_set_gap_cb(wb_link_gap_cb_t cb);
 
 // 启动 BLE 外设：注册 WB GATT 服务并开始广播。只允许调用一次。
 esp_err_t wb_link_start(wb_link_frame_cb_t on_frame);

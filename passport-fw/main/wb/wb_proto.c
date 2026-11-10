@@ -155,10 +155,10 @@ bool wb_proto_decode(const char *frame, size_t len, wb_ev_t *ev)
 
     const cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
     if (!cJSON_IsString(type) || !type->valuestring || type->valuestring[0] == '\0') {
-        // 无 type 的帧：voice 轮询 / usage / 积分。前两者本固件不消费，
-        // 但必须识别以免主机每 0.25s 收到一条 ERR_JSON。
+        // 无 type 的帧：voice 轮询 / usage / 积分。轮询转给 wb_voice，
+        // 其余识别以免主机每 0.25s 收到一条 ERR_JSON。
         if (cJSON_GetObjectItemCaseSensitive(root, "voice")) {
-            ev->type = WB_EV_NONE;
+            ev->type = WB_EV_VOICE_POLL;
         } else if (cJSON_GetObjectItemCaseSensitive(root, "usage")) {
             // 主机每 30s 推一次今日用量；此前只识别不解析，数据全丢了。
             ev->type = WB_EV_USAGE;

@@ -56,15 +56,17 @@ typedef struct {
     int64_t cached;
 } wb_usage_model_t;
 
-// 能力位：本工程只做看板 + 审批 + 提问（与 S3 看板固件同一口径）。
+// 能力位：本工程做看板 + 审批 + 提问 + 主机大盘 + 语音上行（按住 OK 说话）。
 // bit6 = 主机大盘：设备能解析 usage / host 帧。主机只在声明该位时推 host 帧，
 // 旧固件（caps=0x3）不会收到不认识的帧而回 ERR_JSON。
 // 注意主机端 bit3/4/5 已分别被「总数语义 / 自动切页 / 语音上行」占用。
 #define WB_CAP_APPROVAL_PAGE (1u << 0)
 #define WB_CAP_ASK_PAGE      (1u << 1)
 #define WB_CAP_ASK_MULTI     (1u << 2)
+#define WB_CAP_VOICE_UP      (1u << 5)
 #define WB_CAP_HOST_DASH     (1u << 6)
-#define WB_CAPS              (WB_CAP_APPROVAL_PAGE | WB_CAP_ASK_PAGE | WB_CAP_HOST_DASH)
+#define WB_CAPS              (WB_CAP_APPROVAL_PAGE | WB_CAP_ASK_PAGE | \
+                              WB_CAP_VOICE_UP | WB_CAP_HOST_DASH)
 
 typedef struct {
     char state[WB_STATE_LEN];
@@ -82,9 +84,10 @@ typedef enum {
     WB_EV_ASK,        // ask
     WB_EV_ASK_END,    // ask_end
     WB_EV_CFG,        // cfg
-    WB_EV_MSG,        // msg（语音已下线，识别后安静吞掉）
+    WB_EV_MSG,        // msg（听写回执：识别文本 / 失败原因）
     WB_EV_USAGE,      // {"usage":1,"today":..,"req":..,"cache":..,"models":[..]}
     WB_EV_HOST,       // {"host":1,...} 主机大盘（网关 / 连接时长）
+    WB_EV_VOICE_POLL, // {"voice":"poll"} 主机语音轮询 → wb_voice_on_poll()
 } wb_ev_type_t;
 
 typedef struct {

@@ -12,11 +12,14 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "launcher/app_registry.h"
+#include "launcher/system_overlay.h"
 #include "wb/wb_audio.h"
 #include "wb/wb_biz.h"
 #include "wb/wb_link.h"
 #include "wb/wb_power.h"
 #include "wb/wb_ui.h"
+#include "wb/wb_vokie_mode.h"
+#include "wb/vokie_svc.h"
 
 namespace {
 
@@ -28,6 +31,11 @@ bool s_swallow_until_release = false;
 uint64_t s_last_battery_us = 0;
 lv_timer_t *s_tick_timer = nullptr;
 int s_prev_running = -1;
+
+// Vokie 模式浮层状态：状态回调来自 BLE/音频任务，tick（LVGL 上下文）统一渲染。
+std::atomic<int> s_vokie_sts{(int)VOKIE_STS_DISCONNECTED};
+bool s_vokie_ui_on = false;
+int s_vokie_ui_sts = -1;
 
 void request_redraw() { s_dirty.store(true, std::memory_order_release); }
 
@@ -77,6 +85,31 @@ void on_power_ui(bool standby)
     request_redraw();
 }
 
+// Vokie 状态回调（BLE/音频任务上下文）：只置状态 + 刷活动时间。
+void on_vokie_status(vokie_status_t st)
+{
+    s_vokie_sts.store((int)st, std::memory_order_release);
+    wb_vokie_mode_note_activity();
+    request_redraw();
+}
+
+// Vokie 模式浮层文案。system_overlay_show 自带递归 LVGL 锁。
+void vokie_overlay_sync()
+{
+    const int st = s_vokie_sts.load(std::memory_order_acquire);
+    const char *text;
+    switch (st) {
+    case VOKIE_STS_RECORDING:    text = "● 录音中\n点 UP 结束"; break;
+    case VOKIE_STS_PROCESSING:   text = "识别处理中..."; break;
+    case VOKIE_STS_SUCCESS:      text = "已发送"; break;
+    case VOKIE_STS_ERROR:        text = "出错了，请重试"; break;
+    case VOKIE_STS_DISCONNECTED: text = "Vokie 已断开"; break;
+    default:                     text = "Vokie 就绪\n点 UP 说话\nOK 删字 / DOWN 回车"; break;
+    }
+    system_overlay_show(text, 0);
+    s_vokie_ui_sts = st;
+}
+
 void battery_maybe_report(bool connected)
 {
     const uint64_t now = esp_timer_get_time();
@@ -104,6 +137,8 @@ void tick_cb(lv_timer_t *timer)
     }
     if (wb_link_take_hello()) {
         if (wb_biz_send_hello()) ESP_LOGI(TAG, "已发送 hello");
+        // hello 后立刻声明语音投递目标（直打微信），主机在第一次录音前就知道。
+        wb_biz_send_voice_target();
     }
     wb_link_poll();
 
@@ -114,6 +149,21 @@ void tick_cb(lv_timer_t *timer)
 
     // 菜单/声音页 30s 超时与菜单「待机」请求在这里落地（LVGL 上下文）。
     if (wb_ui_tick()) s_dirty.store(true, std::memory_order_release);
+
+    // Vokie 模式：先查 60s 无操作自动退；再处理切换沿渲染/收浮层；
+    // 活动中随状态刷新文案。
+    wb_vokie_mode_poll_expired();
+    bool mode_now = false;
+    if (wb_vokie_mode_take_changed(&mode_now)) {
+        s_vokie_ui_on = mode_now;
+        s_vokie_ui_sts = -1;
+        if (mode_now) vokie_overlay_sync();
+        else system_overlay_hide();
+        request_redraw();   // 退出时恢复看板画面
+    } else if (s_vokie_ui_on &&
+               s_vokie_ui_sts != s_vokie_sts.load(std::memory_order_acquire)) {
+        vokie_overlay_sync();
+    }
 
     wb_audio_set_standby(wb_power_is_standby());
     wb_audio_set_host_mute(view.beep_vol <= 0);
@@ -150,6 +200,7 @@ void wb_start()
     bsp_display_backlight(100);
 
     wb_ui_init();
+    vokie_svc_set_status_cb(on_vokie_status);
     const int soc = bsp_battery_soc();
     if (soc >= 0) {
         wb_ui_set_battery(soc);
@@ -170,6 +221,9 @@ void wb_start()
 void wb_stop()
 {
     s_running.store(false, std::memory_order_release);
+    // Vokie 模式先退出（录音中会正常收尾会话）。
+    wb_vokie_mode_exit();
+    system_overlay_hide();
     // 先收音频任务（最多等一段 400ms 的写完成），再拆界面。
     wb_audio_deinit();
     // 若正处待机，退出时恢复亮度和 BLE 正常档，避免把待机状态泄漏给下一个应用。
@@ -218,6 +272,31 @@ void wb_on_key(uint8_t btn, app_btn_event_t event, uint16_t mv)
         if (event == BTN_EVT_RELEASE || event == BTN_EVT_LONG_UP)
             s_swallow_until_release = false;
         return;
+    }
+
+    // ---- Vokie 模式：按键全部交给 vokie 语义，浮层已在 tick 渲染 ----
+    // 长按 OK ≥2s 的「回看板 / 关机」手势由底座 power 流程处理（power.cc），
+    // 这里只负责 800ms LONG（录音中取消）和短按。
+    if (wb_vokie_mode_active()) {
+        if (event == BTN_EVT_PRESS) {
+            wb_power_note_activity();
+            wb_vokie_mode_note_activity();
+            return;
+        }
+        if (event == BTN_EVT_CLICK) {
+            wb_power_note_activity();
+            wb_vokie_mode_note_activity();
+            if (!vokie_svc_is_recording()) beep_key();   // 录音中 codec 被采集占用
+            vokie_svc_key(btn, false);
+            return;
+        }
+        if (event == BTN_EVT_LONG) {
+            wb_power_note_activity();
+            wb_vokie_mode_note_activity();
+            vokie_svc_key(btn, true);
+            return;
+        }
+        return;   // RELEASE / LONG_UP 已由 CLICK/LONG 覆盖
     }
 
     if (event == BTN_EVT_PRESS) {
@@ -272,7 +351,9 @@ void wb_on_key(uint8_t btn, app_btn_event_t event, uint16_t mv)
             // 导航页的长 OK 已被 wb_ui_key 消费（回看板首页）并提前 return。
             // 走到这里的只有审批 / 提问事件页：不抢手势，保留底座“2s 提示 /
             // 5s 关机”语义，同时避免 registry 把长 OK 当“整机返回”。
+            // 按满 5s 的「进 Vokie / 关机」手势由底座 power 流程接管（power.cc）。
         }
+        return;
     }
 }
 
